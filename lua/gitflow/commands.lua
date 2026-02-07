@@ -1,6 +1,13 @@
 local config = require("gitflow.config")
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
+local git = require("gitflow.git")
+local git_status = require("gitflow.git.status")
+local git_stash = require("gitflow.git.stash")
+local status_panel = require("gitflow.panels.status")
+local diff_panel = require("gitflow.panels.diff")
+local log_panel = require("gitflow.panels.log")
+local stash_panel = require("gitflow.panels.stash")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -35,6 +42,22 @@ local function show_info(message)
 	utils.notify(message, vim.log.levels.INFO)
 end
 
+---@param message string
+local function show_error(message)
+	utils.notify(message, vim.log.levels.ERROR)
+end
+
+---@param result GitflowGitResult
+---@param fallback string
+---@return string
+local function result_message(result, fallback)
+	local output = git.output(result)
+	if output == "" then
+		return fallback
+	end
+	return output
+end
+
 ---@param cfg GitflowConfig
 local function open_panel(cfg)
 	local bufnr = ui.buffer.create("main", {
@@ -43,7 +66,7 @@ local function open_panel(cfg)
 			"Gitflow",
 			"",
 			"Plugin skeleton initialized.",
-			"Run :Gitflow refresh to update this panel.",
+			"Run :Gitflow status to open Stage 2 status panel.",
 		},
 	})
 	M.state.panel_buffer = bufnr
@@ -74,6 +97,159 @@ local function open_panel(cfg)
 	})
 end
 
+---@param output string
+---@return boolean
+local function output_mentions_upstream_problem(output)
+	local normalized = output:lower()
+	if normalized:find("has no upstream branch", 1, true) then
+		return true
+	end
+	if normalized:find("set%-upstream", 1) then
+		return true
+	end
+	if normalized:find("no upstream", 1, true) then
+		return true
+	end
+	return false
+end
+
+local function refresh_status_panel_if_open()
+	if status_panel.is_open() then
+		status_panel.refresh()
+	end
+end
+
+---@param amend boolean
+local function open_commit_prompt(amend)
+	git_status.fetch({}, function(err, _, grouped)
+		if err then
+			show_error(err)
+			return
+		end
+
+		local staged_count = git_status.count_staged(grouped)
+		if staged_count == 0 then
+			utils.notify("No staged changes to commit", vim.log.levels.WARN)
+			return
+		end
+
+		local prompt_text = amend and "Amend commit message: " or "Commit message: "
+		ui.input.prompt({
+			prompt = prompt_text,
+		}, function(message)
+			local trimmed = vim.trim(message)
+			if trimmed == "" then
+				utils.notify("Commit message cannot be empty", vim.log.levels.WARN)
+				return
+			end
+
+			local confirmed = ui.input.confirm(
+				("Commit %d staged file(s)?"):format(staged_count),
+				{ choices = { "&Commit", "&Cancel" }, default_choice = 1 }
+			)
+			if not confirmed then
+				return
+			end
+
+			local args = { "commit", "-m", trimmed }
+			if amend then
+				table.insert(args, 2, "--amend")
+			end
+
+			git.git(args, {}, function(commit_result)
+				if commit_result.code ~= 0 then
+					show_error(result_message(commit_result, "git commit failed"))
+					return
+				end
+
+				show_info(result_message(commit_result, "Commit created"))
+				refresh_status_panel_if_open()
+			end)
+		end)
+	end)
+end
+
+local function push_with_upstream()
+	git.git({ "rev-parse", "--abbrev-ref", "HEAD" }, {}, function(branch_result)
+		if branch_result.code ~= 0 then
+			show_error(result_message(branch_result, "Could not determine current branch"))
+			return
+		end
+
+		local branch = vim.trim(branch_result.stdout)
+		if branch == "" or branch == "HEAD" then
+			show_error("Cannot set upstream from detached HEAD")
+			return
+		end
+
+		local confirmed = ui.input.confirm(
+			("No upstream for '%s'. Push with -u origin %s?"):format(branch, branch),
+			{ choices = { "&Push", "&Cancel" }, default_choice = 1 }
+		)
+		if not confirmed then
+			return
+		end
+
+		git.git({ "push", "-u", "origin", branch }, {}, function(push_result)
+			if push_result.code ~= 0 then
+				show_error(result_message(push_result, "git push -u failed"))
+				return
+			end
+			show_info(result_message(push_result, "Pushed with upstream tracking"))
+		end)
+	end)
+end
+
+local function run_push()
+	git.git({ "push" }, {}, function(result)
+		if result.code == 0 then
+			show_info(result_message(result, "Push completed"))
+			return
+		end
+
+		local output = result_message(result, "git push failed")
+		if output_mentions_upstream_problem(output) then
+			push_with_upstream()
+			return
+		end
+
+		show_error(output)
+	end)
+end
+
+local function run_pull()
+	git.git({ "pull" }, {}, function(result)
+		if result.code ~= 0 then
+			show_error(result_message(result, "git pull failed"))
+			return
+		end
+		show_info(result_message(result, "Pull completed"))
+	end)
+end
+
+---@param args string[]
+---@return boolean
+local function has_flag(args, flag)
+	for i = 2, #args do
+		if args[i] == flag then
+			return true
+		end
+	end
+	return false
+end
+
+---@param args string[]
+---@return string|nil
+local function first_positional(args)
+	for i = 2, #args do
+		local arg = args[i]
+		if not vim.startswith(arg, "--") then
+			return arg
+		end
+	end
+	return nil
+end
+
 ---@param cfg GitflowConfig
 local function register_builtin_subcommands(cfg)
 	M.subcommands.help = {
@@ -86,7 +262,7 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands.open = {
-		description = "Open the Gitflow panel",
+		description = "Open the Gitflow main panel",
 		run = function()
 			open_panel(cfg)
 			return "Gitflow panel opened"
@@ -94,24 +270,26 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands.refresh = {
-		description = "Refresh panel content",
+		description = "Refresh main/status panel content",
 		run = function()
 			local bufnr = M.state.panel_buffer or ui.buffer.get("main")
-			if not bufnr then
-				return "No Gitflow panel is open"
+			if bufnr then
+				ui.buffer.update(bufnr, {
+					"Gitflow",
+					"",
+					("Last refresh: %s"):format(os.date("%Y-%m-%d %H:%M:%S")),
+				})
 			end
 
-			ui.buffer.update(bufnr, {
-				"Gitflow",
-				"",
-				("Last refresh: %s"):format(os.date("%Y-%m-%d %H:%M:%S")),
-			})
+			if status_panel.is_open() then
+				status_panel.refresh()
+			end
 			return "Gitflow panel refreshed"
 		end,
 	}
 
 	M.subcommands.close = {
-		description = "Close the Gitflow panel",
+		description = "Close open Gitflow panels",
 		run = function()
 			if M.state.panel_window then
 				ui.window.close(M.state.panel_window)
@@ -125,7 +303,144 @@ local function register_builtin_subcommands(cfg)
 			end
 			M.state.panel_window = nil
 			M.state.panel_buffer = nil
-			return "Gitflow panel closed"
+
+			status_panel.close()
+			diff_panel.close()
+			log_panel.close()
+			stash_panel.close()
+			return "Gitflow panels closed"
+		end,
+	}
+
+	M.subcommands.status = {
+		description = "Open git status panel",
+		run = function()
+			status_panel.open(cfg, {
+				on_commit = function()
+					open_commit_prompt(false)
+				end,
+				on_open_diff = function(path)
+					diff_panel.open(cfg, { path = path })
+				end,
+			})
+			return "Git status panel opened"
+		end,
+	}
+
+	M.subcommands.commit = {
+		description = "Create commit from staged changes (supports --amend)",
+		run = function(ctx)
+			local amend = has_flag(ctx.args, "--amend")
+			open_commit_prompt(amend)
+			if amend then
+				return "Commit prompt opened (amend)"
+			end
+			return "Commit prompt opened"
+		end,
+	}
+
+	M.subcommands.push = {
+		description = "Run git push",
+		run = function()
+			run_push()
+			return "Running git push..."
+		end,
+	}
+
+	M.subcommands.pull = {
+		description = "Run git pull",
+		run = function()
+			run_pull()
+			return "Running git pull..."
+		end,
+	}
+
+	M.subcommands.diff = {
+		description = "Open diff buffer (supports --staged [path])",
+		run = function(ctx)
+			diff_panel.open(cfg, {
+				staged = has_flag(ctx.args, "--staged"),
+				path = first_positional(ctx.args),
+			})
+			return "Diff view opened"
+		end,
+	}
+
+	M.subcommands.log = {
+		description = "Open commit log panel",
+		run = function()
+			log_panel.open(cfg, {
+				on_open_commit = function(sha)
+					diff_panel.open(cfg, { commit = sha })
+				end,
+			})
+			return "Log view opened"
+		end,
+	}
+
+	M.subcommands.stash = {
+		description = "Stash operations: list|push|pop|drop",
+		run = function(ctx)
+			local action = ctx.args[2] or "list"
+			if action == "list" then
+				stash_panel.open(cfg)
+				return "Stash view opened"
+			end
+
+			if action == "push" then
+				local message = table.concat(ctx.args, " ", 3)
+				if message == "" then
+					message = nil
+				end
+				git_stash.push({ message = message }, function(err, result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(result_message(result, "Created stash entry"))
+					if stash_panel.state.bufnr then
+						stash_panel.refresh()
+					end
+					refresh_status_panel_if_open()
+				end)
+				return "Running git stash push..."
+			end
+
+			if action == "pop" then
+				local index = tonumber(ctx.args[3])
+				git_stash.pop({ index = index }, function(err, result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(result_message(result, "Applied stash entry"))
+					if stash_panel.state.bufnr then
+						stash_panel.refresh()
+					end
+					refresh_status_panel_if_open()
+				end)
+				return "Running git stash pop..."
+			end
+
+			if action == "drop" then
+				local index = tonumber(ctx.args[3])
+				if not index then
+					return "Usage: :Gitflow stash drop <index>"
+				end
+				git_stash.drop(index, {}, function(err, result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(result_message(result, "Dropped stash entry"))
+					if stash_panel.state.bufnr then
+						stash_panel.refresh()
+					end
+				end)
+				return "Running git stash drop..."
+			end
+
+			return ("Unknown stash action: %s"):format(action)
 		end,
 	}
 end
