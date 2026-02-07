@@ -258,31 +258,58 @@ assert_true(status_buf ~= nil, "status panel should create a status buffer")
 
 local status_keymaps = vim.api.nvim_buf_get_keymap(status_buf, "n")
 local has_revert_keymap = false
+local has_push_commit_keymap = false
 for _, mapping in ipairs(status_keymaps) do
 	if mapping.lhs == "X" then
 		has_revert_keymap = true
-		break
+	elseif mapping.lhs == "p" then
+		has_push_commit_keymap = true
 	end
 end
 assert_true(has_revert_keymap, "status panel should map X for file revert")
+assert_true(has_push_commit_keymap, "status panel should map p for commit push")
 
 local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
 local staged_header_line = find_line(status_lines, "Staged")
 assert_true(staged_header_line ~= nil, "status panel should include staged section")
+local history_header_line = find_line(status_lines, "Commit History")
+assert_true(history_header_line ~= nil, "status panel should include commit history section")
 local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
 assert_true(staged_tracked_line ~= nil, "staged tracked file should be visible")
+local stage2_commit_line = find_line(
+	status_lines,
+	"stage2 automated commit",
+	history_header_line + 1
+)
+assert_true(stage2_commit_line ~= nil, "commit history should include commit summaries")
 
 vim.api.nvim_set_current_win(status_panel.state.winid)
 vim.api.nvim_win_set_cursor(status_panel.state.winid, { staged_tracked_line, 0 })
 status_panel.open_diff_under_cursor()
 assert_true(captured_diff_request ~= nil, "dd should send a diff request")
-assert_equals(captured_diff_request.path, "tracked.txt", "diff request should include selected path")
+assert_equals(
+	captured_diff_request.path,
+	"tracked.txt",
+	"diff request should include selected path"
+)
 assert_equals(captured_diff_request.staged, true, "staged file diff should use --staged")
+
+local stage2_commit_sha = vim.trim(run_git(repo_dir, { "rev-parse", "HEAD" }))
+captured_diff_request = nil
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { stage2_commit_line, 0 })
+status_panel.open_diff_under_cursor()
+assert_true(captured_diff_request ~= nil, "dd should support commit entries")
+assert_equals(
+	captured_diff_request.commit,
+	stage2_commit_sha,
+	"commit diff should target selected commit"
+)
 
 local revert_confirm = vim.fn.confirm
 vim.fn.confirm = function()
 	return 1
 end
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { staged_tracked_line, 0 })
 status_panel.revert_under_cursor()
 local reverted = vim.wait(5000, function()
 	local output = run_git(repo_dir, { "status", "--porcelain=v1", "--", "tracked.txt" })
@@ -294,6 +321,114 @@ assert_deep_equals(
 	vim.fn.readfile(repo_dir .. "/tracked.txt"),
 	{ "alpha", "beta", "gamma" },
 	"revert should restore tracked file content"
+)
+
+local branch_name = vim.trim(run_git(repo_dir, { "rev-parse", "--abbrev-ref", "HEAD" }))
+local remote_dir = vim.fn.tempname()
+run_git(repo_dir, { "init", "--bare", remote_dir })
+run_git(repo_dir, { "remote", "add", "origin", remote_dir })
+run_git(repo_dir, { "push", "-u", "origin", branch_name })
+
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "push-one" })
+run_git(repo_dir, { "add", "tracked.txt" })
+run_git(repo_dir, { "commit", "-m", "push one" })
+local push_one_sha = vim.trim(run_git(repo_dir, { "rev-parse", "HEAD" }))
+
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "push-two" })
+run_git(repo_dir, { "add", "tracked.txt" })
+run_git(repo_dir, { "commit", "-m", "push two" })
+local push_two_sha = vim.trim(run_git(repo_dir, { "rev-parse", "HEAD" }))
+
+status_panel.refresh()
+local outgoing_ready = vim.wait(5000, function()
+	local lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+	local outgoing_header = find_line(lines, "Outgoing")
+	if not outgoing_header then
+		return false
+	end
+	return find_line(lines, "push one", outgoing_header + 1) ~= nil
+		and find_line(lines, "push two", outgoing_header + 1) ~= nil
+end, 25)
+assert_true(outgoing_ready, "outgoing section should include local commits not on upstream")
+
+local outgoing_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+local outgoing_header_line = find_line(outgoing_lines, "Outgoing")
+local push_one_line = find_line(outgoing_lines, "push one", outgoing_header_line + 1)
+assert_true(push_one_line ~= nil, "push target commit should be selectable in outgoing section")
+
+local push_confirm = vim.fn.confirm
+vim.fn.confirm = function()
+	return 1
+end
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { push_one_line, 0 })
+status_panel.push_under_cursor()
+local partial_push_done = vim.wait(5000, function()
+	local remote_head = vim.trim(run_git(repo_dir, {
+		("--git-dir=%s"):format(remote_dir),
+		"rev-parse",
+		("refs/heads/%s"):format(branch_name),
+	}))
+	return remote_head == push_one_sha
+end, 25)
+vim.fn.confirm = push_confirm
+assert_true(partial_push_done, "push under cursor should push only up to selected commit")
+
+local push_two_still_outgoing = vim.wait(5000, function()
+	local lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+	local outgoing_header = find_line(lines, "Outgoing")
+	if not outgoing_header then
+		return false
+	end
+	local outgoing_push_one = find_line(lines, "push one", outgoing_header + 1)
+	local outgoing_push_two = find_line(lines, "push two", outgoing_header + 1)
+	return outgoing_push_one == nil and outgoing_push_two ~= nil
+end, 25)
+assert_true(push_two_still_outgoing, "selected push should leave newer outgoing commits unpushed")
+
+local upstream_clone_dir = vim.fn.tempname()
+run_git(repo_dir, { "clone", remote_dir, upstream_clone_dir })
+run_git(upstream_clone_dir, { "config", "user.email", "upstream@example.com" })
+run_git(upstream_clone_dir, { "config", "user.name", "Upstream Tester" })
+run_git(upstream_clone_dir, { "checkout", branch_name })
+write_file(upstream_clone_dir .. "/incoming.txt", { "incoming remote change" })
+run_git(upstream_clone_dir, { "add", "incoming.txt" })
+run_git(upstream_clone_dir, { "commit", "-m", "incoming remote commit" })
+local incoming_sha = vim.trim(run_git(upstream_clone_dir, { "rev-parse", "HEAD" }))
+run_git(upstream_clone_dir, { "push", "origin", branch_name })
+run_git(repo_dir, { "fetch", "origin" })
+
+status_panel.refresh()
+local incoming_ready = vim.wait(5000, function()
+	local lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+	local incoming_header = find_line(lines, "Incoming")
+	if not incoming_header then
+		return false
+	end
+	return find_line(lines, "incoming remote commit", incoming_header + 1) ~= nil
+end, 25)
+assert_true(incoming_ready, "incoming section should show upstream-only commits")
+
+local incoming_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+local incoming_header_line = find_line(incoming_lines, "Incoming")
+local incoming_commit_line = find_line(
+	incoming_lines,
+	"incoming remote commit",
+	incoming_header_line + 1
+)
+assert_true(incoming_commit_line ~= nil, "incoming commit should be selectable")
+
+captured_diff_request = nil
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { incoming_commit_line, 0 })
+status_panel.open_diff_under_cursor()
+assert_true(captured_diff_request ~= nil, "dd should open diff for incoming commit entries")
+assert_equals(
+	captured_diff_request.commit,
+	incoming_sha,
+	"incoming commit diff should target selected sha"
+)
+assert_true(
+	push_two_sha ~= incoming_sha,
+	"test setup should keep outgoing and incoming commits distinct"
 )
 
 commands.dispatch({ "diff" }, cfg)
