@@ -319,8 +319,8 @@ local function register_builtin_subcommands(cfg)
 				on_commit = function()
 					open_commit_prompt(false)
 				end,
-				on_open_diff = function(path)
-					diff_panel.open(cfg, { path = path })
+				on_open_diff = function(request)
+					diff_panel.open(cfg, request)
 				end,
 			})
 			return "Git status panel opened"
@@ -532,12 +532,26 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowOpen)", "<Cmd>Gitflow open<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowRefresh)", "<Cmd>Gitflow refresh<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowClose)", "<Cmd>Gitflow close<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowStatus)", "<Cmd>Gitflow status<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowCommit)", "<Cmd>Gitflow commit<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPush)", "<Cmd>Gitflow push<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPull)", "<Cmd>Gitflow pull<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowDiff)", "<Cmd>Gitflow diff<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
 		open = "<Plug>(GitflowOpen)",
 		refresh = "<Plug>(GitflowRefresh)",
 		close = "<Plug>(GitflowClose)",
+		status = "<Plug>(GitflowStatus)",
+		commit = "<Plug>(GitflowCommit)",
+		push = "<Plug>(GitflowPush)",
+		pull = "<Plug>(GitflowPull)",
+		diff = "<Plug>(GitflowDiff)",
+		log = "<Plug>(GitflowLog)",
+		stash = "<Plug>(GitflowStash)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]

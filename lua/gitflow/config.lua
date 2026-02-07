@@ -42,6 +42,13 @@ function M.defaults()
 			open = "<leader>go",
 			refresh = "<leader>gr",
 			close = "<leader>gq",
+			status = "gs",
+			commit = "gc",
+			push = "gp",
+			pull = "gP",
+			diff = "gd",
+			log = "gl",
+			stash = "gS",
 		},
 		ui = {
 			default_layout = "split",
