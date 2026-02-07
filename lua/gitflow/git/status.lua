@@ -16,6 +16,9 @@ local git = require("gitflow.git")
 ---@field unstaged GitflowStatusEntry[]
 ---@field untracked GitflowStatusEntry[]
 
+---@class GitflowStatusRevertOpts: GitflowGitRunOpts
+---@field untracked? boolean
+
 local M = {}
 
 ---@param text string
@@ -223,6 +226,56 @@ function M.unstage_all(opts, cb)
 			return
 		end
 		cb(nil, result)
+	end)
+end
+
+---@param output string
+---@return boolean
+local function output_mentions_unknown_path(output)
+	local normalized = output:lower()
+	if normalized:find("did not match any file", 1, true) then
+		return true
+	end
+	if normalized:find("pathspec", 1, true) then
+		return true
+	end
+	return false
+end
+
+---@param path string
+---@param opts GitflowStatusRevertOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.revert_file(path, opts, cb)
+	local options = opts or {}
+	git.git({ "restore", "--source=HEAD", "--staged", "--worktree", "--", path }, options, function(result)
+		if result.code == 0 then
+			cb(nil, result)
+			return
+		end
+
+		git.git({ "reset", "HEAD", "--", path }, options, function()
+			git.git({ "checkout", "--", path }, options, function(checkout_result)
+				if checkout_result.code == 0 then
+					cb(nil, checkout_result)
+					return
+				end
+
+				local output = git.output(checkout_result)
+				local should_clean = options.untracked or output_mentions_unknown_path(output)
+				if not should_clean then
+					cb(error_from_result(checkout_result, "checkout --"), checkout_result)
+					return
+				end
+
+				git.git({ "clean", "-f", "--", path }, options, function(clean_result)
+					if clean_result.code ~= 0 then
+						cb(error_from_result(clean_result, "clean -f"), clean_result)
+						return
+					end
+					cb(nil, clean_result)
+				end)
+			end)
+		end)
 	end)
 end
 

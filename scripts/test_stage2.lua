@@ -17,6 +17,15 @@ local function assert_equals(actual, expected, message)
 	end
 end
 
+local function assert_deep_equals(actual, expected, message)
+	if not vim.deep_equal(actual, expected) then
+		error(
+			("%s (expected=%s, actual=%s)"):format(message, vim.inspect(expected), vim.inspect(actual)),
+			2
+		)
+	end
+end
+
 local function contains(list, value)
 	for _, item in ipairs(list) do
 		if item == value then
@@ -77,6 +86,21 @@ local function write_file(path, lines)
 	vim.fn.writefile(lines, path)
 end
 
+local function assert_mapping(lhs, expected_rhs, message)
+	local mapping = vim.fn.maparg(lhs, "n", false, true)
+	assert_true(type(mapping) == "table" and mapping.rhs == expected_rhs, message)
+end
+
+local function find_line(lines, needle, start_line)
+	local start_idx = start_line or 1
+	for i = start_idx, #lines do
+		if lines[i]:find(needle, 1, true) then
+			return i
+		end
+	end
+	return nil
+end
+
 local repo_dir = vim.fn.tempname()
 assert_equals(vim.fn.mkdir(repo_dir, "p"), 1, "temp repo directory should be created")
 
@@ -112,6 +136,9 @@ local cfg = gitflow.setup({
 })
 
 assert_equals(cfg.git.log.count, 25, "setup should merge git.log config")
+assert_mapping("gs", "<Plug>(GitflowStatus)", "default status keymap should be registered")
+assert_mapping("gp", "<Plug>(GitflowPush)", "default push keymap should be registered")
+assert_mapping("gP", "<Plug>(GitflowPull)", "default pull keymap should be registered")
 
 local commands = require("gitflow.commands")
 local all_subcommands = commands.complete("")
@@ -131,6 +158,7 @@ local status = require("gitflow.git.status")
 local diff = require("gitflow.git.diff")
 local git_log = require("gitflow.git.log")
 local stash = require("gitflow.git.stash")
+local status_panel = require("gitflow.panels.status")
 
 local parsed = status.parse("M  staged.txt\n M unstaged.txt\n?? new.txt")
 assert_equals(#parsed, 3, "status parser should parse porcelain lines")
@@ -203,14 +231,74 @@ vim.ui.input = original_input
 vim.fn.confirm = original_confirm
 
 write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "delta" })
+local stage_tracked_err = wait_async(function(done)
+	status.stage_file("tracked.txt", {}, function(inner_err)
+		done(inner_err)
+	end)
+end)
+assert_equals(stage_tracked_err, nil, "stage_file should stage tracked file")
 
-commands.dispatch({ "status" }, cfg)
-commands.dispatch({ "diff" }, cfg)
-commands.dispatch({ "log" }, cfg)
-commands.dispatch({ "stash", "list" }, cfg)
+local captured_diff_request = nil
+status_panel.open(cfg, {
+	on_open_diff = function(request)
+		captured_diff_request = request
+	end,
+})
+local panel_ready = vim.wait(5000, function()
+	if not status_panel.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
+	return find_line(lines, "Staged") ~= nil
+end, 25)
+assert_true(panel_ready, "status panel should render staged entries")
 
 local status_buf = require("gitflow.ui.buffer").get("status")
 assert_true(status_buf ~= nil, "status panel should create a status buffer")
+
+local status_keymaps = vim.api.nvim_buf_get_keymap(status_buf, "n")
+local has_revert_keymap = false
+for _, mapping in ipairs(status_keymaps) do
+	if mapping.lhs == "X" then
+		has_revert_keymap = true
+		break
+	end
+end
+assert_true(has_revert_keymap, "status panel should map X for file revert")
+
+local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+local staged_header_line = find_line(status_lines, "Staged")
+assert_true(staged_header_line ~= nil, "status panel should include staged section")
+local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
+assert_true(staged_tracked_line ~= nil, "staged tracked file should be visible")
+
+vim.api.nvim_set_current_win(status_panel.state.winid)
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { staged_tracked_line, 0 })
+status_panel.open_diff_under_cursor()
+assert_true(captured_diff_request ~= nil, "dd should send a diff request")
+assert_equals(captured_diff_request.path, "tracked.txt", "diff request should include selected path")
+assert_equals(captured_diff_request.staged, true, "staged file diff should use --staged")
+
+local revert_confirm = vim.fn.confirm
+vim.fn.confirm = function()
+	return 1
+end
+status_panel.revert_under_cursor()
+local reverted = vim.wait(5000, function()
+	local output = run_git(repo_dir, { "status", "--porcelain=v1", "--", "tracked.txt" })
+	return vim.trim(output) == ""
+end, 25)
+vim.fn.confirm = revert_confirm
+assert_true(reverted, "revert action should clear tracked file changes")
+assert_deep_equals(
+	vim.fn.readfile(repo_dir .. "/tracked.txt"),
+	{ "alpha", "beta", "gamma" },
+	"revert should restore tracked file content"
+)
+
+commands.dispatch({ "diff" }, cfg)
+commands.dispatch({ "log" }, cfg)
+commands.dispatch({ "stash", "list" }, cfg)
 
 local log_err, log_entries = wait_async(function(done)
 	git_log.list({ count = 10, format = "%h %s" }, function(inner_err, entries)
@@ -219,6 +307,8 @@ local log_err, log_entries = wait_async(function(done)
 end)
 assert_equals(log_err, nil, "log.list should succeed")
 assert_true(#log_entries >= 1, "log should contain at least one commit")
+
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "stash-change" })
 
 local stash_push_err = wait_async(function(done)
 	stash.push({ message = "stage2 stash" }, function(inner_err)
