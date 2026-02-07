@@ -1,0 +1,248 @@
+local script_path = debug.getinfo(1, "S").source:sub(2)
+local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
+vim.opt.runtimepath:append(project_root)
+
+local function assert_true(condition, message)
+	if not condition then
+		error(message, 2)
+	end
+end
+
+local function assert_equals(actual, expected, message)
+	if actual ~= expected then
+		error(
+			("%s (expected=%s, actual=%s)"):format(message, vim.inspect(expected), vim.inspect(actual)),
+			2
+		)
+	end
+end
+
+local function contains(list, value)
+	for _, item in ipairs(list) do
+		if item == value then
+			return true
+		end
+	end
+	return false
+end
+
+local unpack_fn = table.unpack or unpack
+
+local function wait_async(start, timeout_ms)
+	local done = false
+	local result = nil
+
+	start(function(...)
+		result = { ... }
+		done = true
+	end)
+
+	local ok = vim.wait(timeout_ms or 5000, function()
+		return done
+	end, 10)
+	assert_true(ok, "async callback timed out")
+	return unpack_fn(result)
+end
+
+local function run_git(repo_dir, args, should_succeed)
+	local cmd = { "git" }
+	vim.list_extend(cmd, args)
+	local output = ""
+	local code = 1
+
+	if vim.system then
+		local result = vim.system(cmd, { cwd = repo_dir, text = true }):wait()
+		output = (result.stdout or "") .. (result.stderr or "")
+		code = result.code or 1
+	else
+		local previous = vim.fn.getcwd()
+		vim.fn.chdir(repo_dir)
+		output = vim.fn.system(cmd)
+		code = vim.v.shell_error
+		vim.fn.chdir(previous)
+	end
+	if should_succeed == nil then
+		should_succeed = true
+	end
+	if should_succeed and code ~= 0 then
+		error(
+			("git command failed (%s): %s"):format(table.concat(cmd, " "), output),
+			2
+		)
+	end
+	return output, code
+end
+
+local function write_file(path, lines)
+	vim.fn.writefile(lines, path)
+end
+
+local repo_dir = vim.fn.tempname()
+assert_equals(vim.fn.mkdir(repo_dir, "p"), 1, "temp repo directory should be created")
+
+run_git(repo_dir, { "init" })
+run_git(repo_dir, { "config", "user.email", "stage2@example.com" })
+run_git(repo_dir, { "config", "user.name", "Stage2 Tester" })
+
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta" })
+run_git(repo_dir, { "add", "tracked.txt" })
+run_git(repo_dir, { "commit", "-m", "initial" })
+
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma" })
+write_file(repo_dir .. "/new.txt", { "new file" })
+
+local original_cwd = vim.fn.getcwd()
+vim.fn.chdir(repo_dir)
+
+local gitflow = require("gitflow")
+local cfg = gitflow.setup({
+	ui = {
+		default_layout = "split",
+		split = {
+			orientation = "vertical",
+			size = 45,
+		},
+	},
+	git = {
+		log = {
+			count = 25,
+			format = "%h %s",
+		},
+	},
+})
+
+assert_equals(cfg.git.log.count, 25, "setup should merge git.log config")
+
+local commands = require("gitflow.commands")
+local all_subcommands = commands.complete("")
+for _, expected in ipairs({
+	"status",
+	"commit",
+	"push",
+	"pull",
+	"diff",
+	"log",
+	"stash",
+}) do
+	assert_true(contains(all_subcommands, expected), ("missing subcommand '%s'"):format(expected))
+end
+
+local status = require("gitflow.git.status")
+local diff = require("gitflow.git.diff")
+local git_log = require("gitflow.git.log")
+local stash = require("gitflow.git.stash")
+
+local parsed = status.parse("M  staged.txt\n M unstaged.txt\n?? new.txt")
+assert_equals(#parsed, 3, "status parser should parse porcelain lines")
+
+local err, _, grouped = wait_async(function(done)
+	status.fetch({}, function(fetch_err, entries, fetch_grouped)
+		done(fetch_err, entries, fetch_grouped)
+	end)
+end)
+assert_equals(err, nil, "status.fetch should succeed")
+assert_equals(#grouped.unstaged, 1, "tracked file should be unstaged")
+assert_equals(grouped.unstaged[1].path, "tracked.txt", "unstaged entry should match tracked file")
+assert_equals(#grouped.untracked, 1, "new file should be untracked")
+assert_equals(grouped.untracked[1].path, "new.txt", "untracked entry should match")
+
+local stage_err = wait_async(function(done)
+	status.stage_file("new.txt", {}, function(inner_err)
+		done(inner_err)
+	end)
+end)
+assert_equals(stage_err, nil, "stage_file should succeed")
+
+local _, _, grouped_after_stage = wait_async(function(done)
+	status.fetch({}, function(fetch_err, entries, fetch_grouped)
+		done(fetch_err, entries, fetch_grouped)
+	end)
+end)
+assert_true(#grouped_after_stage.staged >= 1, "staged group should include staged file")
+
+local unstage_err = wait_async(function(done)
+	status.unstage_file("new.txt", {}, function(inner_err)
+		done(inner_err)
+	end)
+end)
+assert_equals(unstage_err, nil, "unstage_file should succeed")
+
+local diff_err, diff_output, diff_parsed = wait_async(function(done)
+	diff.get({}, function(inner_err, output, parsed_output)
+		done(inner_err, output, parsed_output)
+	end)
+end)
+assert_equals(diff_err, nil, "diff.get should succeed")
+assert_true(diff_output:find("diff --git", 1, true) ~= nil, "diff output should include header")
+assert_true(#diff_parsed.files >= 1, "diff parser should extract at least one file")
+
+local stage_all_err = wait_async(function(done)
+	status.stage_all({}, function(inner_err)
+		done(inner_err)
+	end)
+end)
+assert_equals(stage_all_err, nil, "stage_all should succeed")
+
+local original_input = vim.ui.input
+local original_confirm = vim.fn.confirm
+vim.ui.input = function(_, on_confirm)
+	on_confirm("stage2 automated commit")
+end
+vim.fn.confirm = function()
+	return 1
+end
+
+commands.dispatch({ "commit" }, cfg)
+local commit_seen = vim.wait(5000, function()
+	local log_output = run_git(repo_dir, { "log", "--oneline", "-n", "1" })
+	return log_output:find("stage2 automated commit", 1, true) ~= nil
+end, 25)
+assert_true(commit_seen, "commit command should create a commit")
+
+vim.ui.input = original_input
+vim.fn.confirm = original_confirm
+
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "delta" })
+
+commands.dispatch({ "status" }, cfg)
+commands.dispatch({ "diff" }, cfg)
+commands.dispatch({ "log" }, cfg)
+commands.dispatch({ "stash", "list" }, cfg)
+
+local status_buf = require("gitflow.ui.buffer").get("status")
+assert_true(status_buf ~= nil, "status panel should create a status buffer")
+
+local log_err, log_entries = wait_async(function(done)
+	git_log.list({ count = 10, format = "%h %s" }, function(inner_err, entries)
+		done(inner_err, entries)
+	end)
+end)
+assert_equals(log_err, nil, "log.list should succeed")
+assert_true(#log_entries >= 1, "log should contain at least one commit")
+
+local stash_push_err = wait_async(function(done)
+	stash.push({ message = "stage2 stash" }, function(inner_err)
+		done(inner_err)
+	end)
+end)
+assert_equals(stash_push_err, nil, "stash push should succeed")
+
+local stash_list_err, stash_entries = wait_async(function(done)
+	stash.list({}, function(inner_err, entries)
+		done(inner_err, entries)
+	end)
+end)
+assert_equals(stash_list_err, nil, "stash list should succeed")
+assert_true(#stash_entries >= 1, "stash list should contain pushed entry")
+
+local stash_drop_err = wait_async(function(done)
+	stash.drop(stash_entries[1].index, {}, function(inner_err)
+		done(inner_err)
+	end)
+end)
+assert_equals(stash_drop_err, nil, "stash drop should succeed")
+
+commands.dispatch({ "close" }, cfg)
+vim.fn.chdir(original_cwd)
+
+print("Stage 2 smoke tests passed")

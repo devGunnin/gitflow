@@ -19,10 +19,18 @@ local utils = require("gitflow.utils")
 ---@field reuse_named_buffers boolean
 ---@field close_windows_on_buffer_wipe boolean
 
+---@class GitflowLogConfig
+---@field count integer
+---@field format string
+
+---@class GitflowGitConfig
+---@field log GitflowLogConfig
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
+---@field git GitflowGitConfig
 
 local M = {}
 
@@ -51,6 +59,12 @@ function M.defaults()
 		behavior = {
 			reuse_named_buffers = true,
 			close_windows_on_buffer_wipe = true,
+		},
+		git = {
+			log = {
+				count = 50,
+				format = "%h %s",
+			},
 		},
 	}
 end
@@ -131,10 +145,27 @@ local function validate_behavior(config)
 end
 
 ---@param config GitflowConfig
+local function validate_git(config)
+	if type(config.git) ~= "table" then
+		error("gitflow config error: git must be a table", 3)
+	end
+	if type(config.git.log) ~= "table" then
+		error("gitflow config error: git.log must be a table", 3)
+	end
+	if type(config.git.log.count) ~= "number" or config.git.log.count < 1 then
+		error("gitflow config error: git.log.count must be a positive number", 3)
+	end
+	if not utils.is_non_empty_string(config.git.log.format) then
+		error("gitflow config error: git.log.format must be a non-empty string", 3)
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
+	validate_git(config)
 end
 
 ---@param opts table|nil
