@@ -49,6 +49,7 @@ function M.defaults()
 			diff = "gd",
 			log = "gl",
 			stash = "gS",
+			branch = "gb",
 		},
 		ui = {
 			default_layout = "split",
