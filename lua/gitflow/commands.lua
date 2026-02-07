@@ -217,6 +217,19 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowOpen)", "<Cmd>Gitflow open<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowRefresh)", "<Cmd>Gitflow refresh<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowClose)", "<Cmd>Gitflow close<CR>", { silent = true })
+
+	local key_to_plug = {
+		help = "<Plug>(GitflowHelp)",
+		open = "<Plug>(GitflowOpen)",
+		refresh = "<Plug>(GitflowRefresh)",
+		close = "<Plug>(GitflowClose)",
+	}
+	for action, mapping in pairs(current.keybindings) do
+		local plug = key_to_plug[action]
+		if plug then
+			vim.keymap.set("n", mapping, plug, { remap = true, silent = true })
+		end
+	end
 end
 
 return M
