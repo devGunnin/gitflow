@@ -1,12 +1,53 @@
 # gitflow
 
+Unified Neovim workflow for `git` and `gh`: local git primitives, GitHub workflows,
+and review UI in one interface.
 
-We want a unified framework for git-cli and gh-cli integrated through neovim. In short, this means, all primative git functionality -- status, add, commit, push, pull, merge, etc., while also having a GitHub inspired interface for managing PRs, merge-conflicts, issues, labels, etc. We want to be able to comment on PRs, create new issues, do code reviews with GitHub like interface (+/-), respond to reviews, etc. etc.
+## Basic Configuration
 
-This should be done all in one unified framework, with the ability to sync with gh with a single stroke.
+Example plugin setup (lazy.nvim style):
 
-We want the front-end to be traditional neovim themed but state-of-the-art with coloring and theming.
+```lua
+{
+  "devGunnin/gitflow",
+  config = function()
+    require("gitflow").setup({
+      theme = "nvim",
+      keymaps = "default",
+      gh_sync = "on_demand", -- single keystroke sync entrypoint
+    })
+  end,
+}
+```
 
-Please create modular issues in a chronological format so we can proceed with getting this going.
+## Functionality Wiki
 
-It is important to update the readme with a basic configuration + all of the functionalities + binds. The README.md should be concise, not use emojis, and implement a wiki-like thing for functionality + default binds.
+| Area | Scope |
+| --- | --- |
+| Git Core | `status`, `add`, `commit`, `push`, `pull`, `fetch`, `rebase`, `merge`, branch ops |
+| GitHub Workflows | issues, labels, pull requests, review requests, comments, merge actions |
+| Review UI | side-by-side/unified diff, file tree, hunk navigation, inline comment thread actions |
+| Conflict Resolution | conflict file list, marker jump/actions, resolve+stage helpers |
+| Sync | one-keystroke state refresh with `gh` + local git status reconciliation |
+| Theming | Neovim-native styling with configurable highlights and palette presets |
+
+## Default Binds
+
+| Key | Action |
+| --- | --- |
+| `<leader>gs` | open unified status view |
+| `<leader>ga` | stage current file/hunk |
+| `<leader>gc` | commit flow |
+| `<leader>gp` | push current branch |
+| `<leader>gP` | pull/rebase flow |
+| `<leader>gi` | open issue dashboard |
+| `<leader>gr` | open PR dashboard |
+| `<leader>gv` | open review diff view |
+| `<leader>gm` | open merge/conflict center |
+| `<leader>gS` | sync git + gh state |
+
+## Delivery Roadmap
+
+Implementation is split into chronological modular stages in `ISSUES.md`.
+Use `scripts/create_stage_issues.sh` to publish all staged issues to GitHub once
+`gh` auth is available.
