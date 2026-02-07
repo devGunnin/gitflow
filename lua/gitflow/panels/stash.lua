@@ -51,7 +51,15 @@ local function ensure_window(cfg)
 		M.pop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "P", function()
+		M.pop_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "d", function()
+		M.drop_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "D", function()
 		M.drop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
