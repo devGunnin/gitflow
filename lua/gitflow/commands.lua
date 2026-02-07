@@ -8,6 +8,7 @@ local status_panel = require("gitflow.panels.status")
 local diff_panel = require("gitflow.panels.diff")
 local log_panel = require("gitflow.panels.log")
 local stash_panel = require("gitflow.panels.stash")
+local branch_panel = require("gitflow.panels.branch")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -227,6 +228,186 @@ local function run_pull()
 	end)
 end
 
+---@param paths string[]
+---@return string
+local function format_conflicted_paths(paths)
+	if #paths == 0 then
+		return "(none)"
+	end
+	return table.concat(paths, "\n")
+end
+
+---@param output string
+---@return string[]
+local function parse_conflicted_paths_from_output(output)
+	local conflicts = {}
+	local seen = {}
+	for _, line in ipairs(vim.split(output or "", "\n", { trimempty = true })) do
+		local path = line:match("^CONFLICT%s+%b()%:%s+.+%s+in%s+(.+)$")
+		if path then
+			local trimmed = vim.trim(path)
+			if trimmed ~= "" and not seen[trimmed] then
+				seen[trimmed] = true
+				conflicts[#conflicts + 1] = trimmed
+			end
+		end
+	end
+	return conflicts
+end
+
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(conflicted_paths: string[])
+local function collect_conflicted_paths(opts, cb)
+	git.git({ "diff", "--name-only", "--diff-filter=U" }, opts, function(result)
+		if result.code ~= 0 then
+			cb({})
+			return
+		end
+
+		local conflicted = {}
+		for _, line in ipairs(vim.split(result.stdout or "", "\n", { trimempty = true })) do
+			conflicted[#conflicted + 1] = line
+		end
+		cb(conflicted)
+	end)
+end
+
+---@param branch string
+local function run_merge(branch)
+	git.git({ "merge", branch }, {}, function(result)
+		if result.code == 0 then
+			local output = result_message(result, ("Merged '%s'"):format(branch))
+			local merge_type = "Merge commit created"
+			local normalized = output:lower()
+			if normalized:find("fast%-forward", 1) then
+				merge_type = "Fast-forward merge completed"
+			elseif normalized:find("already up to date", 1, true) then
+				merge_type = "Already up to date"
+			end
+
+			show_info(("%s\n%s"):format(merge_type, output))
+			refresh_status_panel_if_open()
+			return
+		end
+
+		local output = result_message(result, ("git merge %s failed"):format(branch))
+		local parsed_conflicts = parse_conflicted_paths_from_output(output)
+		if #parsed_conflicts > 0 then
+			show_error(
+				("Merge has conflicts.\nConflicted files:\n%s\n\n%s"):format(
+					format_conflicted_paths(parsed_conflicts),
+					output
+				)
+			)
+			refresh_status_panel_if_open()
+			return
+		end
+
+		collect_conflicted_paths({}, function(conflicted)
+			if #conflicted == 0 then
+				show_error(output)
+				return
+			end
+
+			show_error(
+				("Merge has conflicts.\nConflicted files:\n%s\n\n%s"):format(
+					format_conflicted_paths(conflicted),
+					output
+				)
+			)
+			refresh_status_panel_if_open()
+		end)
+	end)
+end
+
+---@param args string[]
+local function run_rebase(args)
+	local git_args = { "rebase" }
+	for _, arg in ipairs(args) do
+		git_args[#git_args + 1] = arg
+	end
+
+	git.git(git_args, {}, function(result)
+		local action = table.concat(git_args, " ")
+		if result.code == 0 then
+			local output = result_message(result, ("%s completed"):format(action))
+			show_info(output)
+			refresh_status_panel_if_open()
+			return
+		end
+
+		local output = result_message(result, ("%s failed"):format(action))
+		local parsed_conflicts = parse_conflicted_paths_from_output(output)
+		if #parsed_conflicts > 0 then
+			show_error(
+				("Rebase stopped with conflicts.\nConflicted files:\n%s\n\nUse :Gitflow rebase "
+					.. "--continue or :Gitflow rebase --abort.\n\n%s"):format(
+					format_conflicted_paths(parsed_conflicts),
+					output
+				)
+			)
+			refresh_status_panel_if_open()
+			return
+		end
+
+		collect_conflicted_paths({}, function(conflicted)
+			if #conflicted == 0 then
+				show_error(output)
+				return
+			end
+
+			show_error(
+				("Rebase stopped with conflicts.\nConflicted files:\n%s\n\nUse :Gitflow rebase "
+					.. "--continue or :Gitflow rebase --abort.\n\n%s"):format(
+					format_conflicted_paths(conflicted),
+					output
+				)
+			)
+			refresh_status_panel_if_open()
+		end)
+	end)
+end
+
+---@param commit string
+local function run_cherry_pick(commit)
+	git.git({ "cherry-pick", commit }, {}, function(result)
+		if result.code == 0 then
+			local output = result_message(result, ("Cherry-picked %s"):format(commit))
+			show_info(output)
+			refresh_status_panel_if_open()
+			return
+		end
+
+		local output = result_message(result, ("git cherry-pick %s failed"):format(commit))
+		local parsed_conflicts = parse_conflicted_paths_from_output(output)
+		if #parsed_conflicts > 0 then
+			show_error(
+				("Cherry-pick has conflicts.\nConflicted files:\n%s\n\n%s"):format(
+					format_conflicted_paths(parsed_conflicts),
+					output
+				)
+			)
+			refresh_status_panel_if_open()
+			return
+		end
+
+		collect_conflicted_paths({}, function(conflicted)
+			if #conflicted == 0 then
+				show_error(output)
+				return
+			end
+
+			show_error(
+				("Cherry-pick has conflicts.\nConflicted files:\n%s\n\n%s"):format(
+					format_conflicted_paths(conflicted),
+					output
+				)
+			)
+			refresh_status_panel_if_open()
+		end)
+	end)
+end
+
 ---@param args string[]
 ---@return boolean
 local function has_flag(args, flag)
@@ -284,6 +465,9 @@ local function register_builtin_subcommands(cfg)
 			if status_panel.is_open() then
 				status_panel.refresh()
 			end
+			if branch_panel.is_open() then
+				branch_panel.refresh()
+			end
 			return "Gitflow panel refreshed"
 		end,
 	}
@@ -305,6 +489,7 @@ local function register_builtin_subcommands(cfg)
 			M.state.panel_buffer = nil
 
 			status_panel.close()
+			branch_panel.close()
 			diff_panel.close()
 			log_panel.close()
 			stash_panel.close()
@@ -324,6 +509,14 @@ local function register_builtin_subcommands(cfg)
 				end,
 			})
 			return "Git status panel opened"
+		end,
+	}
+
+	M.subcommands.branch = {
+		description = "Open branch list panel",
+		run = function()
+			branch_panel.open(cfg)
+			return "Branch panel opened"
 		end,
 	}
 
@@ -443,6 +636,51 @@ local function register_builtin_subcommands(cfg)
 			return ("Unknown stash action: %s"):format(action)
 		end,
 	}
+
+	M.subcommands.merge = {
+		description = "Merge branch into current branch",
+		run = function(ctx)
+			local target = first_positional(ctx.args)
+			if not target then
+				return "Usage: :Gitflow merge <branch>"
+			end
+			run_merge(target)
+			return ("Running git merge %s..."):format(target)
+		end,
+	}
+
+	M.subcommands.rebase = {
+		description = "Rebase current branch (supports --abort/--continue)",
+		run = function(ctx)
+			if has_flag(ctx.args, "--abort") then
+				run_rebase({ "--abort" })
+				return "Running git rebase --abort..."
+			end
+			if has_flag(ctx.args, "--continue") then
+				run_rebase({ "--continue" })
+				return "Running git rebase --continue..."
+			end
+
+			local target = first_positional(ctx.args)
+			if not target then
+				return "Usage: :Gitflow rebase <branch>|--abort|--continue"
+			end
+			run_rebase({ target })
+			return ("Running git rebase %s..."):format(target)
+		end,
+	}
+
+	M.subcommands["cherry-pick"] = {
+		description = "Cherry-pick a commit onto current branch",
+		run = function(ctx)
+			local commit = first_positional(ctx.args)
+			if not commit then
+				return "Usage: :Gitflow cherry-pick <commit>"
+			end
+			run_cherry_pick(commit)
+			return ("Running git cherry-pick %s..."):format(commit)
+		end,
+	}
 end
 
 ---@param commandline string
@@ -452,6 +690,74 @@ local function split_args(commandline)
 		return {}
 	end
 	return vim.split(commandline, "%s+", { trimempty = true })
+end
+
+---@param arglead string
+---@param candidates string[]
+---@return string[]
+local function filter_candidates(arglead, candidates)
+	local filtered = {}
+	for _, value in ipairs(candidates) do
+		if arglead == "" or vim.startswith(value, arglead) then
+			filtered[#filtered + 1] = value
+		end
+	end
+	return filtered
+end
+
+---@param args string[]
+---@return string[]
+local function system_lines(args)
+	local cmd = { "git" }
+	for _, arg in ipairs(args) do
+		cmd[#cmd + 1] = arg
+	end
+
+	local lines = {}
+	if vim.system then
+		local result = vim.system(cmd, { text = true }):wait()
+		if (result.code or 1) ~= 0 then
+			return lines
+		end
+		lines = vim.split(result.stdout or "", "\n", { trimempty = true })
+	else
+		lines = vim.fn.systemlist(cmd)
+		if vim.v.shell_error ~= 0 then
+			return {}
+		end
+	end
+
+	return lines
+end
+
+---@return string[]
+local function list_branch_candidates()
+	local names = {}
+	for _, line in ipairs(system_lines({
+		"for-each-ref",
+		"--format=%(refname:short)",
+		"refs/heads",
+		"refs/remotes",
+	})) do
+		local trimmed = vim.trim(line)
+		if trimmed ~= "" and not trimmed:match("/HEAD$") then
+			names[#names + 1] = trimmed
+		end
+	end
+	table.sort(names)
+	return names
+end
+
+---@return string[]
+local function list_commit_candidates()
+	local hashes = {}
+	for _, line in ipairs(system_lines({ "log", "--all", "--pretty=format:%H", "-n", "400" })) do
+		local trimmed = vim.trim(line)
+		if trimmed ~= "" then
+			hashes[#hashes + 1] = trimmed
+		end
+	end
+	return hashes
 end
 
 ---@param args string[]
@@ -500,15 +806,49 @@ function M.register_subcommand(name, subcommand)
 end
 
 ---@param arglead string
+---@param cmdline string|nil
+---@param _cursorpos integer|nil
 ---@return string[]
-function M.complete(arglead)
-	local matches = {}
-	for _, name in ipairs(utils.sorted_keys(M.subcommands)) do
-		if arglead == "" or vim.startswith(name, arglead) then
-			matches[#matches + 1] = name
-		end
+function M.complete(arglead, cmdline, _cursorpos)
+	if cmdline == nil then
+		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
 	end
-	return matches
+
+	local commandline = cmdline or ""
+	local args = split_args(commandline)
+	if #args == 0 then
+		return {}
+	end
+
+	if #args == 1 then
+		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
+	end
+
+	-- `:Gitflow <subcommand>` completion
+	if #args == 2 and not commandline:match("%s$") then
+		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
+	end
+
+	local subcommand = args[2]
+	if subcommand == "merge" then
+		return filter_candidates(arglead, list_branch_candidates())
+	end
+	if subcommand == "rebase" then
+		local options = { "--abort", "--continue" }
+		local candidates = {}
+		for _, value in ipairs(options) do
+			candidates[#candidates + 1] = value
+		end
+		for _, value in ipairs(list_branch_candidates()) do
+			candidates[#candidates + 1] = value
+		end
+		return filter_candidates(arglead, candidates)
+	end
+	if subcommand == "cherry-pick" then
+		return filter_candidates(arglead, list_commit_candidates())
+	end
+
+	return {}
 end
 
 ---@param cfg GitflowConfig|nil
@@ -522,8 +862,8 @@ function M.setup(cfg)
 		M.dispatch(args, current)
 	end, {
 		nargs = "*",
-		complete = function(arglead)
-			return M.complete(arglead)
+		complete = function(arglead, cmdline, cursorpos)
+			return M.complete(arglead, cmdline, cursorpos)
 		end,
 		desc = "Gitflow command dispatcher",
 	})
@@ -533,6 +873,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowRefresh)", "<Cmd>Gitflow refresh<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowClose)", "<Cmd>Gitflow close<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStatus)", "<Cmd>Gitflow status<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowBranch)", "<Cmd>Gitflow branch<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowCommit)", "<Cmd>Gitflow commit<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPush)", "<Cmd>Gitflow push<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPull)", "<Cmd>Gitflow pull<CR>", { silent = true })
@@ -546,6 +887,7 @@ function M.setup(cfg)
 		refresh = "<Plug>(GitflowRefresh)",
 		close = "<Plug>(GitflowClose)",
 		status = "<Plug>(GitflowStatus)",
+		branch = "<Plug>(GitflowBranch)",
 		commit = "<Plug>(GitflowCommit)",
 		push = "<Plug>(GitflowPush)",
 		pull = "<Plug>(GitflowPull)",
