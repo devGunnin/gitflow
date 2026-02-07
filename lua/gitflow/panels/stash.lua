@@ -47,16 +47,8 @@ local function ensure_window(cfg)
 		end,
 	})
 
-	vim.keymap.set("n", "p", function()
-		M.pop_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
 	vim.keymap.set("n", "P", function()
 		M.pop_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "d", function()
-		M.drop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "D", function()
@@ -153,11 +145,7 @@ function M.drop_under_cursor()
 		return
 	end
 
-	local confirmed = vim.fn.confirm(
-		("Drop %s?"):format(entry.ref),
-		"&Yes\n&No",
-		2
-	) == 1
+	local confirmed = vim.fn.confirm(("Drop %s?"):format(entry.ref), "&Yes\n&No", 2) == 1
 	if not confirmed then
 		return
 	end
