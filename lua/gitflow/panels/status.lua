@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_status = require("gitflow.git.status")
+local git_branch = require("gitflow.git.branch")
 
 ---@class GitflowStatusPanelOpts
 ---@field on_commit fun()|nil
@@ -138,7 +139,8 @@ local function entry_under_cursor()
 end
 
 ---@param grouped GitflowStatusGroups
-local function render(grouped)
+---@param current_branch string
+local function render(grouped, current_branch)
 	local lines = {
 		"Gitflow Status",
 		"",
@@ -148,6 +150,7 @@ local function render(grouped)
 	append_section("Staged", grouped.staged, lines, line_entries, true)
 	append_section("Unstaged", grouped.unstaged, lines, line_entries, false)
 	append_section("Untracked", grouped.untracked, lines, line_entries, false)
+	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
 
 	ui.buffer.update("status", lines)
 	M.state.line_entries = line_entries
@@ -183,11 +186,13 @@ function M.open(cfg, opts)
 end
 
 function M.refresh()
-	git_status.fetch({}, function(err, _, grouped)
-		if notify_if_error(err) then
-			return
-		end
-		render(grouped)
+	git_branch.current({}, function(_, branch)
+		git_status.fetch({}, function(err, _, grouped)
+			if notify_if_error(err) then
+				return
+			end
+			render(grouped, branch or "(unknown)")
+		end)
 	end)
 end
 

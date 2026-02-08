@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_stash = require("gitflow.git.stash")
+local git_branch = require("gitflow.git.branch")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -65,7 +66,8 @@ local function ensure_window(cfg)
 end
 
 ---@param entries GitflowStashEntry[]
-local function render(entries)
+---@param current_branch string
+local function render(entries, current_branch)
 	local lines = {
 		"Gitflow Stash",
 		"",
@@ -80,6 +82,8 @@ local function render(entries)
 			line_entries[#lines] = entry
 		end
 	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
 
 	ui.buffer.update("stash", lines)
 	M.state.line_entries = line_entries
@@ -112,12 +116,14 @@ function M.open(cfg)
 end
 
 function M.refresh()
-	git_stash.list({}, function(err, entries)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		render(entries)
+	git_branch.current({}, function(_, branch)
+		git_stash.list({}, function(err, entries)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			render(entries, branch or "(unknown)")
+		end)
 	end)
 end
 
