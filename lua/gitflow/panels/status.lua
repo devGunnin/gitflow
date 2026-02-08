@@ -102,16 +102,6 @@ local function append_commit_section(title, entries, lines, line_entries, pushab
 	lines[#lines + 1] = ""
 end
 
----@param entries GitflowLogEntry[]
----@return table<string, boolean>
-local function sha_lookup(entries)
-	local lookup = {}
-	for _, entry in ipairs(entries) do
-		lookup[entry.sha] = true
-	end
-	return lookup
-end
-
 ---@param result GitflowGitResult
 ---@param action string
 ---@return string
@@ -284,30 +274,30 @@ local function commit_entry_under_cursor()
 end
 
 ---@param grouped GitflowStatusGroups
----@param history_entries GitflowLogEntry[]
 ---@param outgoing_entries GitflowLogEntry[]
 ---@param incoming_entries GitflowLogEntry[]
 ---@param upstream_name string|nil
-local function render(grouped, history_entries, outgoing_entries, incoming_entries, upstream_name)
+local function render(grouped, outgoing_entries, incoming_entries, upstream_name)
 	local lines = {
 		"Gitflow Status",
 		"",
 	}
 	local line_entries = {}
-	local outgoing_lookup = sha_lookup(outgoing_entries)
 
 	append_file_section("Staged", grouped.staged, lines, line_entries, true)
 	append_file_section("Unstaged", grouped.unstaged, lines, line_entries, false)
 	append_file_section("Untracked", grouped.untracked, lines, line_entries, false)
-	append_commit_section(
-		"Commit History (oldest -> newest)",
-		history_entries,
-		lines,
-		line_entries,
-		outgoing_lookup
-	)
 
 	if upstream_name then
+		if #outgoing_entries > 0 then
+			append_commit_section(
+				"Commit History (oldest -> newest)",
+				outgoing_entries,
+				lines,
+				line_entries,
+				true
+			)
+		end
 		local outgoing_title = ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name)
 		append_commit_section(outgoing_title, outgoing_entries, lines, line_entries, true)
 		local incoming_title = ("Incoming (oldest -> newest, only on %s)"):format(upstream_name)
@@ -363,22 +353,23 @@ function M.refresh()
 			return
 		end
 
-		git_log.list({
-			count = cfg.git.log.count,
-			format = cfg.git.log.format,
-			reverse = true,
-		}, function(history_err, history_entries)
-			if notify_if_error(history_err) then
+		resolve_upstream(function(upstream_err, upstream)
+			if notify_if_error(upstream_err) then
 				return
 			end
 
-			resolve_upstream(function(upstream_err, upstream)
-				if notify_if_error(upstream_err) then
-					return
-				end
+			if not upstream then
+				render(grouped, {}, {}, nil)
+				return
+			end
 
-				if not upstream then
-					render(grouped, history_entries or {}, {}, {}, nil)
+			git_log.list({
+				count = cfg.git.log.count,
+				format = cfg.git.log.format,
+				reverse = true,
+				range = ("%s..HEAD"):format(upstream.full_name),
+			}, function(outgoing_err, outgoing_entries)
+				if notify_if_error(outgoing_err) then
 					return
 				end
 
@@ -386,30 +377,18 @@ function M.refresh()
 					count = cfg.git.log.count,
 					format = cfg.git.log.format,
 					reverse = true,
-					range = ("%s..HEAD"):format(upstream.full_name),
-				}, function(outgoing_err, outgoing_entries)
-					if notify_if_error(outgoing_err) then
+					range = ("HEAD..%s"):format(upstream.full_name),
+				}, function(incoming_err, incoming_entries)
+					if notify_if_error(incoming_err) then
 						return
 					end
 
-					git_log.list({
-						count = cfg.git.log.count,
-						format = cfg.git.log.format,
-						reverse = true,
-						range = ("HEAD..%s"):format(upstream.full_name),
-					}, function(incoming_err, incoming_entries)
-						if notify_if_error(incoming_err) then
-							return
-						end
-
-						render(
-							grouped,
-							history_entries or {},
-							outgoing_entries or {},
-							incoming_entries or {},
-							upstream.full_name
-						)
-					end)
+					render(
+						grouped,
+						outgoing_entries or {},
+						incoming_entries or {},
+						upstream.full_name
+					)
 				end)
 			end)
 		end)

@@ -283,16 +283,10 @@ assert_true(has_push_commit_keymap, "status panel should map p for commit push")
 local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
 local staged_header_line = find_line(status_lines, "Staged")
 assert_true(staged_header_line ~= nil, "status panel should include staged section")
-local history_header_line = find_line(status_lines, "Commit History")
-assert_true(history_header_line ~= nil, "status panel should include commit history section")
+local no_upstream_history = find_line(status_lines, "Commit History")
+assert_true(no_upstream_history == nil, "commit history should not appear without upstream")
 local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
 assert_true(staged_tracked_line ~= nil, "staged tracked file should be visible")
-local stage2_commit_line = find_line(
-	status_lines,
-	"stage2 automated commit",
-	history_header_line + 1
-)
-assert_true(stage2_commit_line ~= nil, "commit history should include commit summaries")
 
 vim.api.nvim_set_current_win(status_panel.state.winid)
 vim.api.nvim_win_set_cursor(status_panel.state.winid, { staged_tracked_line, 0 })
@@ -304,17 +298,6 @@ assert_equals(
 	"diff request should include selected path"
 )
 assert_equals(captured_diff_request.staged, true, "staged file diff should use --staged")
-
-local stage2_commit_sha = vim.trim(run_git(repo_dir, { "rev-parse", "HEAD" }))
-captured_diff_request = nil
-vim.api.nvim_win_set_cursor(status_panel.state.winid, { stage2_commit_line, 0 })
-status_panel.open_diff_under_cursor()
-assert_true(captured_diff_request ~= nil, "dd should support commit entries")
-assert_equals(
-	captured_diff_request.commit,
-	stage2_commit_sha,
-	"commit diff should target selected commit"
-)
 
 local revert_confirm = vim.fn.confirm
 vim.fn.confirm = function()
@@ -365,7 +348,7 @@ assert_true(outgoing_ready, "outgoing section should include local commits not o
 local outgoing_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
 local history_header_after_refresh = find_line(outgoing_lines, "Commit History")
 local outgoing_header_line = find_line(outgoing_lines, "Outgoing")
-assert_true(history_header_after_refresh ~= nil, "commit history header should remain visible")
+assert_true(history_header_after_refresh ~= nil, "commit history should appear with outgoing commits")
 assert_true(outgoing_header_line ~= nil, "outgoing header should remain visible")
 local push_one_history_line = find_line_in_range(
 	outgoing_lines,
@@ -374,6 +357,16 @@ local push_one_history_line = find_line_in_range(
 	outgoing_header_line - 1
 )
 assert_true(push_one_history_line ~= nil, "push target commit should be selectable in history section")
+
+captured_diff_request = nil
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { push_one_history_line, 0 })
+status_panel.open_diff_under_cursor()
+assert_true(captured_diff_request ~= nil, "dd should support commit entries")
+assert_equals(
+	captured_diff_request.commit,
+	push_one_sha,
+	"commit diff should target selected commit"
+)
 
 local push_confirm = vim.fn.confirm
 vim.fn.confirm = function()
