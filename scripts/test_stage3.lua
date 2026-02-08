@@ -147,6 +147,13 @@ local subcommands = commands.complete("")
 for _, expected in ipairs({ "branch", "merge", "rebase", "cherry-pick" }) do
 	assert_true(contains(subcommands, expected), ("missing subcommand '%s'"):format(expected))
 end
+local nil_cmdline_subcommands = commands.complete("", nil, 0)
+for _, expected in ipairs({ "branch", "merge", "rebase", "cherry-pick" }) do
+	assert_true(
+		contains(nil_cmdline_subcommands, expected),
+		("missing subcommand '%s' for nil cmdline"):format(expected)
+	)
+end
 
 local merge_completion = commands.complete("feature", "Gitflow merge feature", 0)
 assert_true(
