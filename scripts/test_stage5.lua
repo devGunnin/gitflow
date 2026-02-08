@@ -154,17 +154,29 @@ fi
 
 # B1: stub for review comments API
 if [ "$#" -ge 2 ] && [ "$1" = "api" ]; then
+  # Check for --method POST to distinguish review creation
+  has_method_post=false
+  for arg in "$@"; do
+    if [ "$arg" = "POST" ]; then
+      has_method_post=true
+    fi
+  done
+
   case "$2" in
+    *pulls/7/comments/*/replies*)
+      echo '{"id":103,"body":"reply ok"}'
+      exit 0
+      ;;
     *pulls/7/comments*)
       echo '[{"id":101,"path":"lua/gitflow/commands.lua","line":11,"original_line":10,"diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Consider renaming this variable","user":{"login":"reviewer1"},"in_reply_to_id":null},{"id":102,"path":"lua/gitflow/commands.lua","line":11,"original_line":10,"diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Agreed, needs a better name","user":{"login":"reviewer2"},"in_reply_to_id":101}]'
       exit 0
       ;;
     *pulls/7/reviews*)
+      if [ "$has_method_post" = true ]; then
+        echo '{"id":601,"state":"APPROVED"}'
+        exit 0
+      fi
       echo '[{"id":501,"state":"CHANGES_REQUESTED","body":"Needs work","user":{"login":"reviewer1"}}]'
-      exit 0
-      ;;
-    *pulls/7/comments/101/replies*)
-      echo '{"id":103,"body":"reply ok"}'
       exit 0
       ;;
     *)
@@ -277,13 +289,16 @@ end, "review panel should render title and diff")
 local review_buf = buffer.get("review")
 assert_true(review_buf ~= nil, "review panel should open")
 
--- B3: ]c/[c instead of ]h/[h
--- N1: c instead of i, S for submit comment
--- B5: t for toggle thread
+-- ]c/[c for hunk nav per spec
+-- c = inline comment, S = submit review
+-- F1: <leader>t for toggle thread, <leader>b for back
+-- <leader> defaults to \ in headless mode
+local leader = vim.g.mapleader or "\\"
 assert_keymaps(review_buf, {
 	"]f", "[f", "]c", "[c",
-	"a", "x", "c", "S", "R", "t",
-	"r", "b", "q",
+	"a", "x", "c", "S", "R",
+	"r", "q",
+	leader .. "t", leader .. "b",
 })
 
 -- B2: visual mode c for multi-line comments
@@ -385,35 +400,43 @@ end
 review_panel.review_approve()
 review_panel.review_request_changes()
 review_panel.review_comment()
+
+-- B2: inline_comment now queues instead of submitting
 review_panel.inline_comment()
+assert_equals(
+	#review_panel.state.pending_comments, 1,
+	"inline_comment should queue a pending comment"
+)
+assert_equals(
+	review_panel.state.pending_comments[1].body,
+	"Inline context note",
+	"pending comment body should match input"
+)
+
+-- reply_to_thread falls back to pending comment
 review_panel.reply_to_thread()
 
 commands.dispatch(
 	{ "pr", "review", "7", "approve", "CLI", "approval" }, cfg
 )
 commands.dispatch(
-	{ "pr", "review", "7", "request-changes", "Need", "tests" }, cfg
+	{ "pr", "review", "7", "request-changes", "Need", "tests" },
+	cfg
 )
 commands.dispatch(
 	{ "pr", "review", "7", "comment", "CLI", "comment" }, cfg
 )
 
--- B4: test submit-review command
+-- B4: test submit-review batches pending comments
+-- Review panel is open for PR #7, so this should
+-- call submit_review_direct which batches pending
 commands.dispatch(
 	{ "pr", "submit-review", "7", "approve", "LGTM" }, cfg
 )
 
 wait_until(function()
 	local lines = read_lines(gh_log)
-	local review_count = 0
-	for _, line in ipairs(lines) do
-		if line:find("pr review 7 ", 1, true) ~= nil then
-			review_count = review_count + 1
-		end
-	end
-
-	return review_count >= 9
-		and find_line(
+	return find_line(
 			lines,
 			"pr review 7 --approve --body Looks good to me"
 		) ~= nil
@@ -427,7 +450,6 @@ wait_until(function()
 			"pr review 7 --comment"
 				.. " --body General review feedback"
 		) ~= nil
-		and find_line(lines, "--comment --body [file=") ~= nil
 		and find_line(
 			lines,
 			"--comment --body Reply to inline note #1:"
@@ -444,14 +466,15 @@ wait_until(function()
 			lines,
 			"pr review 7 --comment --body CLI comment"
 		) ~= nil
-		and find_line(
-			lines,
-			"pr review 7 --approve --body LGTM"
-		) ~= nil
 end, "review actions should invoke gh pr review with expected modes",
 	10000)
 
--- B5: test toggle_thread on comment thread lines
+-- Verify pending comments were cleared after submit-review
+wait_until(function()
+	return #review_panel.state.pending_comments == 0
+end, "submit-review should clear pending comments", 5000)
+
+-- toggle_thread test on comment thread lines
 wait_until(function()
 	local bufnr = buffer.get("review")
 	if not bufnr then
@@ -461,16 +484,33 @@ wait_until(function()
 	return find_line(lines, "Review Comments") ~= nil
 end, "review panel should have comments for toggle test", 3000)
 
-local toggle_lines =
-	vim.api.nvim_buf_get_lines(review_buf, 0, -1, false)
-local toggle_thread_line = find_line(toggle_lines, "@reviewer1")
-if toggle_thread_line then
-	vim.api.nvim_win_set_cursor(
-		review_panel.state.winid, { toggle_thread_line, 0 }
+local cur_review_buf = buffer.get("review")
+if cur_review_buf then
+	local toggle_lines = vim.api.nvim_buf_get_lines(
+		cur_review_buf, 0, -1, false
 	)
-	-- Should collapse the thread
-	review_panel.toggle_thread()
+	local toggle_thread_line =
+		find_line(toggle_lines, "@reviewer1")
+	if toggle_thread_line
+		and review_panel.state.winid
+		and vim.api.nvim_win_is_valid(
+			review_panel.state.winid
+		) then
+		vim.api.nvim_win_set_cursor(
+			review_panel.state.winid,
+			{ toggle_thread_line, 0 }
+		)
+		-- Should collapse the thread
+		review_panel.toggle_thread()
+	end
 end
+
+-- B3: close review panel to restore previous window
+review_panel.close()
+assert_true(
+	not review_panel.is_open(),
+	"review panel should be closed after close()"
+)
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()

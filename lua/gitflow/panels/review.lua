@@ -51,6 +51,7 @@ local gh_prs = require("gitflow.gh.prs")
 ---@class GitflowPrReviewPanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
+---@field prev_winid integer|nil
 ---@field cfg GitflowConfig|nil
 ---@field pr_number integer|nil
 ---@field file_markers GitflowPrReviewFileMarker[]
@@ -59,7 +60,7 @@ local gh_prs = require("gitflow.gh.prs")
 ---@field threads GitflowPrReviewDraftThread[]
 ---@field comment_threads GitflowPrReviewCommentThread[]
 ---@field thread_line_map table<integer, integer>
----@field review_comments table[]
+---@field pending_comments GitflowPrReviewDraftThread[]
 
 local M = {}
 
@@ -67,6 +68,7 @@ local M = {}
 M.state = {
 	bufnr = nil,
 	winid = nil,
+	prev_winid = nil,
 	cfg = nil,
 	pr_number = nil,
 	file_markers = {},
@@ -75,7 +77,7 @@ M.state = {
 	threads = {},
 	comment_threads = {},
 	thread_line_map = {},
-	review_comments = {},
+	pending_comments = {},
 }
 
 ---@param cfg GitflowConfig
@@ -99,17 +101,24 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
+	-- B3: save current window so we can restore it on close
+	M.state.prev_winid = vim.api.nvim_get_current_win()
+
+	-- B3: fullscreen floating window that overlays the editor
+	M.state.winid = ui.window.open_float({
 		name = "review",
 		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
+		width = 1.0,
+		height = 1.0,
+		row = 0,
+		col = 0,
+		border = "none",
 		on_close = function()
 			M.state.winid = nil
 		end,
 	})
 
-	-- B3: ]c/[c for hunk nav per spec (was ]h/[h)
+	-- ]c/[c for hunk nav per spec
 	vim.keymap.set("n", "]f", function()
 		M.next_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -134,16 +143,16 @@ local function ensure_window(cfg)
 		M.review_request_changes()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	-- N1: c = inline comment per spec, S = submit review comment
+	-- c = inline comment per spec, S = submit review
 	vim.keymap.set("n", "c", function()
 		M.inline_comment()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "S", function()
-		M.review_comment()
+		M.submit_pending_review()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	-- B2: visual mode c for multi-line inline comments
+	-- visual mode c for multi-line inline comments
 	vim.keymap.set("v", "c", function()
 		M.inline_comment_visual()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -152,8 +161,8 @@ local function ensure_window(cfg)
 		M.reply_to_thread()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	-- B5: toggle collapse/expand comment threads
-	vim.keymap.set("n", "t", function()
+	-- F1: use <leader>t instead of t to avoid shadowing vim motion
+	vim.keymap.set("n", "<leader>t", function()
 		M.toggle_thread()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -161,7 +170,8 @@ local function ensure_window(cfg)
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "b", function()
+	-- F1: use <leader>b instead of b to avoid shadowing vim motion
+	vim.keymap.set("n", "<leader>b", function()
 		M.back_to_pr()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -426,7 +436,6 @@ local function render_review(
 	local lines = {
 		title,
 		"",
-		-- N2: file summary with status indicators
 		("Files: %d  Hunks: %d"):format(#files, #hunks),
 	}
 	for _, f in ipairs(files) do
@@ -434,13 +443,22 @@ local function render_review(
 			status_indicator(f.status), f.path
 		)
 	end
+	if #M.state.pending_comments > 0 then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] =
+			("Pending comments: %d (press S to submit)")
+				:format(#M.state.pending_comments)
+	end
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = "Navigation: ]f/[f file  ]c/[c hunk"
 	lines[#lines + 1] =
-		"Actions: a approve  x request changes  S submit comment"
+		"Actions: a approve  x request changes"
 	lines[#lines + 1] =
-		"         c inline note  R reply  t toggle thread"
-	lines[#lines + 1] = "         r refresh  b back  q quit"
+		"         c inline note  R reply"
+	lines[#lines + 1] =
+		"         S submit review  <leader>t toggle thread"
+	lines[#lines + 1] =
+		"         r refresh  <leader>b back  q quit"
 	lines[#lines + 1] = ""
 
 	-- B1: render existing review comment threads above the diff
@@ -463,8 +481,7 @@ local function render_review(
 	local diff_start_line = #lines + 1
 
 	-- N3: render diff with dual line numbers
-	for i, line in ipairs(diff_lines) do
-		local line_no = diff_start_line + i - 1
+	for _, line in ipairs(diff_lines) do
 		lines[#lines + 1] = line
 	end
 
@@ -527,6 +544,25 @@ local function render_review(
 					target_line - 1, 0,
 					{ virt_text = { { label, "WarningMsg" } },
 						virt_text_pos = "eol" }
+				)
+			end
+		end
+
+		-- B2: show pending inline comment indicators
+		for _, pc in ipairs(M.state.pending_comments) do
+			if pc.line >= 1
+				and pc.line <= vim.api.nvim_buf_line_count(
+					M.state.bufnr
+				) then
+				local pending_label =
+					(" [pending #%d]"):format(pc.id)
+				pcall(
+					vim.api.nvim_buf_set_extmark,
+					M.state.bufnr, ns_comments,
+					pc.line - 1, 0,
+					{ virt_text = {
+						{ pending_label, "DiagnosticInfo" },
+					}, virt_text_pos = "eol" }
 				)
 			end
 		end
@@ -679,6 +715,111 @@ function M.review_comment()
 	)
 end
 
+-- B2: submit all pending inline comments as a batched review
+function M.submit_pending_review()
+	local number = current_pr_number()
+	if not number then
+		utils.notify(
+			"No pull request selected for review",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	if #M.state.pending_comments == 0 then
+		-- No pending comments, fall back to general comment
+		prompt_and_submit(
+			"comment",
+			"Review comment (optional): ",
+			"Review submitted (comment)"
+		)
+		return
+	end
+
+	input.prompt({
+		prompt = ("Submit %d pending comment(s)"
+			.. " — mode (approve/request_changes/comment): "
+			):format(#M.state.pending_comments),
+	}, function(mode_input)
+		local mode = vim.trim(mode_input or "comment")
+		if mode == "" then
+			mode = "comment"
+		end
+		if mode == "request-changes" then
+			mode = "request_changes"
+		end
+		if mode ~= "approve"
+			and mode ~= "request_changes"
+			and mode ~= "comment" then
+			utils.notify(
+				"Invalid mode — use approve,"
+					.. " request_changes, or comment",
+				vim.log.levels.WARN
+			)
+			return
+		end
+
+		input.prompt({
+			prompt = "Review body (optional): ",
+		}, function(body_input)
+			local body = vim.trim(body_input or "")
+			local api_comments = {}
+			for _, pc in ipairs(M.state.pending_comments) do
+				if pc.path and pc.path ~= "" then
+					local entry = {
+						path = pc.path,
+						body = pc.body,
+					}
+					local ctx =
+						M.state.line_context[pc.line] or {}
+					if ctx.new_line then
+						entry.line = ctx.new_line
+					end
+					if pc.start_line and pc.end_line then
+						local sc =
+							M.state.line_context[
+								pc.start_line
+							] or {}
+						local ec =
+							M.state.line_context[
+								pc.end_line
+							] or {}
+						if sc.new_line then
+							entry.start_line = sc.new_line
+						end
+						if ec.new_line then
+							entry.line = ec.new_line
+						end
+					end
+					api_comments[#api_comments + 1] = entry
+				end
+			end
+
+			gh_prs.submit_review(
+				number, mode, body,
+				api_comments, {},
+				function(err)
+					if err then
+						utils.notify(
+							err, vim.log.levels.ERROR
+						)
+						return
+					end
+					local count = #M.state.pending_comments
+					M.state.pending_comments = {}
+					utils.notify(
+						("Review submitted (%s)"
+							.. " with %d comment(s)"
+						):format(mode, count),
+						vim.log.levels.INFO
+					)
+					M.refresh()
+				end
+			)
+		end)
+	end)
+end
+
 function M.inline_comment()
 	input.prompt({ prompt = "Inline comment: " }, function(comment)
 		local body = vim.trim(comment or "")
@@ -689,27 +830,28 @@ function M.inline_comment()
 			return
 		end
 
-		local prefix = contextual_comment_prefix(true)
-		local number = #M.state.threads + 1
 		local cursor_line = M.state.winid
-			and vim.api.nvim_win_get_cursor(M.state.winid)[1] or 1
+			and vim.api.nvim_win_get_cursor(M.state.winid)[1]
+			or 1
 		local context = M.state.line_context[cursor_line] or {}
-		M.state.threads[#M.state.threads + 1] = {
+		local number = #M.state.pending_comments + 1
+		M.state.pending_comments[#M.state.pending_comments + 1] = {
 			id = number,
 			path = context.path,
 			hunk = context.hunk,
 			line = cursor_line,
 			body = body,
 		}
-		submit_review(
-			"comment",
-			prefix .. body,
-			("Inline note submitted (#%d)"):format(number)
+		utils.notify(
+			("Inline comment queued (#%d)"
+				.. " — press S to submit review"):format(number),
+			vim.log.levels.INFO
 		)
+		M.re_render()
 	end)
 end
 
--- B2: visual mode multi-line inline comment
+-- visual mode multi-line inline comment
 function M.inline_comment_visual()
 	local start_line = vim.fn.line("v")
 	local end_line = vim.fn.line(".")
@@ -723,55 +865,42 @@ function M.inline_comment_visual()
 		start_line, end_line = end_line, start_line
 	end
 
-	input.prompt({ prompt = "Inline comment (range): " }, function(comment)
-		local body = vim.trim(comment or "")
-		if body == "" then
-			utils.notify(
-				"Comment cannot be empty", vim.log.levels.WARN
-			)
-			return
-		end
-
-		local start_ctx = M.state.line_context[start_line] or {}
-		local end_ctx = M.state.line_context[end_line] or {}
-		local range_info = {}
-		if start_ctx.path and start_ctx.path ~= "" then
-			range_info[#range_info + 1] =
-				("file=%s"):format(start_ctx.path)
-		end
-		if start_ctx.new_line then
-			range_info[#range_info + 1] =
-				("lines=%d-%d"):format(
-					start_ctx.new_line,
-					end_ctx.new_line or start_ctx.new_line
+	input.prompt(
+		{ prompt = "Inline comment (range): " },
+		function(comment)
+			local body = vim.trim(comment or "")
+			if body == "" then
+				utils.notify(
+					"Comment cannot be empty",
+					vim.log.levels.WARN
 				)
-		end
+				return
+			end
 
-		local prefix = ""
-		if #range_info > 0 then
-			prefix = ("[%s] "):format(
-				table.concat(range_info, " ")
+			local start_ctx =
+				M.state.line_context[start_line] or {}
+			local number = #M.state.pending_comments + 1
+			M.state.pending_comments[
+				#M.state.pending_comments + 1
+			] = {
+				id = number,
+				path = start_ctx.path,
+				hunk = start_ctx.hunk,
+				line = start_line,
+				start_line = start_line,
+				end_line = end_line,
+				body = body,
+			}
+			utils.notify(
+				("Inline comment queued (#%d, lines %d-%d)"
+					.. " — press S to submit review"):format(
+					number, start_line, end_line
+				),
+				vim.log.levels.INFO
 			)
+			M.re_render()
 		end
-
-		local number = #M.state.threads + 1
-		M.state.threads[#M.state.threads + 1] = {
-			id = number,
-			path = start_ctx.path,
-			hunk = start_ctx.hunk,
-			line = start_line,
-			start_line = start_line,
-			end_line = end_line,
-			body = body,
-		}
-		submit_review(
-			"comment",
-			prefix .. body,
-			("Inline note submitted (#%d, lines %d-%d)"):format(
-				number, start_line, end_line
-			)
-		)
-	end)
+	)
 end
 
 function M.reply_to_thread()
@@ -829,9 +958,11 @@ function M.reply_to_thread()
 		end
 	end
 
-	-- Fallback: reply to last local draft thread
-	local thread = M.state.threads[#M.state.threads]
-	if not thread then
+	-- Fallback: reply to last local pending comment
+	local pc = M.state.pending_comments[
+		#M.state.pending_comments
+	]
+	if not pc then
 		utils.notify(
 			"No inline thread found to reply to",
 			vim.log.levels.WARN
@@ -840,7 +971,7 @@ function M.reply_to_thread()
 	end
 
 	input.prompt(
-		{ prompt = ("Reply to note #%d: "):format(thread.id) },
+		{ prompt = ("Reply to note #%d: "):format(pc.id) },
 		function(reply)
 			local body = vim.trim(reply or "")
 			if body == "" then
@@ -854,12 +985,14 @@ function M.reply_to_thread()
 			local prefix = contextual_comment_prefix(false)
 			local formatted =
 				("Reply to inline note #%d: %s%s"):format(
-					thread.id, prefix, body
+					pc.id, prefix, body
 				)
 			submit_review(
 				"comment",
 				formatted,
-				("Reply submitted for note #%d"):format(thread.id)
+				("Reply submitted for note #%d"):format(
+					pc.id
+				)
 			)
 		end
 	)
@@ -1009,6 +1142,9 @@ function M.back_to_pr()
 end
 
 function M.close()
+	-- B3: remember prev window before closing overlay
+	local prev = M.state.prev_winid
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else
@@ -1023,6 +1159,7 @@ function M.close()
 
 	M.state.bufnr = nil
 	M.state.winid = nil
+	M.state.prev_winid = nil
 	M.state.cfg = nil
 	M.state.pr_number = nil
 	M.state.file_markers = {}
@@ -1031,7 +1168,12 @@ function M.close()
 	M.state.threads = {}
 	M.state.comment_threads = {}
 	M.state.thread_line_map = {}
-	M.state.review_comments = {}
+	M.state.pending_comments = {}
+
+	-- B3: restore focus to previous window
+	if prev and vim.api.nvim_win_is_valid(prev) then
+		vim.api.nvim_set_current_win(prev)
+	end
 end
 
 ---@return boolean
@@ -1044,7 +1186,58 @@ end
 ---@param mode "approve"|"request_changes"|"comment"
 ---@param body string
 function M.submit_review_direct(mode, body)
-	submit_review(mode, body, ("Review submitted (%s)"):format(mode))
+	local number = current_pr_number()
+	if not number then
+		submit_review(
+			mode, body,
+			("Review submitted (%s)"):format(mode)
+		)
+		return
+	end
+
+	-- If there are pending comments, batch-submit them
+	if #M.state.pending_comments > 0 then
+		local api_comments = {}
+		for _, pc in ipairs(M.state.pending_comments) do
+			if pc.path and pc.path ~= "" then
+				local entry = {
+					path = pc.path,
+					body = pc.body,
+				}
+				local ctx =
+					M.state.line_context[pc.line] or {}
+				if ctx.new_line then
+					entry.line = ctx.new_line
+				end
+				api_comments[#api_comments + 1] = entry
+			end
+		end
+
+		gh_prs.submit_review(
+			number, mode, body,
+			api_comments, {},
+			function(err)
+				if err then
+					utils.notify(err, vim.log.levels.ERROR)
+					return
+				end
+				local count = #M.state.pending_comments
+				M.state.pending_comments = {}
+				utils.notify(
+					("Review submitted (%s)"
+						.. " with %d comment(s)"
+					):format(mode, count),
+					vim.log.levels.INFO
+				)
+				M.refresh()
+			end
+		)
+		return
+	end
+
+	submit_review(
+		mode, body, ("Review submitted (%s)"):format(mode)
+	)
 end
 
 -- B4: respond to an existing review - list reviews and let user pick

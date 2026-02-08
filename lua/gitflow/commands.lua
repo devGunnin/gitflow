@@ -1022,8 +1022,10 @@ local function register_builtin_subcommands(cfg)
 			if action == "submit-review" then
 				local number = first_positional_from(ctx.args, 3)
 				if not number then
-					return "Usage: :Gitflow pr submit-review <number>"
-						.. " <approve|request_changes|comment> [message]"
+					return "Usage: :Gitflow pr submit-review"
+						.. " <number>"
+						.. " <approve|request_changes|comment>"
+						.. " [message]"
 				end
 
 				local mode = trimmed_or_nil(ctx.args[4])
@@ -1033,49 +1035,54 @@ local function register_builtin_subcommands(cfg)
 				if mode ~= "approve"
 					and mode ~= "request_changes"
 					and mode ~= "comment" then
-					return "Usage: :Gitflow pr submit-review <number>"
-						.. " <approve|request_changes|comment> [message]"
+					return "Usage: :Gitflow pr submit-review"
+						.. " <number>"
+						.. " <approve|request_changes|comment>"
+						.. " [message]"
 				end
 
 				local message = table.concat(ctx.args, " ", 5)
 				if vim.trim(message) == "" then
-					review_panel.open(cfg, number)
-					vim.schedule(function()
-						if mode == "approve" then
-							review_panel.review_approve()
-						elseif mode == "request_changes" then
-							review_panel.review_request_changes()
-						else
-							review_panel.review_comment()
-						end
-					end)
-					return ("Opening %s review prompt for PR #%s..."):format(
-						mode, number
-					)
+					message = ""
 				end
 
-				gh_prs.review(number, mode, message, {}, function(err)
-					if err then
-						show_error(err)
-						return
-					end
-					show_info(
-						("Submitted %s review for PR #%s"):format(
-							mode, number
-						)
+				-- If review panel is open for this PR,
+				-- use submit_review_direct to batch
+				-- pending comments
+				if review_panel.is_open()
+					and tonumber(
+						review_panel.state.pr_number
+					) == tonumber(number) then
+					review_panel.submit_review_direct(
+						mode, message
 					)
-					if review_panel.is_open()
-						and tonumber(review_panel.state.pr_number)
-							== tonumber(number) then
-						review_panel.refresh()
+					return (
+						"Submitting %s review for"
+							.. " PR #%s..."
+					):format(mode, number)
+				end
+
+				gh_prs.review(
+					number, mode, message, {},
+					function(err)
+						if err then
+							show_error(err)
+							return
+						end
+						show_info(
+							(
+								"Submitted %s review"
+									.. " for PR #%s"
+							):format(mode, number)
+						)
+						if pr_panel.is_open() then
+							pr_panel.refresh()
+						end
 					end
-					if pr_panel.is_open() then
-						pr_panel.refresh()
-					end
-				end)
-				return ("Submitting %s review for PR #%s..."):format(
-					mode, number
 				)
+				return (
+					"Submitting %s review for PR #%s..."
+				):format(mode, number)
 			end
 
 			if action == "respond" then

@@ -496,6 +496,71 @@ end
 ---@param number integer|string
 ---@param mode "approve"|"request_changes"|"comment"|string|nil
 ---@param body string|nil
+---@param comments table[]|nil
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.submit_review(number, mode, body, comments, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, {
+			code = 1, signal = 0, stdout = "",
+			stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local review_mode = normalize_review_mode(mode)
+	if not review_mode then
+		error(
+			"gitflow gh pr error: review mode must be"
+				.. " approve|request_changes|comment", 2
+		)
+	end
+
+	local event = "COMMENT"
+	if review_mode == "approve" then
+		event = "APPROVE"
+	elseif review_mode == "request_changes" then
+		event = "REQUEST_CHANGES"
+	end
+
+	local endpoint =
+		("repos/{owner}/{repo}/pulls/%s/reviews"):format(
+			normalize_number(number)
+		)
+
+	local args = {
+		"api", endpoint, "--method", "POST",
+		"--field", ("event=%s"):format(event),
+	}
+
+	local normalized_body = vim.trim(tostring(body or ""))
+	if normalized_body ~= "" then
+		args[#args + 1] = "--field"
+		args[#args + 1] = ("body=%s"):format(normalized_body)
+	end
+
+	if comments and #comments > 0 then
+		local json_comments = vim.json.encode(comments)
+		args[#args + 1] = "--raw-field"
+		args[#args + 1] = ("comments=%s"):format(json_comments)
+	end
+
+	gh.run(args, opts, function(result)
+		if result.code ~= 0 then
+			cb(
+				error_from_result(result, "submit_review"),
+				result
+			)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@param number integer|string
+---@param mode "approve"|"request_changes"|"comment"|string|nil
+---@param body string|nil
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
 function M.review(number, mode, body, opts, cb)
