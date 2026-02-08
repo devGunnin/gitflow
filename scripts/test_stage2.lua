@@ -298,8 +298,23 @@ assert_true(has_push_commit_keymap, "status panel should map p for commit push")
 
 local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
 local expected_branch_line = ("Current branch: %s"):format(current_branch(repo_dir))
+local expected_staged_header = "Staged (1)"
+local expected_unstaged_header = "Unstaged (0)"
+local expected_untracked_header = "Untracked (0)"
 local staged_header_line = find_line(status_lines, "Staged")
 assert_true(staged_header_line ~= nil, "status panel should include staged section")
+assert_true(
+	find_line(status_lines, expected_staged_header) ~= nil,
+	"status panel should include staged count in section header"
+)
+assert_true(
+	find_line(status_lines, expected_unstaged_header) ~= nil,
+	"status panel should include unstaged count in section header"
+)
+assert_true(
+	find_line(status_lines, expected_untracked_header) ~= nil,
+	"status panel should include untracked count in section header"
+)
 local no_upstream_history = find_line(status_lines, "Commit History")
 assert_true(no_upstream_history == nil, "commit history should not appear without upstream")
 local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
