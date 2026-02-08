@@ -46,6 +46,7 @@ function M.defaults()
 			commit = "gc",
 			push = "gp",
 			pull = "gP",
+			fetch = "<leader>gf",
 			diff = "gd",
 			log = "gl",
 			stash = "gS",

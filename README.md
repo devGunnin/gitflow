@@ -40,6 +40,7 @@ Example plugin setup (lazy.nvim style):
 | `<leader>gc` | commit flow |
 | `<leader>gp` | push current branch |
 | `<leader>gP` | pull/rebase flow |
+| `<leader>gf` | fetch remotes |
 | `<leader>gi` | open issue dashboard |
 | `<leader>gr` | open PR dashboard |
 | `<leader>gv` | open review diff view |

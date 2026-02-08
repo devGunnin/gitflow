@@ -82,6 +82,10 @@ local function ensure_window(cfg)
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "f", function()
+		M.fetch_remotes()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "q", function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -144,6 +148,17 @@ function M.refresh()
 	end)
 end
 
+function M.fetch_remotes()
+	git_branch.fetch(nil, {}, function(err, result)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(result_message(result, "Fetched remote branches"), vim.log.levels.INFO)
+		M.refresh()
+	end)
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
@@ -163,14 +178,29 @@ function M.switch_under_cursor()
 		return
 	end
 
-	git_branch.switch(entry, {}, function(err, result)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		utils.notify(result_message(result, ("Switched to %s"):format(entry.name)), vim.log.levels.INFO)
-		M.refresh()
-	end)
+	local function switch_to_entry()
+		git_branch.switch(entry, {}, function(err, result)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(result_message(result, ("Switched to %s"):format(entry.name)), vim.log.levels.INFO)
+			M.refresh()
+		end)
+	end
+
+	if entry.is_remote then
+		git_branch.fetch(entry.remote, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			switch_to_entry()
+		end)
+		return
+	end
+
+	switch_to_entry()
 end
 
 function M.create_branch()

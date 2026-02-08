@@ -139,6 +139,12 @@ assert_equals(cfg.git.log.count, 25, "setup should merge git.log config")
 assert_mapping("gs", "<Plug>(GitflowStatus)", "default status keymap should be registered")
 assert_mapping("gp", "<Plug>(GitflowPush)", "default push keymap should be registered")
 assert_mapping("gP", "<Plug>(GitflowPull)", "default pull keymap should be registered")
+assert_mapping("<Plug>(GitflowFetch)", "<Cmd>Gitflow fetch<CR>", "fetch plug keymap should be registered")
+assert_mapping(
+	cfg.keybindings.fetch,
+	"<Plug>(GitflowFetch)",
+	"default fetch keymap should be registered"
+)
 
 local commands = require("gitflow.commands")
 local all_subcommands = commands.complete("")
@@ -147,6 +153,7 @@ for _, expected in ipairs({
 	"commit",
 	"push",
 	"pull",
+	"fetch",
 	"diff",
 	"log",
 	"stash",

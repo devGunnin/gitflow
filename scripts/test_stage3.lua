@@ -125,6 +125,17 @@ run_git(repo_dir, { "commit", "-m", "feature branch commit" })
 run_git(repo_dir, { "push", "-u", "origin", "feature/base" })
 run_git(repo_dir, { "checkout", "main" })
 
+local collaborator_dir = vim.fn.tempname()
+assert_equals(vim.fn.mkdir(collaborator_dir, "p"), 1, "temp collaborator dir should be created")
+run_git(collaborator_dir, { "clone", remote_dir, "." })
+run_git(collaborator_dir, { "config", "user.email", "collab@example.com" })
+run_git(collaborator_dir, { "config", "user.name", "Collaborator" })
+run_git(collaborator_dir, { "checkout", "-b", "feature/from-a", "origin/main" })
+write_file(collaborator_dir .. "/from-a.txt", { "from collaborator" })
+run_git(collaborator_dir, { "add", "from-a.txt" })
+run_git(collaborator_dir, { "commit", "-m", "collaborator branch" })
+run_git(collaborator_dir, { "push", "-u", "origin", "feature/from-a" })
+
 local previous_cwd = vim.fn.getcwd()
 vim.fn.chdir(repo_dir)
 vim.env.GIT_EDITOR = ":"
@@ -182,7 +193,7 @@ assert_true(
 )
 
 local branch_maps = vim.api.nvim_buf_get_keymap(branch_panel.state.bufnr, "n")
-local required_maps = { ["<CR>"] = true, c = true, d = true, D = true, r = true, q = true }
+local required_maps = { ["<CR>"] = true, c = true, d = true, D = true, r = true, R = true, f = true, q = true }
 for _, map in ipairs(branch_maps) do
 	if required_maps[map.lhs] then
 		required_maps[map.lhs] = false
@@ -212,6 +223,27 @@ local function move_cursor_to_branch(name)
 		return true
 	end, ("branch '%s' should be visible in panel"):format(name))
 end
+
+assert_true(
+	find_line(branch_lines, "origin/feature/from-a") == nil,
+	"collaborator branch should not be listed before fetch"
+)
+
+branch_panel.fetch_remotes()
+wait_until(function()
+	local lines = vim.api.nvim_buf_get_lines(branch_panel.state.bufnr, 0, -1, false)
+	return find_line(lines, "origin/feature/from-a") ~= nil
+end, "fetch action should refresh remote branch list")
+
+move_cursor_to_branch("origin/feature/from-a")
+branch_panel.switch_under_cursor()
+wait_until(function()
+	if current_branch(repo_dir) ~= "feature/from-a" then
+		return false
+	end
+	local _, code = run_git(repo_dir, { "rev-parse", "--verify", "HEAD:from-a.txt" }, false)
+	return code == 0
+end, "switch action should fetch and track collaborator branch")
 
 move_cursor_to_branch("main")
 

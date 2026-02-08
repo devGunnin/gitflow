@@ -2,6 +2,7 @@ local config = require("gitflow.config")
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
+local git_branch = require("gitflow.git.branch")
 local git_status = require("gitflow.git.status")
 local git_stash = require("gitflow.git.stash")
 local status_panel = require("gitflow.panels.status")
@@ -225,6 +226,20 @@ local function run_pull()
 			return
 		end
 		show_info(result_message(result, "Pull completed"))
+	end)
+end
+
+---@param remote string|nil
+local function run_fetch(remote)
+	git_branch.fetch(remote, {}, function(err, result)
+		if err then
+			show_error(err)
+			return
+		end
+		show_info(result_message(result, "Fetch completed"))
+		if branch_panel.is_open() then
+			branch_panel.refresh()
+		end
 	end)
 end
 
@@ -548,6 +563,18 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands.fetch = {
+		description = "Run git fetch (supports optional remote)",
+		run = function(ctx)
+			local remote = first_positional(ctx.args)
+			run_fetch(remote)
+			if remote then
+				return ("Running git fetch --prune %s..."):format(remote)
+			end
+			return "Running git fetch --all --prune..."
+		end,
+	}
+
 	M.subcommands.diff = {
 		description = "Open diff buffer (supports --staged [path])",
 		run = function(ctx)
@@ -749,6 +776,19 @@ local function list_branch_candidates()
 end
 
 ---@return string[]
+local function list_remote_candidates()
+	local remotes = {}
+	for _, line in ipairs(system_lines({ "remote" })) do
+		local trimmed = vim.trim(line)
+		if trimmed ~= "" then
+			remotes[#remotes + 1] = trimmed
+		end
+	end
+	table.sort(remotes)
+	return remotes
+end
+
+---@return string[]
 local function list_commit_candidates()
 	local hashes = {}
 	for _, line in ipairs(system_lines({ "log", "--all", "--pretty=format:%H", "-n", "400" })) do
@@ -846,6 +886,9 @@ function M.complete(arglead, cmdline, _cursorpos)
 	if subcommand == "cherry-pick" then
 		return filter_candidates(arglead, list_commit_candidates())
 	end
+	if subcommand == "fetch" then
+		return filter_candidates(arglead, list_remote_candidates())
+	end
 
 	return {}
 end
@@ -876,6 +919,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowCommit)", "<Cmd>Gitflow commit<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPush)", "<Cmd>Gitflow push<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPull)", "<Cmd>Gitflow pull<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowFetch)", "<Cmd>Gitflow fetch<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowDiff)", "<Cmd>Gitflow diff<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
@@ -890,6 +934,7 @@ function M.setup(cfg)
 		commit = "<Plug>(GitflowCommit)",
 		push = "<Plug>(GitflowPush)",
 		pull = "<Plug>(GitflowPull)",
+		fetch = "<Plug>(GitflowFetch)",
 		diff = "<Plug>(GitflowDiff)",
 		log = "<Plug>(GitflowLog)",
 		stash = "<Plug>(GitflowStash)",

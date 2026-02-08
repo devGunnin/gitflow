@@ -9,6 +9,7 @@ local git = require("gitflow.git")
 ---@field is_current boolean
 
 local M = {}
+local run_branch_cmd
 
 ---@param text string
 ---@return string[]
@@ -118,11 +119,30 @@ function M.list_merged(opts, cb)
 	end)
 end
 
+---@param remote string|nil
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.fetch(remote, opts, cb)
+	local trimmed_remote = remote and vim.trim(remote) or nil
+	local args = { "fetch", "--prune" }
+	local action = "fetch --prune"
+
+	if trimmed_remote and trimmed_remote ~= "" then
+		args[#args + 1] = trimmed_remote
+		action = ("%s %s"):format(action, trimmed_remote)
+	else
+		args[#args + 1] = "--all"
+		action = action .. " --all"
+	end
+
+	run_branch_cmd(args, opts, action, cb)
+end
+
 ---@param cmd string[]
 ---@param opts GitflowGitRunOpts|nil
 ---@param action string
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
-local function run_branch_cmd(cmd, opts, action, cb)
+run_branch_cmd = function(cmd, opts, action, cb)
 	git.git(cmd, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, action), result)
