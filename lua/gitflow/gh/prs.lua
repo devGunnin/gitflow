@@ -409,6 +409,91 @@ function M.edit(number, input, opts, cb)
 end
 
 ---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, comments: table[]|nil, result: GitflowGitResult)
+function M.review_comments(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, {
+			code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
+		normalize_number(number)
+	)
+	gh.json({
+		"api", endpoint, "--paginate", "--jq", ".",
+	}, opts, function(err, data, result)
+		if err then
+			cb(err, nil, result)
+			return
+		end
+		cb(nil, data or {}, result)
+	end)
+end
+
+---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, reviews: table[]|nil, result: GitflowGitResult)
+function M.list_reviews(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, {
+			code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/reviews"):format(
+		normalize_number(number)
+	)
+	gh.json({
+		"api", endpoint, "--paginate", "--jq", ".",
+	}, opts, function(err, data, result)
+		if err then
+			cb(err, nil, result)
+			return
+		end
+		cb(nil, data or {}, result)
+	end)
+end
+
+---@param number integer|string
+---@param review_id integer
+---@param body string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.reply_to_review_comment(number, review_id, body, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local normalized_body = vim.trim(tostring(body or ""))
+	if normalized_body == "" then
+		error(
+			"gitflow gh pr error: reply_to_review_comment requires body", 2
+		)
+	end
+
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments/%d/replies"):format(
+		normalize_number(number), review_id
+	)
+	gh.run({
+		"api", endpoint, "--method", "POST", "--field", ("body=%s"):format(normalized_body),
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "reply_to_review_comment"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@param number integer|string
 ---@param mode "approve"|"request_changes"|"comment"|string|nil
 ---@param body string|nil
 ---@param opts GitflowGitRunOpts|nil

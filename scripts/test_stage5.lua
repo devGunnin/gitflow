@@ -11,7 +11,11 @@ end
 local function assert_equals(actual, expected, message)
 	if actual ~= expected then
 		error(
-			("%s (expected=%s, actual=%s)"):format(message, vim.inspect(expected), vim.inspect(actual)),
+			("%s (expected=%s, actual=%s)"):format(
+				message,
+				vim.inspect(expected),
+				vim.inspect(actual)
+			),
 			2
 		)
 	end
@@ -64,10 +68,32 @@ local function assert_keymaps(bufnr, required)
 	end
 end
 
+local function assert_visual_keymaps(bufnr, required)
+	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "v")
+	local missing = {}
+	for _, lhs in ipairs(required) do
+		missing[lhs] = true
+	end
+	for _, map in ipairs(keymaps) do
+		if missing[map.lhs] ~= nil then
+			missing[map.lhs] = nil
+		end
+	end
+	for lhs, _ in pairs(missing) do
+		error(("missing visual keymap '%s'"):format(lhs), 2)
+	end
+end
+
 local stub_root = vim.fn.tempname()
-assert_equals(vim.fn.mkdir(stub_root, "p"), 1, "stub root should be created")
+assert_equals(
+	vim.fn.mkdir(stub_root, "p"), 1,
+	"stub root should be created"
+)
 local stub_bin = stub_root .. "/bin"
-assert_equals(vim.fn.mkdir(stub_bin, "p"), 1, "stub bin should be created")
+assert_equals(
+	vim.fn.mkdir(stub_bin, "p"), 1,
+	"stub bin should be created"
+)
 local gh_log = stub_root .. "/gh.log"
 
 local diff_patch = table.concat({
@@ -126,6 +152,28 @@ if [ "$#" -ge 3 ] && [ "$1" = "pr" ] && [ "$2" = "review" ] && [ "$3" = "7" ]; t
   exit 0
 fi
 
+# B1: stub for review comments API
+if [ "$#" -ge 2 ] && [ "$1" = "api" ]; then
+  case "$2" in
+    *pulls/7/comments*)
+      echo '[{"id":101,"path":"lua/gitflow/commands.lua","line":11,"original_line":10,"diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Consider renaming this variable","user":{"login":"reviewer1"},"in_reply_to_id":null},{"id":102,"path":"lua/gitflow/commands.lua","line":11,"original_line":10,"diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Agreed, needs a better name","user":{"login":"reviewer2"},"in_reply_to_id":101}]'
+      exit 0
+      ;;
+    *pulls/7/reviews*)
+      echo '[{"id":501,"state":"CHANGES_REQUESTED","body":"Needs work","user":{"login":"reviewer1"}}]'
+      exit 0
+      ;;
+    *pulls/7/comments/101/replies*)
+      echo '{"id":103,"body":"reply ok"}'
+      exit 0
+      ;;
+    *)
+      echo "[]"
+      exit 0
+      ;;
+  esac
+fi
+
 echo "unsupported gh args: $*" >&2
 exit 1
 ]]
@@ -133,7 +181,9 @@ exit 1
 gh_script = gh_script:gsub("__DIFF_PATCH__", diff_patch)
 
 local gh_path = stub_bin .. "/gh"
-vim.fn.writefile(vim.split(gh_script, "\n", { plain = true }), gh_path)
+vim.fn.writefile(
+	vim.split(gh_script, "\n", { plain = true }), gh_path
+)
 vim.fn.setfperm(gh_path, "rwxr-xr-x")
 
 local original_path = vim.env.PATH
@@ -153,17 +203,38 @@ local cfg = gitflow.setup({
 })
 
 local gh = require("gitflow.gh")
-assert_true(gh.state.checked, "gh prerequisites should be checked on setup")
-assert_true(gh.state.available, "gh should be available with stub")
-assert_true(gh.state.authenticated, "gh auth should pass with stub")
+assert_true(
+	gh.state.checked,
+	"gh prerequisites should be checked on setup"
+)
+assert_true(
+	gh.state.available,
+	"gh should be available with stub"
+)
+assert_true(
+	gh.state.authenticated,
+	"gh auth should pass with stub"
+)
 
 local commands = require("gitflow.commands")
 local pr_panel = require("gitflow.panels.prs")
 local review_panel = require("gitflow.panels.review")
 local buffer = require("gitflow.ui.buffer")
 
-local pr_actions = commands.complete("", "Gitflow pr ", 0)
-assert_true(contains(pr_actions, "review"), "pr completion should include review action")
+-- B4: verify new actions appear in completion
+local pr_comp = commands.complete("", "Gitflow pr ", 0)
+assert_true(
+	contains(pr_comp, "review"),
+	"pr completion should include review action"
+)
+assert_true(
+	contains(pr_comp, "submit-review"),
+	"pr completion should include submit-review action"
+)
+assert_true(
+	contains(pr_comp, "respond"),
+	"pr completion should include respond action"
+)
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -196,36 +267,107 @@ wait_until(function()
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "PR #7 Review: Stage5 PR") ~= nil
-		and find_line(lines, "diff --git a/lua/gitflow/commands.lua b/lua/gitflow/commands.lua") ~= nil
+		and find_line(
+			lines,
+			"diff --git a/lua/gitflow/commands.lua"
+				.. " b/lua/gitflow/commands.lua"
+		) ~= nil
 end, "review panel should render title and diff")
 
 local review_buf = buffer.get("review")
 assert_true(review_buf ~= nil, "review panel should open")
-assert_keymaps(review_buf, { "]f", "[f", "]h", "[h", "a", "x", "c", "i", "R", "r", "b", "q" })
 
+-- B3: ]c/[c instead of ]h/[h
+-- N1: c instead of i, S for submit comment
+-- B5: t for toggle thread
+assert_keymaps(review_buf, {
+	"]f", "[f", "]c", "[c",
+	"a", "x", "c", "S", "R", "t",
+	"r", "b", "q",
+})
+
+-- B2: visual mode c for multi-line comments
+assert_visual_keymaps(review_buf, { "c" })
+
+-- B1: verify existing review comments rendered
+local review_lines =
+	vim.api.nvim_buf_get_lines(review_buf, 0, -1, false)
+assert_true(
+	find_line(review_lines, "Review Comments") ~= nil,
+	"review panel should show Review Comments section"
+)
+assert_true(
+	find_line(review_lines, "@reviewer1") ~= nil,
+	"review panel should display reviewer1 comment"
+)
+assert_true(
+	find_line(review_lines, "@reviewer2") ~= nil,
+	"review panel should display reviewer2 reply"
+)
+
+-- N2: verify file status indicators
+assert_true(
+	find_line(review_lines, "[~]") ~= nil,
+	"review panel should show file status indicators"
+)
+
+-- Navigation tests
 vim.api.nvim_set_current_win(review_panel.state.winid)
 vim.api.nvim_win_set_cursor(review_panel.state.winid, { 1, 0 })
 
-local review_lines = vim.api.nvim_buf_get_lines(review_buf, 0, -1, false)
-local first_file = find_line(review_lines, "diff --git a/lua/gitflow/commands.lua b/lua/gitflow/commands.lua")
-local first_hunk = find_line(review_lines, "@@ -10,2 +10,3 @@ local M = {}")
-local second_file = find_line(review_lines, "diff --git a/lua/gitflow/panels/prs.lua b/lua/gitflow/panels/prs.lua")
-local second_hunk = find_line(review_lines, "@@ -20,2 +20,4 @@ local function render()")
+local first_file = find_line(
+	review_lines,
+	"diff --git a/lua/gitflow/commands.lua"
+		.. " b/lua/gitflow/commands.lua"
+)
+local first_hunk = find_line(
+	review_lines, "@@ -10,2 +10,3 @@ local M = {}"
+)
+local second_file = find_line(
+	review_lines,
+	"diff --git a/lua/gitflow/panels/prs.lua"
+		.. " b/lua/gitflow/panels/prs.lua"
+)
+local second_hunk = find_line(
+	review_lines,
+	"@@ -20,2 +20,4 @@ local function render()"
+)
 assert_true(
-	first_file ~= nil and first_hunk ~= nil and second_file ~= nil and second_hunk ~= nil,
+	first_file ~= nil and first_hunk ~= nil
+		and second_file ~= nil and second_hunk ~= nil,
 	"diff markers should exist"
 )
 
 review_panel.next_file()
-assert_equals(vim.api.nvim_win_get_cursor(review_panel.state.winid)[1], first_file, "next_file should jump")
+assert_equals(
+	vim.api.nvim_win_get_cursor(review_panel.state.winid)[1],
+	first_file, "next_file should jump"
+)
 review_panel.next_hunk()
-assert_equals(vim.api.nvim_win_get_cursor(review_panel.state.winid)[1], first_hunk, "next_hunk should jump")
+assert_equals(
+	vim.api.nvim_win_get_cursor(review_panel.state.winid)[1],
+	first_hunk, "next_hunk should jump"
+)
 review_panel.next_file()
-assert_equals(vim.api.nvim_win_get_cursor(review_panel.state.winid)[1], second_file, "next_file should advance")
+assert_equals(
+	vim.api.nvim_win_get_cursor(review_panel.state.winid)[1],
+	second_file, "next_file should advance"
+)
 review_panel.prev_file()
-assert_equals(vim.api.nvim_win_get_cursor(review_panel.state.winid)[1], first_file, "prev_file should jump back")
+assert_equals(
+	vim.api.nvim_win_get_cursor(review_panel.state.winid)[1],
+	first_file, "prev_file should jump back"
+)
 review_panel.prev_hunk()
-assert_equals(vim.api.nvim_win_get_cursor(review_panel.state.winid)[1], second_hunk, "prev_hunk should wrap")
+assert_equals(
+	vim.api.nvim_win_get_cursor(review_panel.state.winid)[1],
+	second_hunk, "prev_hunk should wrap"
+)
+
+-- Move cursor back to diff area for review action tests
+vim.api.nvim_win_set_cursor(
+	review_panel.state.winid, { second_hunk, 0 }
+)
 
 local scripted_inputs = {
 	"Looks good to me",
@@ -246,9 +388,20 @@ review_panel.review_comment()
 review_panel.inline_comment()
 review_panel.reply_to_thread()
 
-commands.dispatch({ "pr", "review", "7", "approve", "CLI", "approval" }, cfg)
-commands.dispatch({ "pr", "review", "7", "request-changes", "Need", "tests" }, cfg)
-commands.dispatch({ "pr", "review", "7", "comment", "CLI", "comment" }, cfg)
+commands.dispatch(
+	{ "pr", "review", "7", "approve", "CLI", "approval" }, cfg
+)
+commands.dispatch(
+	{ "pr", "review", "7", "request-changes", "Need", "tests" }, cfg
+)
+commands.dispatch(
+	{ "pr", "review", "7", "comment", "CLI", "comment" }, cfg
+)
+
+-- B4: test submit-review command
+commands.dispatch(
+	{ "pr", "submit-review", "7", "approve", "LGTM" }, cfg
+)
 
 wait_until(function()
 	local lines = read_lines(gh_log)
@@ -259,16 +412,65 @@ wait_until(function()
 		end
 	end
 
-	return review_count >= 8
-		and find_line(lines, "pr review 7 --approve --body Looks good to me") ~= nil
-		and find_line(lines, "pr review 7 --request-changes --body Please rename this function") ~= nil
-		and find_line(lines, "pr review 7 --comment --body General review feedback") ~= nil
+	return review_count >= 9
+		and find_line(
+			lines,
+			"pr review 7 --approve --body Looks good to me"
+		) ~= nil
+		and find_line(
+			lines,
+			"pr review 7 --request-changes"
+				.. " --body Please rename this function"
+		) ~= nil
+		and find_line(
+			lines,
+			"pr review 7 --comment"
+				.. " --body General review feedback"
+		) ~= nil
 		and find_line(lines, "--comment --body [file=") ~= nil
-		and find_line(lines, "--comment --body Reply to inline note #1:") ~= nil
-		and find_line(lines, "pr review 7 --approve --body CLI approval") ~= nil
-		and find_line(lines, "pr review 7 --request-changes --body Need tests") ~= nil
-		and find_line(lines, "pr review 7 --comment --body CLI comment") ~= nil
-end, "review actions should invoke gh pr review with expected modes")
+		and find_line(
+			lines,
+			"--comment --body Reply to inline note #1:"
+		) ~= nil
+		and find_line(
+			lines,
+			"pr review 7 --approve --body CLI approval"
+		) ~= nil
+		and find_line(
+			lines,
+			"pr review 7 --request-changes --body Need tests"
+		) ~= nil
+		and find_line(
+			lines,
+			"pr review 7 --comment --body CLI comment"
+		) ~= nil
+		and find_line(
+			lines,
+			"pr review 7 --approve --body LGTM"
+		) ~= nil
+end, "review actions should invoke gh pr review with expected modes",
+	10000)
+
+-- B5: test toggle_thread on comment thread lines
+wait_until(function()
+	local bufnr = buffer.get("review")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "Review Comments") ~= nil
+end, "review panel should have comments for toggle test", 3000)
+
+local toggle_lines =
+	vim.api.nvim_buf_get_lines(review_buf, 0, -1, false)
+local toggle_thread_line = find_line(toggle_lines, "@reviewer1")
+if toggle_thread_line then
+	vim.api.nvim_win_set_cursor(
+		review_panel.state.winid, { toggle_thread_line, 0 }
+	)
+	-- Should collapse the thread
+	review_panel.toggle_thread()
+end
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -282,11 +484,20 @@ end, "pr list should be available before review handoff")
 
 vim.api.nvim_set_current_win(pr_panel.state.winid)
 local handoff_pr_buf = buffer.get("prs")
-assert_true(handoff_pr_buf ~= nil, "pr panel buffer should exist for review handoff")
-local pr_lines = vim.api.nvim_buf_get_lines(handoff_pr_buf, 0, -1, false)
+assert_true(
+	handoff_pr_buf ~= nil,
+	"pr panel buffer should exist for review handoff"
+)
+local pr_lines =
+	vim.api.nvim_buf_get_lines(handoff_pr_buf, 0, -1, false)
 local pr_line = find_line(pr_lines, "#7 [open] Stage5 PR")
-assert_true(pr_line ~= nil, "pr list line should exist for review handoff")
-vim.api.nvim_win_set_cursor(pr_panel.state.winid, { pr_line, 0 })
+assert_true(
+	pr_line ~= nil,
+	"pr list line should exist for review handoff"
+)
+vim.api.nvim_win_set_cursor(
+	pr_panel.state.winid, { pr_line, 0 }
+)
 pr_panel.review_under_cursor()
 wait_until(function()
 	local bufnr = buffer.get("review")

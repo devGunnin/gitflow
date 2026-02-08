@@ -946,7 +946,7 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands.pr = {
-		description = "GitHub pull requests: list|view|review|create|comment|merge|checkout|close",
+		description = "GitHub PRs: list|view|review|submit-review|respond|create|comment|merge|checkout|close",
 		run = function(ctx)
 			local ready, prerequisite_error = gh.ensure_prerequisites()
 			if not ready then
@@ -1017,6 +1017,74 @@ local function register_builtin_subcommands(cfg)
 					end
 				end)
 				return ("Submitting %s review for PR #%s..."):format(mode, number)
+			end
+
+			if action == "submit-review" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr submit-review <number>"
+						.. " <approve|request_changes|comment> [message]"
+				end
+
+				local mode = trimmed_or_nil(ctx.args[4])
+				if mode == "request-changes" then
+					mode = "request_changes"
+				end
+				if mode ~= "approve"
+					and mode ~= "request_changes"
+					and mode ~= "comment" then
+					return "Usage: :Gitflow pr submit-review <number>"
+						.. " <approve|request_changes|comment> [message]"
+				end
+
+				local message = table.concat(ctx.args, " ", 5)
+				if vim.trim(message) == "" then
+					review_panel.open(cfg, number)
+					vim.schedule(function()
+						if mode == "approve" then
+							review_panel.review_approve()
+						elseif mode == "request_changes" then
+							review_panel.review_request_changes()
+						else
+							review_panel.review_comment()
+						end
+					end)
+					return ("Opening %s review prompt for PR #%s..."):format(
+						mode, number
+					)
+				end
+
+				gh_prs.review(number, mode, message, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(
+						("Submitted %s review for PR #%s"):format(
+							mode, number
+						)
+					)
+					if review_panel.is_open()
+						and tonumber(review_panel.state.pr_number)
+							== tonumber(number) then
+						review_panel.refresh()
+					end
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Submitting %s review for PR #%s..."):format(
+					mode, number
+				)
+			end
+
+			if action == "respond" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr respond <number>"
+				end
+				review_panel.respond_to_review(number)
+				return ("Loading reviews for PR #%s..."):format(number)
 			end
 
 			if action == "create" then
@@ -1327,7 +1395,10 @@ local function list_commit_candidates()
 end
 
 local issue_actions = { "list", "view", "create", "comment", "close", "reopen", "edit" }
-local pr_actions = { "list", "view", "review", "create", "comment", "merge", "checkout", "close" }
+local pr_actions = {
+	"list", "view", "review", "submit-review", "respond",
+	"create", "comment", "merge", "checkout", "close",
+}
 local label_actions = { "list", "create", "delete" }
 
 ---@param cmdline string
@@ -1371,7 +1442,11 @@ end
 ---@param arglead string
 ---@return string[]
 local function complete_pr(subaction, arglead)
-	if subaction == "view" or subaction == "comment" or subaction == "checkout" or subaction == "close" then
+	if subaction == "view"
+		or subaction == "comment"
+		or subaction == "checkout"
+		or subaction == "close"
+		or subaction == "respond" then
 		return {}
 	end
 
@@ -1392,11 +1467,16 @@ local function complete_pr(subaction, arglead)
 	end
 
 	if subaction == "merge" then
-		return filter_candidates(arglead, { "merge", "squash", "rebase" })
+		return filter_candidates(
+			arglead, { "merge", "squash", "rebase" }
+		)
 	end
 
-	if subaction == "review" then
-		return filter_candidates(arglead, { "approve", "request_changes", "request-changes", "comment" })
+	if subaction == "review" or subaction == "submit-review" then
+		return filter_candidates(arglead, {
+			"approve", "request_changes",
+			"request-changes", "comment",
+		})
 	end
 
 	return {}
