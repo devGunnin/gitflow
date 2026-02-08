@@ -32,7 +32,7 @@ M.registry = {}
 ---@param max_value integer
 ---@return integer
 local function resolve_dimension(dimension, max_value)
-	if dimension > 0 and dimension < 1 then
+	if dimension > 0 and dimension <= 1 then
 		return math.max(1, math.floor(max_value * dimension))
 	end
 	return math.max(1, math.floor(dimension))

@@ -57,7 +57,6 @@ local gh_prs = require("gitflow.gh.prs")
 ---@field file_markers GitflowPrReviewFileMarker[]
 ---@field hunk_markers GitflowPrReviewHunkMarker[]
 ---@field line_context table<integer, GitflowPrReviewLineContext>
----@field threads GitflowPrReviewDraftThread[]
 ---@field comment_threads GitflowPrReviewCommentThread[]
 ---@field thread_line_map table<integer, integer>
 ---@field pending_comments GitflowPrReviewDraftThread[]
@@ -74,7 +73,6 @@ M.state = {
 	file_markers = {},
 	hunk_markers = {},
 	line_context = {},
-	threads = {},
 	comment_threads = {},
 	thread_line_map = {},
 	pending_comments = {},
@@ -1165,7 +1163,6 @@ function M.close()
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}
 	M.state.line_context = {}
-	M.state.threads = {}
 	M.state.comment_threads = {}
 	M.state.thread_line_map = {}
 	M.state.pending_comments = {}
