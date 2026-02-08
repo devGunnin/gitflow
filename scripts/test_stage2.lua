@@ -159,6 +159,7 @@ local diff = require("gitflow.git.diff")
 local git_log = require("gitflow.git.log")
 local stash = require("gitflow.git.stash")
 local status_panel = require("gitflow.panels.status")
+local stash_panel = require("gitflow.panels.stash")
 
 local parsed = status.parse("M  staged.txt\n M unstaged.txt\n?? new.txt")
 assert_equals(#parsed, 3, "status parser should parse porcelain lines")
@@ -299,6 +300,30 @@ assert_deep_equals(
 commands.dispatch({ "diff" }, cfg)
 commands.dispatch({ "log" }, cfg)
 commands.dispatch({ "stash", "list" }, cfg)
+local stash_panel_ready = vim.wait(5000, function()
+	if not stash_panel.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(stash_panel.state.bufnr, 0, -1, false)
+	return find_line(lines, "Gitflow Stash") ~= nil
+end, 25)
+assert_true(stash_panel_ready, "stash panel should render")
+
+local stash_buf = require("gitflow.ui.buffer").get("stash")
+assert_true(stash_buf ~= nil, "stash panel should create a stash buffer")
+
+local stash_keymaps = vim.api.nvim_buf_get_keymap(stash_buf, "n")
+local has_pop_keymap = false
+local has_drop_keymap = false
+for _, mapping in ipairs(stash_keymaps) do
+	if mapping.lhs == "P" then
+		has_pop_keymap = true
+	elseif mapping.lhs == "D" then
+		has_drop_keymap = true
+	end
+end
+assert_true(has_pop_keymap, "stash panel should map P for stash pop")
+assert_true(has_drop_keymap, "stash panel should map D for stash drop")
 
 local log_err, log_entries = wait_async(function(done)
 	git_log.list({ count = 10, format = "%h %s" }, function(inner_err, entries)
