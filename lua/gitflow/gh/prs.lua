@@ -84,6 +84,30 @@ local function error_from_result(result, action)
 	return ("gh pr %s failed: %s"):format(action, output)
 end
 
+---@param mode string|nil
+---@return string|nil
+local function normalize_review_mode(mode)
+	if mode == nil then
+		return "comment"
+	end
+
+	local normalized = vim.trim(tostring(mode)):lower()
+	if normalized == "" then
+		return "comment"
+	end
+
+	if normalized == "approve" then
+		return "approve"
+	end
+	if normalized == "request_changes" or normalized == "request-changes" then
+		return "request_changes"
+	end
+	if normalized == "comment" then
+		return "comment"
+	end
+	return nil
+end
+
 ---@param params table|nil
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, prs: table[]|nil, result: GitflowGitResult)
@@ -149,6 +173,25 @@ function M.view(number, opts, cb)
 			return
 		end
 		cb(nil, data, result)
+	end)
+end
+
+---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, diff_text: string|nil, result: GitflowGitResult)
+function M.diff(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run({ "pr", "diff", normalize_number(number), "--patch" }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "diff"), nil, result)
+			return
+		end
+		cb(nil, result.stdout or "", result)
 	end)
 end
 
@@ -359,6 +402,47 @@ function M.edit(number, input, opts, cb)
 	gh.run(args, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "edit"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@param number integer|string
+---@param mode "approve"|"request_changes"|"comment"|string|nil
+---@param body string|nil
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.review(number, mode, body, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local review_mode = normalize_review_mode(mode)
+	if not review_mode then
+		error("gitflow gh pr error: review mode must be approve|request_changes|comment", 2)
+	end
+
+	local args = { "pr", "review", normalize_number(number) }
+	if review_mode == "approve" then
+		args[#args + 1] = "--approve"
+	elseif review_mode == "request_changes" then
+		args[#args + 1] = "--request-changes"
+	else
+		args[#args + 1] = "--comment"
+	end
+
+	local normalized_body = vim.trim(tostring(body or ""))
+	if normalized_body ~= "" then
+		args[#args + 1] = "--body"
+		args[#args + 1] = normalized_body
+	end
+
+	gh.run(args, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "review"), result)
 			return
 		end
 		cb(nil, result)
