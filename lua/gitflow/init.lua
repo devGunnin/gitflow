@@ -1,5 +1,6 @@
 local config = require("gitflow.config")
 local commands = require("gitflow.commands")
+local gh = require("gitflow.gh")
 
 local M = {}
 
@@ -11,6 +12,7 @@ M.initialized = false
 function M.setup(opts)
 	local cfg = config.setup(opts or {})
 	commands.setup(cfg)
+	gh.check_prerequisites({ notify = true })
 	M.initialized = true
 	return cfg
 end

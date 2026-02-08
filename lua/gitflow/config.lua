@@ -51,6 +51,9 @@ function M.defaults()
 			log = "gl",
 			stash = "gS",
 			branch = "<leader>gb",
+			issue = "<leader>gI",
+			pr = "<leader>gR",
+			label = "<leader>gL",
 		},
 		ui = {
 			default_layout = "split",
