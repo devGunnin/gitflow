@@ -814,8 +814,7 @@ function M.complete(arglead, cmdline, _cursorpos)
 		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
 	end
 
-	local commandline = cmdline
-	local args = split_args(commandline)
+	local args = split_args(cmdline)
 	if #args == 0 then
 		return {}
 	end
@@ -825,7 +824,7 @@ function M.complete(arglead, cmdline, _cursorpos)
 	end
 
 	-- `:Gitflow <subcommand>` completion
-	if #args == 2 and not commandline:match("%s$") then
+	if #args == 2 and not cmdline:match("%s$") then
 		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
 	end
 
