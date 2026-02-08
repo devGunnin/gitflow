@@ -182,4 +182,9 @@ function M.close()
 	M.state.line_entries = {}
 end
 
+---@return boolean
+function M.is_open()
+	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+end
+
 return M

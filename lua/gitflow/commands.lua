@@ -591,7 +591,7 @@ local function register_builtin_subcommands(cfg)
 						return
 					end
 					show_info(result_message(result, "Created stash entry"))
-					if stash_panel.state.bufnr then
+					if stash_panel.is_open() then
 						stash_panel.refresh()
 					end
 					refresh_status_panel_if_open()
@@ -607,7 +607,7 @@ local function register_builtin_subcommands(cfg)
 						return
 					end
 					show_info(result_message(result, "Applied stash entry"))
-					if stash_panel.state.bufnr then
+					if stash_panel.is_open() then
 						stash_panel.refresh()
 					end
 					refresh_status_panel_if_open()
@@ -626,7 +626,7 @@ local function register_builtin_subcommands(cfg)
 						return
 					end
 					show_info(result_message(result, "Dropped stash entry"))
-					if stash_panel.state.bufnr then
+					if stash_panel.is_open() then
 						stash_panel.refresh()
 					end
 				end)
@@ -814,8 +814,7 @@ function M.complete(arglead, cmdline, _cursorpos)
 		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
 	end
 
-	local commandline = cmdline or ""
-	local args = split_args(commandline)
+	local args = split_args(cmdline)
 	if #args == 0 then
 		return {}
 	end
@@ -825,7 +824,7 @@ function M.complete(arglead, cmdline, _cursorpos)
 	end
 
 	-- `:Gitflow <subcommand>` completion
-	if #args == 2 and not commandline:match("%s$") then
+	if #args == 2 and not cmdline:match("%s$") then
 		return filter_candidates(arglead, utils.sorted_keys(M.subcommands))
 	end
 
