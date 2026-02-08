@@ -5,11 +5,18 @@ local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local git_status = require("gitflow.git.status")
 local git_stash = require("gitflow.git.stash")
+local gh = require("gitflow.gh")
+local gh_issues = require("gitflow.gh.issues")
+local gh_prs = require("gitflow.gh.prs")
+local gh_labels = require("gitflow.gh.labels")
 local status_panel = require("gitflow.panels.status")
 local diff_panel = require("gitflow.panels.diff")
 local log_panel = require("gitflow.panels.log")
 local stash_panel = require("gitflow.panels.stash")
 local branch_panel = require("gitflow.panels.branch")
+local issue_panel = require("gitflow.panels.issues")
+local pr_panel = require("gitflow.panels.prs")
+local label_panel = require("gitflow.panels.labels")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -446,6 +453,133 @@ local function first_positional(args)
 	return nil
 end
 
+---@param args string[]
+---@param start_index integer
+---@return string|nil
+local function first_positional_from(args, start_index)
+	for i = start_index, #args do
+		local arg = args[i]
+		if not vim.startswith(arg, "--") then
+			return arg
+		end
+	end
+	return nil
+end
+
+---@param value string|nil
+---@return string|nil
+local function trimmed_or_nil(value)
+	if value == nil then
+		return nil
+	end
+	local trimmed = vim.trim(value)
+	if trimmed == "" then
+		return nil
+	end
+	return trimmed
+end
+
+---@param text string|nil
+---@return string[]
+local function parse_csv(text)
+	local items = {}
+	for _, token in ipairs(vim.split(text or "", ",", { trimempty = true })) do
+		local trimmed = vim.trim(token)
+		if trimmed ~= "" then
+			items[#items + 1] = trimmed
+		end
+	end
+	return items
+end
+
+---@param args string[]
+---@param start_index integer
+---@return table
+local function parse_issue_list_args(args, start_index)
+	local options = {
+		state = "open",
+		label = nil,
+		assignee = nil,
+		limit = 100,
+	}
+
+	local i = start_index
+	while i <= #args do
+		local token = args[i]
+		if token == "open" or token == "closed" or token == "all" then
+			options.state = token
+		elseif token == "--state" then
+			options.state = args[i + 1] or options.state
+			i = i + 1
+		elseif token == "--label" then
+			options.label = args[i + 1] or options.label
+			i = i + 1
+		elseif token == "--assignee" then
+			options.assignee = args[i + 1] or options.assignee
+			i = i + 1
+		elseif token == "--limit" then
+			options.limit = tonumber(args[i + 1]) or options.limit
+			i = i + 1
+		else
+			local label = token:match("^label=(.+)$")
+			if label then
+				options.label = label
+			end
+			local assignee = token:match("^assignee=(.+)$")
+			if assignee then
+				options.assignee = assignee
+			end
+		end
+		i = i + 1
+	end
+
+	return options
+end
+
+---@param args string[]
+---@param start_index integer
+---@return table
+local function parse_pr_list_args(args, start_index)
+	local options = {
+		state = "open",
+		base = nil,
+		head = nil,
+		limit = 100,
+	}
+
+	local i = start_index
+	while i <= #args do
+		local token = args[i]
+		if token == "open" or token == "closed" or token == "merged" or token == "all" then
+			options.state = token
+		elseif token == "--state" then
+			options.state = args[i + 1] or options.state
+			i = i + 1
+		elseif token == "--base" then
+			options.base = args[i + 1] or options.base
+			i = i + 1
+		elseif token == "--head" then
+			options.head = args[i + 1] or options.head
+			i = i + 1
+		elseif token == "--limit" then
+			options.limit = tonumber(args[i + 1]) or options.limit
+			i = i + 1
+		else
+			local base = token:match("^base=(.+)$")
+			if base then
+				options.base = base
+			end
+			local head = token:match("^head=(.+)$")
+			if head then
+				options.head = head
+			end
+		end
+		i = i + 1
+	end
+
+	return options
+end
+
 ---@param cfg GitflowConfig
 local function register_builtin_subcommands(cfg)
 	M.subcommands.help = {
@@ -508,6 +642,9 @@ local function register_builtin_subcommands(cfg)
 			diff_panel.close()
 			log_panel.close()
 			stash_panel.close()
+			issue_panel.close()
+			pr_panel.close()
+			label_panel.close()
 			return "Gitflow panels closed"
 		end,
 	}
@@ -664,6 +801,342 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands.issue = {
+		description = "GitHub issues: list|view|create|comment|close|reopen|edit",
+		run = function(ctx)
+			local ready, prerequisite_error = gh.ensure_prerequisites()
+			if not ready then
+				return prerequisite_error or "GitHub CLI prerequisites are not satisfied"
+			end
+
+			local action = ctx.args[2] or "list"
+			if action == "list" then
+				issue_panel.open(cfg, parse_issue_list_args(ctx.args, 3))
+				return "Loading issues..."
+			end
+
+			if action == "view" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow issue view <number>"
+				end
+				issue_panel.open_view(number, cfg)
+				return ("Loading issue #%s..."):format(number)
+			end
+
+			if action == "create" then
+				issue_panel.open(cfg, parse_issue_list_args(ctx.args, 3))
+				vim.schedule(function()
+					issue_panel.create_interactive()
+				end)
+				return "Opening issue creation prompt..."
+			end
+
+			if action == "comment" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow issue comment <number>"
+				end
+
+				local message = table.concat(ctx.args, " ", 4)
+				if vim.trim(message) ~= "" then
+					gh_issues.comment(number, message, {}, function(err)
+						if err then
+							show_error(err)
+							return
+						end
+						show_info(("Comment posted to issue #%s"):format(number))
+						if issue_panel.is_open() then
+							issue_panel.refresh()
+						end
+					end)
+					return ("Commenting on issue #%s..."):format(number)
+				end
+
+				issue_panel.open(cfg, parse_issue_list_args(ctx.args, 3))
+				vim.schedule(function()
+					issue_panel.open_view(number, cfg)
+					vim.schedule(function()
+						issue_panel.comment_under_cursor()
+					end)
+				end)
+				return ("Opening comment prompt for issue #%s..."):format(number)
+			end
+
+			if action == "close" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow issue close <number>"
+				end
+				gh_issues.close(number, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Closed issue #%s"):format(number))
+					if issue_panel.is_open() then
+						issue_panel.refresh()
+					end
+				end)
+				return ("Closing issue #%s..."):format(number)
+			end
+
+			if action == "reopen" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow issue reopen <number>"
+				end
+				gh_issues.reopen(number, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Reopened issue #%s"):format(number))
+					if issue_panel.is_open() then
+						issue_panel.refresh()
+					end
+				end)
+				return ("Reopening issue #%s..."):format(number)
+			end
+
+			if action == "edit" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow issue edit <number> [title=...] [body=...] [add=...] [remove=...]"
+				end
+
+				local edit_opts = {}
+				for i = 4, #ctx.args do
+					local token = ctx.args[i]
+					local title = token:match("^title=(.+)$")
+					if title then
+						edit_opts.title = title
+					end
+					local body = token:match("^body=(.+)$")
+					if body then
+						edit_opts.body = body
+					end
+					local add = token:match("^add=(.+)$")
+					if add then
+						edit_opts.add_labels = parse_csv(add)
+					end
+					local remove = token:match("^remove=(.+)$")
+					if remove then
+						edit_opts.remove_labels = parse_csv(remove)
+					end
+				end
+
+				gh_issues.edit(number, edit_opts, {}, function(err, _result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Updated issue #%s"):format(number))
+					if issue_panel.is_open() then
+						issue_panel.refresh()
+					end
+				end)
+				return ("Updating issue #%s..."):format(number)
+			end
+
+			return ("Unknown issue action: %s"):format(action)
+		end,
+	}
+
+	M.subcommands.pr = {
+		description = "GitHub pull requests: list|view|create|comment|merge|checkout|close",
+		run = function(ctx)
+			local ready, prerequisite_error = gh.ensure_prerequisites()
+			if not ready then
+				return prerequisite_error or "GitHub CLI prerequisites are not satisfied"
+			end
+
+			local action = ctx.args[2] or "list"
+			if action == "list" then
+				pr_panel.open(cfg, parse_pr_list_args(ctx.args, 3))
+				return "Loading pull requests..."
+			end
+
+			if action == "view" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr view <number>"
+				end
+				pr_panel.open_view(number, cfg)
+				return ("Loading PR #%s..."):format(number)
+			end
+
+			if action == "create" then
+				pr_panel.open(cfg, parse_pr_list_args(ctx.args, 3))
+				vim.schedule(function()
+					pr_panel.create_interactive()
+				end)
+				return "Opening PR creation prompt..."
+			end
+
+			if action == "comment" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr comment <number>"
+				end
+
+				local message = table.concat(ctx.args, " ", 4)
+				if vim.trim(message) ~= "" then
+					gh_prs.comment(number, message, {}, function(err)
+						if err then
+							show_error(err)
+							return
+						end
+						show_info(("Comment posted to PR #%s"):format(number))
+						if pr_panel.is_open() then
+							pr_panel.refresh()
+						end
+					end)
+					return ("Commenting on PR #%s..."):format(number)
+				end
+
+				pr_panel.open(cfg, parse_pr_list_args(ctx.args, 3))
+				vim.schedule(function()
+					pr_panel.open_view(number, cfg)
+					vim.schedule(function()
+						pr_panel.comment_under_cursor()
+					end)
+				end)
+				return ("Opening comment prompt for PR #%s..."):format(number)
+			end
+
+			if action == "merge" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr merge <number> [merge|squash|rebase]"
+				end
+
+				local strategy = ctx.args[4] or "merge"
+				if strategy ~= "merge" and strategy ~= "squash" and strategy ~= "rebase" then
+					return "Usage: :Gitflow pr merge <number> [merge|squash|rebase]"
+				end
+
+				gh_prs.merge(number, strategy, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Merged PR #%s (%s)"):format(number, strategy))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Merging PR #%s (%s)..."):format(number, strategy)
+			end
+
+			if action == "checkout" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr checkout <number>"
+				end
+
+				gh_prs.checkout(number, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Checked out PR #%s"):format(number))
+				end)
+				return ("Checking out PR #%s..."):format(number)
+			end
+
+			if action == "close" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr close <number>"
+				end
+
+				gh_prs.close(number, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Closed PR #%s"):format(number))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Closing PR #%s..."):format(number)
+			end
+
+			return ("Unknown pr action: %s"):format(action)
+		end,
+	}
+
+	M.subcommands.label = {
+		description = "GitHub labels: list|create|delete",
+		run = function(ctx)
+			local ready, prerequisite_error = gh.ensure_prerequisites()
+			if not ready then
+				return prerequisite_error or "GitHub CLI prerequisites are not satisfied"
+			end
+
+			local action = ctx.args[2] or "list"
+			if action == "list" then
+				label_panel.open(cfg)
+				return "Loading labels..."
+			end
+
+			if action == "create" then
+				local name = trimmed_or_nil(ctx.args[3])
+				local color = trimmed_or_nil(ctx.args[4])
+				if not name or not color then
+					return "Usage: :Gitflow label create <name> <color> [description]"
+				end
+				local description = table.concat(ctx.args, " ", 5)
+				if vim.trim(description) == "" then
+					description = nil
+				end
+
+				gh_labels.create(name, color, description, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Created label '%s'"):format(name))
+					if label_panel.is_open() then
+						label_panel.refresh()
+					end
+				end)
+				return ("Creating label '%s'..."):format(name)
+			end
+
+			if action == "delete" then
+				local name = trimmed_or_nil(ctx.args[3])
+				if not name then
+					return "Usage: :Gitflow label delete <name>"
+				end
+
+				local confirmed = ui.input.confirm(
+					("Delete label '%s'?"):format(name),
+					{ choices = { "&Delete", "&Cancel" }, default_choice = 2 }
+				)
+				if not confirmed then
+					return "Label deletion canceled"
+				end
+
+				gh_labels.delete(name, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Deleted label '%s'"):format(name))
+					if label_panel.is_open() then
+						label_panel.refresh()
+					end
+				end)
+				return ("Deleting label '%s'..."):format(name)
+			end
+
+			return ("Unknown label action: %s"):format(action)
+		end,
+	}
+
 	M.subcommands.merge = {
 		description = "Merge branch into current branch",
 		run = function(ctx)
@@ -800,6 +1273,91 @@ local function list_commit_candidates()
 	return hashes
 end
 
+local issue_actions = { "list", "view", "create", "comment", "close", "reopen", "edit" }
+local pr_actions = { "list", "view", "create", "comment", "merge", "checkout", "close" }
+local label_actions = { "list", "create", "delete" }
+
+---@param cmdline string
+---@param args string[]
+---@return boolean
+local function completing_action(cmdline, args)
+	return #args == 2 or (#args == 3 and not cmdline:match("%s$"))
+end
+
+---@param subaction string|nil
+---@param arglead string
+---@return string[]
+local function complete_issue(subaction, arglead)
+	if subaction == "view" or subaction == "comment" or subaction == "close" or subaction == "reopen" then
+		return {}
+	end
+
+	if subaction == "list" then
+		local candidates = {
+			"open",
+			"closed",
+			"all",
+			"--state",
+			"--label",
+			"--assignee",
+			"--limit",
+			"label=",
+			"assignee=",
+		}
+		return filter_candidates(arglead, candidates)
+	end
+
+	if subaction == "edit" then
+		return filter_candidates(arglead, { "title=", "body=", "add=", "remove=" })
+	end
+
+	return {}
+end
+
+---@param subaction string|nil
+---@param arglead string
+---@return string[]
+local function complete_pr(subaction, arglead)
+	if subaction == "view" or subaction == "comment" or subaction == "checkout" or subaction == "close" then
+		return {}
+	end
+
+	if subaction == "list" then
+		local candidates = {
+			"open",
+			"closed",
+			"merged",
+			"all",
+			"--state",
+			"--base",
+			"--head",
+			"--limit",
+			"base=",
+			"head=",
+		}
+		return filter_candidates(arglead, candidates)
+	end
+
+	if subaction == "merge" then
+		return filter_candidates(arglead, { "merge", "squash", "rebase" })
+	end
+
+	return {}
+end
+
+---@param subaction string|nil
+---@param arglead string
+---@return string[]
+local function complete_label(subaction, arglead)
+	if subaction == "delete" then
+		return {}
+	end
+	if subaction == "create" then
+		return {}
+	end
+	return filter_candidates(arglead, { "list", "create", "delete" })
+end
+
 ---@param args string[]
 ---@param cfg GitflowConfig
 ---@return string
@@ -889,6 +1447,24 @@ function M.complete(arglead, cmdline, _cursorpos)
 	if subcommand == "fetch" then
 		return filter_candidates(arglead, list_remote_candidates())
 	end
+	if subcommand == "issue" then
+		if completing_action(cmdline, args) then
+			return filter_candidates(arglead, issue_actions)
+		end
+		return complete_issue(args[3], arglead)
+	end
+	if subcommand == "pr" then
+		if completing_action(cmdline, args) then
+			return filter_candidates(arglead, pr_actions)
+		end
+		return complete_pr(args[3], arglead)
+	end
+	if subcommand == "label" then
+		if completing_action(cmdline, args) then
+			return filter_candidates(arglead, label_actions)
+		end
+		return complete_label(args[3], arglead)
+	end
 
 	return {}
 end
@@ -923,6 +1499,9 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowDiff)", "<Cmd>Gitflow diff<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowIssue)", "<Cmd>Gitflow issue list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPr)", "<Cmd>Gitflow pr list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -938,6 +1517,9 @@ function M.setup(cfg)
 		diff = "<Plug>(GitflowDiff)",
 		log = "<Plug>(GitflowLog)",
 		stash = "<Plug>(GitflowStash)",
+		issue = "<Plug>(GitflowIssue)",
+		pr = "<Plug>(GitflowPr)",
+		label = "<Plug>(GitflowLabel)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]
