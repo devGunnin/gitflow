@@ -101,6 +101,10 @@ local function find_line(lines, needle, start_line)
 	return nil
 end
 
+local function current_branch(repo_dir)
+	return vim.trim(run_git(repo_dir, { "rev-parse", "--abbrev-ref", "HEAD" }))
+end
+
 local function find_line_in_range(lines, needle, start_line, end_line)
 	local start_idx = start_line or 1
 	local end_idx = math.min(end_line or #lines, #lines)
@@ -177,6 +181,8 @@ local diff = require("gitflow.git.diff")
 local git_log = require("gitflow.git.log")
 local stash = require("gitflow.git.stash")
 local status_panel = require("gitflow.panels.status")
+local diff_panel = require("gitflow.panels.diff")
+local log_panel = require("gitflow.panels.log")
 local stash_panel = require("gitflow.panels.stash")
 assert_equals(type(stash_panel.is_open), "function", "stash panel should expose is_open")
 assert_true(not stash_panel.is_open(), "stash panel should start closed")
@@ -291,12 +297,18 @@ assert_true(has_revert_keymap, "status panel should map X for file revert")
 assert_true(has_push_commit_keymap, "status panel should map p for commit push")
 
 local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+local expected_branch_line = ("Current branch: %s"):format(current_branch(repo_dir))
 local staged_header_line = find_line(status_lines, "Staged")
 assert_true(staged_header_line ~= nil, "status panel should include staged section")
 local no_upstream_history = find_line(status_lines, "Commit History")
 assert_true(no_upstream_history == nil, "commit history should not appear without upstream")
 local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
 assert_true(staged_tracked_line ~= nil, "staged tracked file should be visible")
+assert_equals(
+	status_lines[#status_lines],
+	expected_branch_line,
+	"status panel should display current branch at the bottom"
+)
 
 vim.api.nvim_set_current_win(status_panel.state.winid)
 vim.api.nvim_win_set_cursor(status_panel.state.winid, { staged_tracked_line, 0 })
@@ -454,16 +466,40 @@ assert_true(
 )
 
 commands.dispatch({ "diff" }, cfg)
+local diff_ready = vim.wait(5000, function()
+	if not diff_panel.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(diff_panel.state.bufnr, 0, -1, false)
+	return lines[#lines] == expected_branch_line
+end, 25)
+assert_true(diff_ready, "diff panel should display current branch at the bottom")
+
 commands.dispatch({ "log" }, cfg)
+local log_ready = vim.wait(5000, function()
+	if not log_panel.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(log_panel.state.bufnr, 0, -1, false)
+	return lines[#lines] == expected_branch_line
+end, 25)
+assert_true(log_ready, "log panel should display current branch at the bottom")
+
 commands.dispatch({ "stash", "list" }, cfg)
 local stash_panel_ready = vim.wait(5000, function()
 	if not stash_panel.state.bufnr then
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(stash_panel.state.bufnr, 0, -1, false)
-	return find_line(lines, "Gitflow Stash") ~= nil
+	return find_line(lines, "Gitflow Stash") ~= nil and lines[#lines] == expected_branch_line
 end, 25)
 assert_true(stash_panel_ready, "stash panel should render")
+local stash_lines = vim.api.nvim_buf_get_lines(stash_panel.state.bufnr, 0, -1, false)
+assert_equals(
+	stash_lines[#stash_lines],
+	expected_branch_line,
+	"stash panel should display current branch at the bottom"
+)
 assert_true(stash_panel.is_open(), "stash panel should report open state")
 
 local stash_buf = require("gitflow.ui.buffer").get("stash")

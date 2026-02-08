@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_log = require("gitflow.git.log")
 local git_status = require("gitflow.git.status")
+local git_branch = require("gitflow.git.branch")
 
 ---@class GitflowStatusPanelOpts
 ---@field on_commit fun()|nil
@@ -277,7 +278,8 @@ end
 ---@param outgoing_entries GitflowLogEntry[]
 ---@param incoming_entries GitflowLogEntry[]
 ---@param upstream_name string|nil
-local function render(grouped, outgoing_entries, incoming_entries, upstream_name)
+---@param current_branch string
+local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
 	local lines = {
 		"Gitflow Status",
 		"",
@@ -307,6 +309,8 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		lines[#lines + 1] = "  (upstream branch is not configured)"
 		lines[#lines + 1] = ""
 	end
+
+	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
 
 	ui.buffer.update("status", lines)
 	M.state.line_entries = line_entries
@@ -348,28 +352,21 @@ function M.refresh()
 		return
 	end
 
-	git_status.fetch({}, function(err, _, grouped)
-		if notify_if_error(err) then
-			return
-		end
-
-		resolve_upstream(function(upstream_err, upstream)
-			if notify_if_error(upstream_err) then
+	git_branch.current({}, function(_, branch)
+		git_status.fetch({}, function(err, _, grouped)
+			if notify_if_error(err) then
 				return
 			end
 
-			if not upstream then
-				render(grouped, {}, {}, nil)
-				return
-			end
+			local current_branch = branch or "(unknown)"
 
-			git_log.list({
-				count = cfg.git.log.count,
-				format = cfg.git.log.format,
-				reverse = true,
-				range = ("%s..HEAD"):format(upstream.full_name),
-			}, function(outgoing_err, outgoing_entries)
-				if notify_if_error(outgoing_err) then
+			resolve_upstream(function(upstream_err, upstream)
+				if notify_if_error(upstream_err) then
+					return
+				end
+
+				if not upstream then
+					render(grouped, {}, {}, nil, current_branch)
 					return
 				end
 
@@ -377,18 +374,30 @@ function M.refresh()
 					count = cfg.git.log.count,
 					format = cfg.git.log.format,
 					reverse = true,
-					range = ("HEAD..%s"):format(upstream.full_name),
-				}, function(incoming_err, incoming_entries)
-					if notify_if_error(incoming_err) then
+					range = ("%s..HEAD"):format(upstream.full_name),
+				}, function(outgoing_err, outgoing_entries)
+					if notify_if_error(outgoing_err) then
 						return
 					end
 
-					render(
-						grouped,
-						outgoing_entries or {},
-						incoming_entries or {},
-						upstream.full_name
-					)
+					git_log.list({
+						count = cfg.git.log.count,
+						format = cfg.git.log.format,
+						reverse = true,
+						range = ("HEAD..%s"):format(upstream.full_name),
+					}, function(incoming_err, incoming_entries)
+						if notify_if_error(incoming_err) then
+							return
+						end
+
+						render(
+							grouped,
+							outgoing_entries or {},
+							incoming_entries or {},
+							upstream.full_name,
+							current_branch
+						)
+					end)
 				end)
 			end)
 		end)

@@ -87,6 +87,28 @@ function M.list(opts, cb)
 	end)
 end
 
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, branch: string|nil, result: GitflowGitResult)
+function M.current(opts, cb)
+	git.git({ "rev-parse", "--abbrev-ref", "HEAD" }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "rev-parse --abbrev-ref HEAD"), nil, result)
+			return
+		end
+
+		local branch = vim.trim(result.stdout or "")
+		if branch == "" then
+			cb("Could not determine current branch", nil, result)
+			return
+		end
+		if branch == "HEAD" then
+			cb(nil, "HEAD (detached)", result)
+			return
+		end
+		cb(nil, branch, result)
+	end)
+end
+
 ---@param entries GitflowBranchEntry[]
 ---@return GitflowBranchEntry[], GitflowBranchEntry[]
 function M.partition(entries)

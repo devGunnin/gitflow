@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
+local git_branch = require("gitflow.git.branch")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -65,7 +66,8 @@ local function ensure_window(cfg)
 end
 
 ---@param entries GitflowLogEntry[]
-local function render(entries)
+---@param current_branch string
+local function render(entries, current_branch)
 	local lines = {
 		"Gitflow Log",
 		"",
@@ -80,6 +82,8 @@ local function render(entries)
 			line_entries[#lines] = entry
 		end
 	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
 
 	ui.buffer.update("log", lines)
 	M.state.line_entries = line_entries
@@ -110,15 +114,17 @@ function M.refresh()
 		return
 	end
 
-	git_log.list({
-		count = cfg.git.log.count,
-		format = cfg.git.log.format,
-	}, function(err, entries)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		render(entries)
+	git_branch.current({}, function(_, branch)
+		git_log.list({
+			count = cfg.git.log.count,
+			format = cfg.git.log.format,
+		}, function(err, entries)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			render(entries, branch or "(unknown)")
+		end)
 	end)
 end
 

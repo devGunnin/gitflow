@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
+local git_branch = require("gitflow.git.branch")
 
 ---@class GitflowDiffPanelState
 ---@field bufnr integer|nil
@@ -85,8 +86,11 @@ end
 
 ---@param _title string
 ---@param text string
-local function render(_title, text)
+---@param current_branch string
+local function render(_title, text, current_branch)
 	local lines = to_lines(text)
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
 	ui.buffer.update("diff", lines)
 end
 
@@ -96,13 +100,15 @@ function M.open(cfg, request)
 	M.state.request = vim.deepcopy(request)
 	ensure_window(cfg)
 
-	git_diff.get(request, function(err, output)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
+	git_branch.current({}, function(_, branch)
+		git_diff.get(request, function(err, output)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
 
-		render(request_to_title(request), output or "")
+			render(request_to_title(request), output or "", branch or "(unknown)")
+		end)
 	end)
 end
 
