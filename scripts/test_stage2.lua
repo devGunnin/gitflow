@@ -101,6 +101,17 @@ local function find_line(lines, needle, start_line)
 	return nil
 end
 
+local function find_line_in_range(lines, needle, start_line, end_line)
+	local start_idx = start_line or 1
+	local end_idx = math.min(end_line or #lines, #lines)
+	for i = start_idx, end_idx do
+		if lines[i]:find(needle, 1, true) then
+			return i
+		end
+	end
+	return nil
+end
+
 local repo_dir = vim.fn.tempname()
 assert_equals(vim.fn.mkdir(repo_dir, "p"), 1, "temp repo directory should be created")
 
@@ -352,15 +363,23 @@ end, 25)
 assert_true(outgoing_ready, "outgoing section should include local commits not on upstream")
 
 local outgoing_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+local history_header_after_refresh = find_line(outgoing_lines, "Commit History")
 local outgoing_header_line = find_line(outgoing_lines, "Outgoing")
-local push_one_line = find_line(outgoing_lines, "push one", outgoing_header_line + 1)
-assert_true(push_one_line ~= nil, "push target commit should be selectable in outgoing section")
+assert_true(history_header_after_refresh ~= nil, "commit history header should remain visible")
+assert_true(outgoing_header_line ~= nil, "outgoing header should remain visible")
+local push_one_history_line = find_line_in_range(
+	outgoing_lines,
+	"push one",
+	history_header_after_refresh + 1,
+	outgoing_header_line - 1
+)
+assert_true(push_one_history_line ~= nil, "push target commit should be selectable in history section")
 
 local push_confirm = vim.fn.confirm
 vim.fn.confirm = function()
 	return 1
 end
-vim.api.nvim_win_set_cursor(status_panel.state.winid, { push_one_line, 0 })
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { push_one_history_line, 0 })
 status_panel.push_under_cursor()
 local partial_push_done = vim.wait(5000, function()
 	local remote_head = vim.trim(run_git(repo_dir, {
@@ -371,7 +390,7 @@ local partial_push_done = vim.wait(5000, function()
 	return remote_head == push_one_sha
 end, 25)
 vim.fn.confirm = push_confirm
-assert_true(partial_push_done, "push under cursor should push only up to selected commit")
+assert_true(partial_push_done, "push from history should push only up to selected commit")
 
 local push_two_still_outgoing = vim.wait(5000, function()
 	local lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)

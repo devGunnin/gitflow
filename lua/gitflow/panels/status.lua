@@ -75,7 +75,7 @@ end
 ---@param entries GitflowLogEntry[]
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
----@param pushable boolean
+---@param pushable boolean|table<string, boolean>
 local function append_commit_section(title, entries, lines, line_entries, pushable)
 	lines[#lines + 1] = title
 	if #entries == 0 then
@@ -85,14 +85,31 @@ local function append_commit_section(title, entries, lines, line_entries, pushab
 	end
 
 	for _, entry in ipairs(entries) do
+		local entry_pushable = false
+		if type(pushable) == "boolean" then
+			entry_pushable = pushable
+		elseif type(pushable) == "table" then
+			entry_pushable = pushable[entry.sha] == true
+		end
+
 		lines[#lines + 1] = ("  %s"):format(entry.summary)
 		line_entries[#lines] = {
 			kind = "commit",
 			entry = entry,
-			pushable = pushable,
+			pushable = entry_pushable,
 		}
 	end
 	lines[#lines + 1] = ""
+end
+
+---@param entries GitflowLogEntry[]
+---@return table<string, boolean>
+local function sha_lookup(entries)
+	local lookup = {}
+	for _, entry in ipairs(entries) do
+		lookup[entry.sha] = true
+	end
+	return lookup
 end
 
 ---@param result GitflowGitResult
@@ -277,6 +294,7 @@ local function render(grouped, history_entries, outgoing_entries, incoming_entri
 		"",
 	}
 	local line_entries = {}
+	local outgoing_lookup = sha_lookup(outgoing_entries)
 
 	append_file_section("Staged", grouped.staged, lines, line_entries, true)
 	append_file_section("Unstaged", grouped.unstaged, lines, line_entries, false)
@@ -286,7 +304,7 @@ local function render(grouped, history_entries, outgoing_entries, incoming_entri
 		history_entries,
 		lines,
 		line_entries,
-		false
+		outgoing_lookup
 	)
 
 	if upstream_name then
