@@ -160,6 +160,8 @@ local git_log = require("gitflow.git.log")
 local stash = require("gitflow.git.stash")
 local status_panel = require("gitflow.panels.status")
 local stash_panel = require("gitflow.panels.stash")
+assert_equals(type(stash_panel.is_open), "function", "stash panel should expose is_open")
+assert_true(not stash_panel.is_open(), "stash panel should start closed")
 
 local parsed = status.parse("M  staged.txt\n M unstaged.txt\n?? new.txt")
 assert_equals(#parsed, 3, "status parser should parse porcelain lines")
@@ -308,6 +310,7 @@ local stash_panel_ready = vim.wait(5000, function()
 	return find_line(lines, "Gitflow Stash") ~= nil
 end, 25)
 assert_true(stash_panel_ready, "stash panel should render")
+assert_true(stash_panel.is_open(), "stash panel should report open state")
 
 local stash_buf = require("gitflow.ui.buffer").get("stash")
 assert_true(stash_buf ~= nil, "stash panel should create a stash buffer")
@@ -358,6 +361,7 @@ end)
 assert_equals(stash_drop_err, nil, "stash drop should succeed")
 
 commands.dispatch({ "close" }, cfg)
+assert_true(not stash_panel.is_open(), "stash panel should report closed after :Gitflow close")
 vim.fn.chdir(original_cwd)
 
 print("Stage 2 smoke tests passed")
