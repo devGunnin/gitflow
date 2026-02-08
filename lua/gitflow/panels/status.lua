@@ -286,9 +286,21 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	}
 	local line_entries = {}
 
-	append_file_section("Staged", grouped.staged, lines, line_entries, true)
-	append_file_section("Unstaged", grouped.unstaged, lines, line_entries, false)
-	append_file_section("Untracked", grouped.untracked, lines, line_entries, false)
+	append_file_section(("Staged (%d)"):format(#grouped.staged), grouped.staged, lines, line_entries, true)
+	append_file_section(
+		("Unstaged (%d)"):format(#grouped.unstaged),
+		grouped.unstaged,
+		lines,
+		line_entries,
+		false
+	)
+	append_file_section(
+		("Untracked (%d)"):format(#grouped.untracked),
+		grouped.untracked,
+		lines,
+		line_entries,
+		false
+	)
 
 	if upstream_name then
 		if #outgoing_entries > 0 then
