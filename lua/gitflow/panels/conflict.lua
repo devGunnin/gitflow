@@ -2,24 +2,21 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
+local conflict_view = require("gitflow.ui.conflict")
 
 ---@class GitflowConflictFileEntry
 ---@field path string
----@field markers GitflowConflictMarker[]
+---@field hunk_count integer
 ---@field marker_error string|nil
-
----@class GitflowConflictLineEntry
----@field kind "file"|"marker"
----@field path string
----@field marker_index integer|nil
 
 ---@class GitflowConflictPanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
 ---@field files GitflowConflictFileEntry[]
----@field line_entries table<integer, GitflowConflictLineEntry>
----@field marker_lines integer[]
+---@field line_entries table<integer, GitflowConflictFileEntry>
+---@field active_operation GitflowConflictOperation|nil
+---@field pending_open_path string|nil
 
 local M = {}
 
@@ -30,7 +27,8 @@ M.state = {
 	cfg = nil,
 	files = {},
 	line_entries = {},
-	marker_lines = {},
+	active_operation = nil,
+	pending_open_path = nil,
 }
 
 ---@param result GitflowGitResult|nil
@@ -47,13 +45,19 @@ local function result_message(result, fallback)
 	return output
 end
 
----@param count integer
+---@param operation GitflowConflictOperation|nil
 ---@return string
-local function marker_label(count)
-	if count == 1 then
-		return "1 marker"
+local function operation_label(operation)
+	if operation == "merge" then
+		return "merge"
 	end
-	return ("%d markers"):format(count)
+	if operation == "rebase" then
+		return "rebase"
+	end
+	if operation == "cherry-pick" then
+		return "cherry-pick"
+	end
+	return "none"
 end
 
 ---@param cfg GitflowConfig
@@ -88,32 +92,20 @@ local function ensure_window(cfg)
 		M.open_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "]c", function()
-		M.next_marker()
+	vim.keymap.set("n", "r", function()
+		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[c", function()
-		M.prev_marker()
+	vim.keymap.set("n", "R", function()
+		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "o", function()
-		M.accept_ours_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "t", function()
-		M.accept_theirs_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "s", function()
-		M.stage_under_cursor()
+	vim.keymap.set("n", "C", function()
+		M.continue_operation()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "A", function()
-		M.stage_all()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
+		M.abort_operation()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "q", function()
@@ -122,61 +114,42 @@ local function ensure_window(cfg)
 end
 
 ---@param files GitflowConflictFileEntry[]
-local function render(files)
+---@param operation GitflowConflictOperation|nil
+local function render(files, operation)
 	local lines = {
-		"Gitflow Conflict Resolution",
+		"Gitflow Conflicts",
 		"",
-		("Conflicted files: %d"):format(#files),
+		("Active operation: %s"):format(operation_label(operation)),
+		("Unresolved files: %d"):format(#files),
+		"",
 	}
 	local line_entries = {}
-	local marker_lines = {}
 
 	if #files == 0 then
 		lines[#lines + 1] = "  (none)"
 	else
 		for _, item in ipairs(files) do
-			lines[#lines + 1] = ("  %s (%s)"):format(item.path, marker_label(#item.markers))
-			line_entries[#lines] = {
-				kind = "file",
-				path = item.path,
-				marker_index = nil,
-			}
+			local suffix = (" (%d hunks)"):format(item.hunk_count)
+			lines[#lines + 1] = ("  %s%s"):format(item.path, suffix)
+			line_entries[#lines] = item
 
 			if item.marker_error then
 				lines[#lines + 1] = ("    ! %s"):format(item.marker_error)
-			elseif #item.markers == 0 then
-				lines[#lines + 1] = "    ! no conflict markers found in working tree file"
-			else
-				for index, marker in ipairs(item.markers) do
-					local end_line = marker.end_line or marker.start_line
-					lines[#lines + 1] = ("    [%d] lines %d-%d"):format(
-						index,
-						marker.start_line,
-						end_line
-					)
-					line_entries[#lines] = {
-						kind = "marker",
-						path = item.path,
-						marker_index = index,
-					}
-					marker_lines[#marker_lines + 1] = #lines
-				end
 			end
 		end
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: open file  ]c/[c: next/prev marker"
-	lines[#lines + 1] = "o: accept ours  t: accept theirs"
-	lines[#lines + 1] = "s: stage file  A: stage all  r: refresh  q: quit"
+	lines[#lines + 1] = "<CR>: open 3-way view  r/R: refresh"
+	lines[#lines + 1] = "C: continue operation  A: abort operation  q: quit"
 
 	ui.buffer.update("conflict", lines)
 	M.state.files = files
 	M.state.line_entries = line_entries
-	M.state.marker_lines = marker_lines
+	M.state.active_operation = operation
 end
 
----@return GitflowConflictLineEntry|nil
+---@return GitflowConflictFileEntry|nil
 local function entry_under_cursor()
 	if not M.state.bufnr or vim.api.nvim_get_current_buf() ~= M.state.bufnr then
 		return nil
@@ -196,176 +169,144 @@ local function file_entry(path)
 	return nil
 end
 
----@return string|nil, GitflowConflictMarker|nil
-local function selection_under_cursor()
-	local entry = entry_under_cursor()
-	if not entry then
-		return nil, nil
-	end
-
-	local selected_path = entry.path
-	local item = file_entry(selected_path)
+---@param path string
+local function open_for_path(path)
+	local item = file_entry(path)
 	if not item then
-		return selected_path, nil
+		utils.notify(("'%s' is not currently listed as conflicted"):format(path), vim.log.levels.WARN)
+		return
 	end
 
-	if entry.kind == "marker" and entry.marker_index then
-		return selected_path, item.markers[entry.marker_index]
-	end
-
-	return selected_path, item.markers[1]
+	conflict_view.open(path, {
+		cfg = M.state.cfg,
+		on_resolved = function()
+			M.refresh()
+		end,
+		on_closed = function()
+			M.refresh()
+		end,
+	})
 end
 
----@param direction 1|-1
-local function jump_marker(direction)
-	if not M.state.winid or not vim.api.nvim_win_is_valid(M.state.winid) then
+local function consume_pending_open()
+	local path = M.state.pending_open_path
+	if not path then
 		return
 	end
-	if #M.state.marker_lines == 0 then
-		utils.notify("No conflict markers available", vim.log.levels.WARN)
-		return
-	end
+	M.state.pending_open_path = nil
+	open_for_path(path)
+end
 
-	local cursor_line = vim.api.nvim_win_get_cursor(M.state.winid)[1]
-	if direction > 0 then
-		for _, line in ipairs(M.state.marker_lines) do
-			if line > cursor_line then
-				vim.api.nvim_win_set_cursor(M.state.winid, { line, 0 })
+---@param cfg GitflowConfig
+---@param opts table|nil
+function M.open(cfg, opts)
+	M.state.cfg = cfg
+	M.state.pending_open_path = opts and opts.path or nil
+	ensure_window(cfg)
+	M.refresh()
+end
+
+function M.refresh()
+	git_conflict.active_operation({}, function(operation_err, operation)
+		if operation_err then
+			utils.notify(operation_err, vim.log.levels.WARN)
+		end
+
+		git_conflict.list({}, function(err, paths)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
 				return
 			end
-		end
-		vim.api.nvim_win_set_cursor(M.state.winid, { M.state.marker_lines[1], 0 })
-		return
-	end
 
-	for index = #M.state.marker_lines, 1, -1 do
-		local line = M.state.marker_lines[index]
-		if line < cursor_line then
-			vim.api.nvim_win_set_cursor(M.state.winid, { line, 0 })
-			return
-		end
-	end
-	vim.api.nvim_win_set_cursor(M.state.winid, { M.state.marker_lines[#M.state.marker_lines], 0 })
+			local files = {}
+			for _, path in ipairs(paths or {}) do
+				local marker_err, hunks = git_conflict.read_markers(path)
+				files[#files + 1] = {
+					path = path,
+					hunk_count = #hunks,
+					marker_error = marker_err,
+				}
+			end
+			render(files, operation)
+			consume_pending_open()
+		end)
+	end)
 end
 
----@param side "ours"|"theirs"
-local function accept_side(side)
-	local path = select(1, selection_under_cursor())
-	if not path then
+function M.open_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
 		utils.notify("No conflicted file selected", vim.log.levels.WARN)
 		return
 	end
+	open_for_path(entry.path)
+end
 
-	git_conflict.checkout(path, side, {}, function(err, result)
+function M.open_path(path)
+	if not M.state.cfg then
+		return
+	end
+	M.state.pending_open_path = path
+	M.refresh()
+end
+
+function M.continue_operation()
+	if #M.state.files > 0 then
+		utils.notify("Resolve and stage all conflicts before continuing", vim.log.levels.WARN)
+		return
+	end
+
+	local confirmed = ui.input.confirm(
+		("Run %s --continue?"):format(operation_label(M.state.active_operation)),
+		{ choices = { "&Continue", "&Cancel" }, default_choice = 1 }
+	)
+	if not confirmed then
+		return
+	end
+
+	git_conflict.continue_operation({}, function(err, operation, result)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
 		utils.notify(
-			result_message(result, ("Applied %s version for %s"):format(side, path)),
+			result_message(result, ("%s --continue completed"):format(operation or "operation")),
 			vim.log.levels.INFO
 		)
 		M.refresh()
 	end)
 end
 
----@param cfg GitflowConfig
-function M.open(cfg)
-	M.state.cfg = cfg
-	ensure_window(cfg)
-	M.refresh()
-end
+function M.abort_operation()
+	local confirmed = ui.input.confirm(
+		("Abort active %s operation?"):format(operation_label(M.state.active_operation)),
+		{ choices = { "&Abort", "&Cancel" }, default_choice = 2 }
+	)
+	if not confirmed then
+		return
+	end
 
-function M.refresh()
-	git_conflict.list({}, function(err, paths)
+	git_conflict.abort_operation({}, function(err, operation, result)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-
-		local files = {}
-		for _, path in ipairs(paths or {}) do
-			local marker_err, markers = git_conflict.read_markers(path)
-			files[#files + 1] = {
-				path = path,
-				markers = markers or {},
-				marker_error = marker_err,
-			}
+		utils.notify(
+			result_message(result, ("%s --abort completed"):format(operation or "operation")),
+			vim.log.levels.INFO
+		)
+		if conflict_view.is_open() then
+			conflict_view.close()
 		end
-		render(files)
-	end)
-end
-
-function M.next_marker()
-	jump_marker(1)
-end
-
-function M.prev_marker()
-	jump_marker(-1)
-end
-
-function M.open_under_cursor()
-	local path, marker = selection_under_cursor()
-	if not path then
-		utils.notify("No conflicted file selected", vim.log.levels.WARN)
-		return
-	end
-
-	vim.cmd(("belowright split %s"):format(vim.fn.fnameescape(path)))
-	if marker and marker.start_line then
-		local winid = vim.api.nvim_get_current_win()
-		local line_count = vim.api.nvim_buf_line_count(0)
-		local line = math.max(1, math.min(marker.start_line, line_count))
-		vim.api.nvim_win_set_cursor(winid, { line, 0 })
-	end
-end
-
-function M.accept_ours_under_cursor()
-	accept_side("ours")
-end
-
-function M.accept_theirs_under_cursor()
-	accept_side("theirs")
-end
-
-function M.stage_under_cursor()
-	local path = select(1, selection_under_cursor())
-	if not path then
-		utils.notify("No conflicted file selected", vim.log.levels.WARN)
-		return
-	end
-
-	git_conflict.stage(path, {}, function(err, result)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		utils.notify(result_message(result, ("Staged %s"):format(path)), vim.log.levels.INFO)
-		M.refresh()
-	end)
-end
-
-function M.stage_all()
-	local paths = {}
-	for _, item in ipairs(M.state.files) do
-		paths[#paths + 1] = item.path
-	end
-	if #paths == 0 then
-		utils.notify("No conflicted files to stage", vim.log.levels.INFO)
-		return
-	end
-
-	git_conflict.stage_paths(paths, {}, function(err, result)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		utils.notify(result_message(result, "Staged conflicted files"), vim.log.levels.INFO)
 		M.refresh()
 	end)
 end
 
 function M.close()
+	if conflict_view.is_open() then
+		conflict_view.close()
+	end
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else
@@ -383,7 +324,8 @@ function M.close()
 	M.state.cfg = nil
 	M.state.files = {}
 	M.state.line_entries = {}
-	M.state.marker_lines = {}
+	M.state.active_operation = nil
+	M.state.pending_open_path = nil
 end
 
 ---@return boolean
