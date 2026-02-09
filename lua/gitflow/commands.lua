@@ -326,6 +326,22 @@ local function run_merge(branch, cfg)
 	end)
 end
 
+---@param cfg GitflowConfig
+local function run_merge_abort(cfg)
+	git.git({ "merge", "--abort" }, {}, function(result)
+		if result.code ~= 0 then
+			show_error(result_message(result, "git merge --abort failed"))
+			return
+		end
+
+		show_info(result_message(result, "git merge --abort completed"))
+		if conflict_panel.is_open() then
+			conflict_panel.close()
+		end
+		refresh_status_panel_if_open()
+	end)
+end
+
 ---@param args string[]
 ---@param cfg GitflowConfig
 local function run_rebase(args, cfg)
@@ -1225,11 +1241,16 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands.merge = {
-		description = "Merge branch into current branch",
+		description = "Merge branch into current branch (supports --abort)",
 		run = function(ctx)
+			if has_flag(ctx.args, "--abort") then
+				run_merge_abort(cfg)
+				return "Running git merge --abort..."
+			end
+
 			local target = first_positional(ctx.args)
 			if not target then
-				return "Usage: :Gitflow merge <branch>"
+				return "Usage: :Gitflow merge <branch>|--abort"
 			end
 			run_merge(target, cfg)
 			return ("Running git merge %s..."):format(target)
@@ -1535,7 +1556,11 @@ function M.complete(arglead, cmdline, _cursorpos)
 
 	local subcommand = args[2]
 	if subcommand == "merge" then
-		return filter_candidates(arglead, list_branch_candidates())
+		local candidates = { "--abort" }
+		for _, value in ipairs(list_branch_candidates()) do
+			candidates[#candidates + 1] = value
+		end
+		return filter_candidates(arglead, candidates)
 	end
 	if subcommand == "rebase" then
 		local options = { "--abort", "--continue" }

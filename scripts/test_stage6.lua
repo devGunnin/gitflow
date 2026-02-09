@@ -226,6 +226,12 @@ assert_true(
 	"subcommand completion should include conflicts"
 )
 
+local merge_flag_completion = commands.complete("--", "Gitflow merge --", 0)
+assert_true(
+	contains(merge_flag_completion, "--abort"),
+	"merge completion should include --abort flag"
+)
+
 commands.dispatch({ "merge", "topic" }, cfg)
 wait_until(function()
 	return has_conflict(repo_dir, "choose-local.txt")
@@ -363,10 +369,9 @@ wait_until(function()
 	return find_line(lines, "Unresolved files: 0") ~= nil
 end, "conflict panel should refresh when all files are resolved")
 
-conflict_panel.continue_operation()
 wait_until(function()
 	return not in_merge(repo_dir)
-end, "continue operation should finish merge state")
+end, "resolved merge should prompt and continue automatically")
 
 run_git(repo_dir, { "checkout", "-b", "abort-topic" })
 write_file(repo_dir .. "/abort-merge.txt", { "abort topic value" })
@@ -385,10 +390,12 @@ wait_until(function()
 			and conflict_panel.is_open()
 end, "merge conflict for abort flow should open panel")
 
-conflict_panel.abort_operation()
+commands.dispatch({ "merge", "--abort" }, cfg)
 wait_until(function()
-	return not in_merge(repo_dir) and not has_conflict(repo_dir, "abort-merge.txt")
-end, "abort operation should clear merge conflict state")
+	return not in_merge(repo_dir)
+		and not has_conflict(repo_dir, "abort-merge.txt")
+		and not conflict_panel.is_open()
+end, "merge --abort should clear conflict state and close conflict panel")
 assert_deep_equals(
 	read_file(repo_dir .. "/abort-merge.txt"),
 	{ "abort main value" },

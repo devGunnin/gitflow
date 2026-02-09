@@ -17,6 +17,9 @@ local conflict_view = require("gitflow.ui.conflict")
 ---@field line_entries table<integer, GitflowConflictFileEntry>
 ---@field active_operation GitflowConflictOperation|nil
 ---@field pending_open_path string|nil
+---@field auto_continue_prompted boolean
+---@field auto_continue_operation GitflowConflictOperation|nil
+---@field prompt_when_resolved boolean
 
 local M = {}
 
@@ -29,6 +32,9 @@ M.state = {
 	line_entries = {},
 	active_operation = nil,
 	pending_open_path = nil,
+	auto_continue_prompted = false,
+	auto_continue_operation = nil,
+	prompt_when_resolved = false,
 }
 
 ---@param result GitflowGitResult|nil
@@ -58,6 +64,17 @@ local function operation_label(operation)
 		return "cherry-pick"
 	end
 	return "none"
+end
+
+---@param operation GitflowConflictOperation|nil
+---@return boolean
+local function supports_auto_continue(operation)
+	return operation == "merge" or operation == "rebase"
+end
+
+local function reset_auto_continue_prompt()
+	M.state.auto_continue_prompted = false
+	M.state.auto_continue_operation = nil
 end
 
 ---@param cfg GitflowConfig
@@ -180,6 +197,7 @@ local function open_for_path(path)
 	conflict_view.open(path, {
 		cfg = M.state.cfg,
 		on_resolved = function()
+			M.state.prompt_when_resolved = true
 			M.refresh()
 		end,
 		on_closed = function()
@@ -195,6 +213,46 @@ local function consume_pending_open()
 	end
 	M.state.pending_open_path = nil
 	open_for_path(path)
+end
+
+local function maybe_prompt_auto_continue()
+	local operation = M.state.active_operation
+	if not M.state.prompt_when_resolved then
+		return
+	end
+
+	if #M.state.files ~= 0 then
+		return
+	end
+
+	if not supports_auto_continue(operation) then
+		M.state.prompt_when_resolved = false
+		reset_auto_continue_prompt()
+		return
+	end
+
+	if M.state.auto_continue_prompted and M.state.auto_continue_operation == operation then
+		return
+	end
+
+	M.state.prompt_when_resolved = false
+	M.state.auto_continue_prompted = true
+	M.state.auto_continue_operation = operation
+
+	local confirmed = ui.input.confirm(
+		("All conflicts are resolved. Continue %s now?"):format(operation_label(operation)),
+		{ choices = { "&Continue", "&Later" }, default_choice = 1 }
+	)
+	if not confirmed then
+		return
+	end
+
+	M.continue_operation({
+		skip_confirm = true,
+		reset_prompt_on_error = true,
+		ignore_missing_operation = true,
+		expected_operation = operation,
+	})
 end
 
 ---@param cfg GitflowConfig
@@ -229,6 +287,7 @@ function M.refresh()
 			end
 			render(files, operation)
 			consume_pending_open()
+			maybe_prompt_auto_continue()
 		end)
 	end)
 end
@@ -250,22 +309,34 @@ function M.open_path(path)
 	M.refresh()
 end
 
-function M.continue_operation()
+---@param opts table|nil
+function M.continue_operation(opts)
+	local options = opts or {}
+
 	if #M.state.files > 0 then
 		utils.notify("Resolve and stage all conflicts before continuing", vim.log.levels.WARN)
 		return
 	end
 
-	local confirmed = ui.input.confirm(
-		("Run %s --continue?"):format(operation_label(M.state.active_operation)),
-		{ choices = { "&Continue", "&Cancel" }, default_choice = 1 }
-	)
-	if not confirmed then
-		return
+	if not options.skip_confirm then
+		local confirmed = ui.input.confirm(
+			("Run %s --continue?"):format(operation_label(M.state.active_operation)),
+			{ choices = { "&Continue", "&Cancel" }, default_choice = 1 }
+		)
+		if not confirmed then
+			return
+		end
 	end
 
-	git_conflict.continue_operation({}, function(err, operation, result)
+	local function on_continue(err, operation, result)
 		if err then
+			if options.ignore_missing_operation and err == "No active operation to continue" then
+				M.refresh()
+				return
+			end
+			if options.reset_prompt_on_error then
+				reset_auto_continue_prompt()
+			end
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
@@ -273,8 +344,34 @@ function M.continue_operation()
 			result_message(result, ("%s --continue completed"):format(operation or "operation")),
 			vim.log.levels.INFO
 		)
+		M.state.prompt_when_resolved = false
 		M.refresh()
-	end)
+	end
+
+	local function run_continue()
+		if options.expected_operation then
+			git_conflict.continue_operation_for(options.expected_operation, {}, on_continue)
+			return
+		end
+		git_conflict.continue_operation({}, on_continue)
+	end
+
+	if options.expected_operation then
+		git_conflict.active_operation({}, function(active_err, active_operation)
+			if active_err then
+				utils.notify(active_err, vim.log.levels.ERROR)
+				return
+			end
+			if active_operation ~= options.expected_operation then
+				M.refresh()
+				return
+			end
+			run_continue()
+		end)
+		return
+	end
+
+	run_continue()
 end
 
 function M.abort_operation()
@@ -326,6 +423,9 @@ function M.close()
 	M.state.line_entries = {}
 	M.state.active_operation = nil
 	M.state.pending_open_path = nil
+	M.state.auto_continue_prompted = false
+	M.state.auto_continue_operation = nil
+	M.state.prompt_when_resolved = false
 end
 
 ---@return boolean

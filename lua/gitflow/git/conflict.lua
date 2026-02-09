@@ -493,6 +493,42 @@ function M.resolve_hunk(path, hunk_index, choice, edited_lines, opts, cb)
 end
 
 ---@param action "continue"|"abort"
+---@param operation GitflowConflictOperation|nil
+---@return string[]|nil, string|nil
+local function action_args(operation, action)
+	if operation == "merge" then
+		return { "merge", ("--%s"):format(action) }, nil
+	end
+	if operation == "rebase" then
+		return { "rebase", ("--%s"):format(action) }, nil
+	end
+	if operation == "cherry-pick" then
+		return { "cherry-pick", ("--%s"):format(action) }, nil
+	end
+	return nil, ("No active operation to %s"):format(action)
+end
+
+---@param operation GitflowConflictOperation|nil
+---@param action "continue"|"abort"
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, operation: string|nil, result: GitflowGitResult|nil)
+local function run_known_operation_action(operation, action, opts, cb)
+	local args, arg_err = action_args(operation, action)
+	if arg_err then
+		cb(arg_err, nil, nil)
+		return
+	end
+
+	git.git(args or {}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, table.concat(args or {}, " ")), operation, result)
+			return
+		end
+		cb(nil, operation, result)
+	end)
+end
+
+---@param action "continue"|"abort"
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, operation: string|nil, result: GitflowGitResult|nil)
 local function run_operation_action(action, opts, cb)
@@ -501,27 +537,7 @@ local function run_operation_action(action, opts, cb)
 			cb(err, nil, active_result)
 			return
 		end
-		if not operation then
-			cb(("No active operation to %s"):format(action), nil, nil)
-			return
-		end
-
-		local args = nil
-		if operation == "merge" then
-			args = { "merge", ("--%s"):format(action) }
-		elseif operation == "rebase" then
-			args = { "rebase", ("--%s"):format(action) }
-		else
-			args = { "cherry-pick", ("--%s"):format(action) }
-		end
-
-		git.git(args, opts, function(result)
-			if result.code ~= 0 then
-				cb(error_from_result(result, table.concat(args, " ")), operation, result)
-				return
-			end
-			cb(nil, operation, result)
-		end)
+		run_known_operation_action(operation, action, opts, cb)
 	end)
 end
 
@@ -529,6 +545,13 @@ end
 ---@param cb fun(err: string|nil, operation: string|nil, result: GitflowGitResult|nil)
 function M.continue_operation(opts, cb)
 	run_operation_action("continue", opts, cb)
+end
+
+---@param operation GitflowConflictOperation|nil
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, operation: string|nil, result: GitflowGitResult|nil)
+function M.continue_operation_for(operation, opts, cb)
+	run_known_operation_action(operation, "continue", opts, cb)
 end
 
 ---@param opts GitflowGitRunOpts|nil
