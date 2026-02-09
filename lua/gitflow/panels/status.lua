@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_log = require("gitflow.git.log")
 local git_status = require("gitflow.git.status")
 local git_branch = require("gitflow.git.branch")
+local conflict_panel = require("gitflow.panels.conflict")
 
 ---@class GitflowStatusPanelOpts
 ---@field on_commit fun()|nil
@@ -225,6 +226,10 @@ local function ensure_window(cfg)
 		M.open_diff_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
+	vim.keymap.set("n", "cx", function()
+		M.open_conflict_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "p", function()
 		M.push_under_cursor()
 	end, { buffer = bufnr, silent = true })
@@ -286,7 +291,13 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	}
 	local line_entries = {}
 
-	append_file_section(("Staged (%d)"):format(#grouped.staged), grouped.staged, lines, line_entries, true)
+	append_file_section(
+		("Staged (%d)"):format(#grouped.staged),
+		grouped.staged,
+		lines,
+		line_entries,
+		true
+	)
 	append_file_section(
 		("Unstaged (%d)"):format(#grouped.unstaged),
 		grouped.unstaged,
@@ -554,6 +565,33 @@ function M.revert_under_cursor()
 		utils.notify(("Reverted changes in '%s'"):format(entry.path), vim.log.levels.INFO)
 		M.refresh()
 	end)
+end
+
+---@param entry GitflowStatusEntry
+---@return boolean
+local function is_conflicted(entry)
+	return entry.index_status == "U" or entry.worktree_status == "U"
+end
+
+function M.open_conflict_under_cursor()
+	local line_entry = file_entry_under_cursor()
+	if not line_entry then
+		utils.notify("No file selected", vim.log.levels.WARN)
+		return
+	end
+
+	local entry = line_entry.entry
+	if not is_conflicted(entry) then
+		utils.notify(("'%s' is not in a conflict state"):format(entry.path), vim.log.levels.WARN)
+		return
+	end
+
+	if not M.state.cfg then
+		utils.notify("Status panel is not configured", vim.log.levels.WARN)
+		return
+	end
+
+	conflict_panel.open(M.state.cfg, { path = entry.path })
 end
 
 function M.close()
