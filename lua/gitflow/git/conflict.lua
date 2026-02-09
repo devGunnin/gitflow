@@ -56,6 +56,9 @@ local function lower(value)
 	return (value or ""):lower()
 end
 
+local INDEX_LOCK_MAX_ATTEMPTS = 12
+local INDEX_LOCK_RETRY_DELAY_MS = 50
+
 ---@param git_dir string
 ---@param leaf string
 ---@return string
@@ -94,6 +97,44 @@ local function output_mentions_missing_stage(output)
 		return true
 	end
 	return false
+end
+
+---@param output string
+---@return boolean
+local function output_mentions_index_lock(output)
+	local normalized = lower(output)
+	if not normalized:find("index.lock", 1, true) then
+		return false
+	end
+
+	return normalized:find("file exists", 1, true) ~= nil
+		or normalized:find("unable to create", 1, true) ~= nil
+		or normalized:find("another git process", 1, true) ~= nil
+end
+
+---@param args string[]
+---@param opts GitflowGitRunOpts|nil
+---@param action string
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+---@param attempt integer|nil
+local function run_git_with_index_lock_retry(args, opts, action, cb, attempt)
+	local current_attempt = attempt or 1
+	git.git(args, opts, function(result)
+		if result.code == 0 then
+			cb(nil, result)
+			return
+		end
+
+		local output = git.output(result)
+		if output_mentions_index_lock(output) and current_attempt < INDEX_LOCK_MAX_ATTEMPTS then
+			vim.defer_fn(function()
+				run_git_with_index_lock_retry(args, opts, action, cb, current_attempt + 1)
+			end, INDEX_LOCK_RETRY_DELAY_MS)
+			return
+		end
+
+		cb(error_from_result(result, action), result)
+	end)
 end
 
 ---@param lines string[]
@@ -328,13 +369,12 @@ end
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
 function M.stage(path, opts, cb)
 	local normalized = normalize_path(path)
-	git.git({ "add", "--", normalized }, opts, function(result)
-		if result.code ~= 0 then
-			cb(error_from_result(result, ("add -- %s"):format(normalized)), result)
-			return
-		end
-		cb(nil, result)
-	end)
+	run_git_with_index_lock_retry(
+		{ "add", "--", normalized },
+		opts,
+		("add -- %s"):format(normalized),
+		cb
+	)
 end
 
 ---@param paths string[]
@@ -359,13 +399,7 @@ function M.stage_paths(paths, opts, cb)
 		return
 	end
 
-	git.git(args, opts, function(result)
-		if result.code ~= 0 then
-			cb(error_from_result(result, "add"), result)
-			return
-		end
-		cb(nil, result)
-	end)
+	run_git_with_index_lock_retry(args, opts, "add", cb)
 end
 
 ---@param path string

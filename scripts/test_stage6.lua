@@ -123,21 +123,31 @@ local function marker_count(path)
 	return total
 end
 
-local function in_merge(repo_dir)
+local function git_dir_path(repo_dir)
 	local git_dir = vim.trim(run_git(repo_dir, { "rev-parse", "--git-dir" }))
-	return vim.fn.filereadable(repo_dir .. "/" .. git_dir .. "/MERGE_HEAD") == 1
+	return repo_dir .. "/" .. git_dir
+end
+
+local function in_merge(repo_dir)
+	return vim.fn.filereadable(git_dir_path(repo_dir) .. "/MERGE_HEAD") == 1
 end
 
 local function in_rebase(repo_dir)
-	local git_dir = vim.trim(run_git(repo_dir, { "rev-parse", "--git-dir" }))
-	local full = repo_dir .. "/" .. git_dir
+	local full = git_dir_path(repo_dir)
 	return vim.fn.isdirectory(full .. "/rebase-merge") == 1
 		or vim.fn.isdirectory(full .. "/rebase-apply") == 1
 end
 
 local function in_cherry_pick(repo_dir)
-	local git_dir = vim.trim(run_git(repo_dir, { "rev-parse", "--git-dir" }))
-	return vim.fn.filereadable(repo_dir .. "/" .. git_dir .. "/CHERRY_PICK_HEAD") == 1
+	return vim.fn.filereadable(git_dir_path(repo_dir) .. "/CHERRY_PICK_HEAD") == 1
+end
+
+local function hold_index_lock(repo_dir, delay_ms)
+	local lock_path = git_dir_path(repo_dir) .. "/index.lock"
+	write_file(lock_path, { "stage6 transient lock" })
+	vim.defer_fn(function()
+		pcall(vim.fn.delete, lock_path)
+	end, delay_ms or 200)
 end
 
 local repo_dir = vim.fn.tempname()
@@ -267,7 +277,8 @@ local asserted_view_shape = false
 ---@param path string
 ---@param side "local"|"base"|"remote"
 ---@param expected string
-local function resolve_single_file(path, side, expected)
+---@param opts table|nil
+local function resolve_single_file(path, side, expected, opts)
 	local lines = vim.api.nvim_buf_get_lines(conflict_buf, 0, -1, false)
 	local file_line = find_line(lines, path)
 	assert_true(file_line ~= nil, ("'%s' should be listed in conflict panel"):format(path))
@@ -299,6 +310,9 @@ local function resolve_single_file(path, side, expected)
 		conflict_view.state.merged_winid,
 		{ conflict_view.state.hunks[1].start_line, 0 }
 	)
+	if opts and opts.with_index_lock then
+		hold_index_lock(repo_dir, opts.index_lock_delay_ms)
+	end
 	conflict_view.resolve_current(side)
 
 	wait_until(function()
@@ -316,7 +330,10 @@ local function resolve_single_file(path, side, expected)
 	end
 end
 
-resolve_single_file("choose-local.txt", "local", "local main")
+resolve_single_file("choose-local.txt", "local", "local main", {
+	with_index_lock = true,
+	index_lock_delay_ms = 200,
+})
 resolve_single_file("choose-base.txt", "base", "base base")
 resolve_single_file("choose-remote.txt", "remote", "remote topic")
 
