@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
+local review_panel = require("gitflow.panels.review")
 
 ---@class GitflowPrPanelState
 ---@field bufnr integer|nil
@@ -71,6 +72,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "o", function()
 		M.checkout_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "v", function()
+		M.review_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -167,7 +172,8 @@ local function render_list(prs)
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: view  c: create  C: comment  m: merge  o: checkout  r: refresh  q: quit"
+	lines[#lines + 1] =
+		"<CR>: view  c: create  C: comment  m: merge  o: checkout  v: review  r: refresh  q: quit"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = line_entries
@@ -202,7 +208,7 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Comments: %d"):format(type(pr.comments) == "table" and #pr.comments or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "b: back to list  C: comment  m: merge  o: checkout  r: refresh"
+	lines[#lines + 1] = "b: back to list  C: comment  m: merge  o: checkout  v: review  r: refresh"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}
@@ -443,6 +449,30 @@ function M.checkout_under_cursor()
 		end
 		utils.notify(("Checked out PR #%s"):format(tostring(number)), vim.log.levels.INFO)
 	end)
+end
+
+function M.review_under_cursor()
+	local number = M.state.active_pr_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No pull request selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+
+	if not M.state.cfg then
+		utils.notify("Gitflow config unavailable for review panel", vim.log.levels.ERROR)
+		return
+	end
+
+	review_panel.open(M.state.cfg, number)
 end
 
 function M.close()

@@ -32,7 +32,7 @@ M.registry = {}
 ---@param max_value integer
 ---@return integer
 local function resolve_dimension(dimension, max_value)
-	if dimension > 0 and dimension < 1 then
+	if dimension > 0 and dimension <= 1 then
 		return math.max(1, math.floor(max_value * dimension))
 	end
 	return math.max(1, math.floor(dimension))
@@ -124,7 +124,7 @@ function M.open_float(opts)
 	local row = opts.row or math.floor((lines - height) / 2)
 	local col = opts.col or math.floor((columns - width) / 2)
 
-	local winid = vim.api.nvim_open_win(opts.bufnr, opts.enter ~= false, {
+	local win_opts = {
 		relative = "editor",
 		style = "minimal",
 		width = width,
@@ -132,9 +132,14 @@ function M.open_float(opts)
 		row = row,
 		col = col,
 		border = opts.border or "rounded",
-		title = opts.title,
-		title_pos = opts.title_pos or "center",
-	})
+	}
+	if opts.title then
+		win_opts.title = opts.title
+		win_opts.title_pos = opts.title_pos or "center"
+	end
+	local winid = vim.api.nvim_open_win(
+		opts.bufnr, opts.enter ~= false, win_opts
+	)
 
 	register_window(opts.name, winid, opts.on_close)
 	return winid
