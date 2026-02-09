@@ -279,7 +279,7 @@ local function run_fetch(remote)
 end
 
 ---@param on_done fun(ok: boolean)|nil
-local function run_quick_commit(on_done)
+local function run_quick_commit_flow(on_done)
 	git_status.stage_all({}, function(stage_err)
 		if stage_err then
 			show_error(stage_err)
@@ -345,13 +345,51 @@ local function run_quick_commit(on_done)
 	end)
 end
 
-local function run_quick_push()
-	run_quick_commit(function(ok)
-		if not ok then
+---@type table<GitflowQuickActionStep, fun(on_done: fun(ok: boolean)|nil)>
+local quick_action_runners = {
+	commit = run_quick_commit_flow,
+	push = run_push,
+}
+
+---@param cfg GitflowConfig
+---@param action_name "quick_commit"|"quick_push"
+---@param on_done fun(ok: boolean)|nil
+local function run_quick_action(cfg, action_name, on_done)
+	local sequence = cfg.quick_actions[action_name]
+
+	local function run_step(index)
+		if index > #sequence then
+			if on_done then
+				on_done(true)
+			end
 			return
 		end
-		run_push()
-	end)
+
+		local step_name = sequence[index]
+		local runner = quick_action_runners[step_name]
+		if not runner then
+			show_error(
+				("Unknown quick action step '%s' in quick_actions.%s")
+					:format(tostring(step_name), action_name)
+			)
+			if on_done then
+				on_done(false)
+			end
+			return
+		end
+
+		runner(function(ok)
+			if not ok then
+				if on_done then
+					on_done(false)
+				end
+				return
+			end
+			run_step(index + 1)
+		end)
+	end
+
+	run_step(1)
 end
 
 ---@param paths string[]
@@ -903,7 +941,7 @@ local function register_builtin_subcommands(cfg)
 	M.subcommands["quick-commit"] = {
 		description = "Stage all changes, then commit with a prompt",
 		run = function()
-			run_quick_commit()
+			run_quick_action(cfg, "quick_commit")
 			return "Running quick commit..."
 		end,
 	}
@@ -911,7 +949,7 @@ local function register_builtin_subcommands(cfg)
 	M.subcommands["quick-push"] = {
 		description = "Quick commit, then push",
 		run = function()
-			run_quick_push()
+			run_quick_action(cfg, "quick_push")
 			return "Running quick push..."
 		end,
 	}

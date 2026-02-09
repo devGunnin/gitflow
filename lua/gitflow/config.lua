@@ -29,12 +29,19 @@ local utils = require("gitflow.utils")
 ---@class GitflowSyncConfig
 ---@field pull_strategy "rebase"|"merge"
 
+---@alias GitflowQuickActionStep "commit"|"push"
+
+---@class GitflowQuickActionsConfig
+---@field quick_commit GitflowQuickActionStep[]
+---@field quick_push GitflowQuickActionStep[]
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
 ---@field git GitflowGitConfig
 ---@field sync GitflowSyncConfig
+---@field quick_actions GitflowQuickActionsConfig
 
 local M = {}
 
@@ -86,6 +93,10 @@ function M.defaults()
 		},
 		sync = {
 			pull_strategy = "rebase",
+		},
+		quick_actions = {
+			quick_commit = { "commit" },
+			quick_push = { "commit", "push" },
 		},
 	}
 end
@@ -193,6 +204,43 @@ local function validate_sync(config)
 	end
 end
 
+local valid_quick_action_steps = {
+	commit = true,
+	push = true,
+}
+
+---@param name string
+---@param sequence GitflowQuickActionStep[]|unknown
+local function validate_quick_action_sequence(name, sequence)
+	if type(sequence) ~= "table" or #sequence == 0 then
+		error(
+			("gitflow config error: quick_actions.%s must be a non-empty list"):format(name),
+			3
+		)
+	end
+
+	for index, step in ipairs(sequence) do
+		if not valid_quick_action_steps[step] then
+			error(
+				(
+					"gitflow config error: quick_actions.%s[%d] must be 'commit' or 'push'"
+				):format(name, index),
+				3
+			)
+		end
+	end
+end
+
+---@param config GitflowConfig
+local function validate_quick_actions(config)
+	if type(config.quick_actions) ~= "table" then
+		error("gitflow config error: quick_actions must be a table", 3)
+	end
+
+	validate_quick_action_sequence("quick_commit", config.quick_actions.quick_commit)
+	validate_quick_action_sequence("quick_push", config.quick_actions.quick_push)
+end
+
 ---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
@@ -200,6 +248,7 @@ function M.validate(config)
 	validate_behavior(config)
 	validate_git(config)
 	validate_sync(config)
+	validate_quick_actions(config)
 end
 
 ---@param opts table|nil

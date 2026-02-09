@@ -85,6 +85,16 @@ local config = require("gitflow.config")
 local defaults = config.defaults()
 assert_equals(defaults.sync.pull_strategy, "rebase", "default pull strategy should be rebase")
 assert_equals(defaults.keybindings.palette, "<leader>gp", "default palette keybinding should exist")
+assert_deep_equals(
+	defaults.quick_actions.quick_commit,
+	{ "commit" },
+	"default quick_commit sequence should include commit step"
+)
+assert_deep_equals(
+	defaults.quick_actions.quick_push,
+	{ "commit", "push" },
+	"default quick_push sequence should include commit + push"
+)
 
 local invalid = vim.deepcopy(defaults)
 invalid.sync.pull_strategy = "invalid"
@@ -93,6 +103,15 @@ assert_true(not ok, "config.validate should reject invalid pull strategy")
 assert_true(
 	tostring(err):find("sync.pull_strategy", 1, true) ~= nil,
 	"invalid pull strategy error should mention sync.pull_strategy"
+)
+
+local invalid_quick_actions = vim.deepcopy(defaults)
+invalid_quick_actions.quick_actions.quick_push = { "invalid" }
+local quick_ok, quick_err = pcall(config.validate, invalid_quick_actions)
+assert_true(not quick_ok, "config.validate should reject invalid quick-action step")
+assert_true(
+	tostring(quick_err):find("quick_actions.quick_push", 1, true) ~= nil,
+	"invalid quick-action error should mention quick_actions.quick_push"
 )
 
 local repo_dir = vim.fn.tempname()
@@ -162,6 +181,47 @@ wait_until(function()
 end, "quick-push should leave branch in sync with upstream")
 
 local git_mod = require("gitflow.git")
+prompt_values[#prompt_values + 1] = "unused quick push prompt"
+local prompt_count_before = #prompt_values
+cfg = gitflow.setup({
+	quick_actions = {
+		quick_push = { "push" },
+	},
+})
+
+write_file(repo_dir .. "/tracked.txt", {
+	"base line",
+	"quick commit line",
+	"quick push line",
+	"custom quick action line",
+})
+
+local original_git_for_custom = git_mod.git
+local custom_push_calls = 0
+git_mod.git = function(args, opts, cb)
+	if args[1] == "push" then
+		custom_push_calls = custom_push_calls + 1
+	end
+	return original_git_for_custom(args, opts, cb)
+end
+
+commands.dispatch({ "quick-push" }, cfg)
+wait_until(function()
+	return custom_push_calls > 0
+end, "custom quick-push sequence should execute push step")
+git_mod.git = original_git_for_custom
+
+local status_output = run_git(repo_dir, { "status", "--short", "--", "tracked.txt" })
+assert_true(
+	status_output:find("tracked.txt", 1, true) ~= nil,
+	"custom quick-push sequence should leave tracked changes uncommitted"
+)
+assert_equals(
+	#prompt_values,
+	prompt_count_before,
+	"custom quick-push sequence should not prompt for a commit message"
+)
+
 local git_branch = require("gitflow.git.branch")
 local conflict_panel = require("gitflow.panels.conflict")
 local palette_panel = require("gitflow.panels.palette")

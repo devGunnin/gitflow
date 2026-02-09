@@ -38,7 +38,7 @@ Example plugin setup (lazy.nvim style):
 | `<leader>gs` | open unified status view |
 | `<leader>ga` | stage current file/hunk |
 | `<leader>gc` | commit flow |
-| `<leader>gp` | push current branch |
+| `gp` | push current branch |
 | `<leader>gP` | pull/rebase flow |
 | `<leader>gf` | fetch remotes |
 | `<leader>gi` | open issue dashboard |
