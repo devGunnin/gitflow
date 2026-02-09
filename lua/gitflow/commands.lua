@@ -18,6 +18,7 @@ local issue_panel = require("gitflow.panels.issues")
 local pr_panel = require("gitflow.panels.prs")
 local label_panel = require("gitflow.panels.labels")
 local review_panel = require("gitflow.panels.review")
+local conflict_panel = require("gitflow.panels.conflict")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -647,6 +648,7 @@ local function register_builtin_subcommands(cfg)
 			pr_panel.close()
 			label_panel.close()
 			review_panel.close()
+			conflict_panel.close()
 			return "Gitflow panels closed"
 		end,
 	}
@@ -1265,6 +1267,14 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands.conflict = {
+		description = "Open merge conflict resolution panel",
+		run = function()
+			conflict_panel.open(cfg)
+			return "Conflict resolution panel opened"
+		end,
+	}
+
 	M.subcommands.merge = {
 		description = "Merge branch into current branch",
 		run = function(ctx)
@@ -1646,6 +1656,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowIssue)", "<Cmd>Gitflow issue list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPr)", "<Cmd>Gitflow pr list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflict<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -1664,6 +1675,7 @@ function M.setup(cfg)
 		issue = "<Plug>(GitflowIssue)",
 		pr = "<Plug>(GitflowPr)",
 		label = "<Plug>(GitflowLabel)",
+		conflict = "<Plug>(GitflowConflict)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]

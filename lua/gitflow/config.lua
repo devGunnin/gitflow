@@ -54,6 +54,7 @@ function M.defaults()
 			issue = "<leader>gI",
 			pr = "<leader>gR",
 			label = "<leader>gL",
+			conflict = "<leader>gm",
 		},
 		ui = {
 			default_layout = "split",
