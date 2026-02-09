@@ -26,11 +26,15 @@ local utils = require("gitflow.utils")
 ---@class GitflowGitConfig
 ---@field log GitflowLogConfig
 
+---@class GitflowSyncConfig
+---@field pull_strategy "rebase"|"merge"
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
 ---@field git GitflowGitConfig
+---@field sync GitflowSyncConfig
 
 local M = {}
 
@@ -55,6 +59,7 @@ function M.defaults()
 			pr = "<leader>gR",
 			label = "<leader>gL",
 			conflict = "<leader>gm",
+			palette = "<leader>gp",
 		},
 		ui = {
 			default_layout = "split",
@@ -78,6 +83,9 @@ function M.defaults()
 				count = 50,
 				format = "%h %s",
 			},
+		},
+		sync = {
+			pull_strategy = "rebase",
 		},
 	}
 end
@@ -174,11 +182,24 @@ local function validate_git(config)
 end
 
 ---@param config GitflowConfig
+local function validate_sync(config)
+	if type(config.sync) ~= "table" then
+		error("gitflow config error: sync must be a table", 3)
+	end
+
+	local strategy = config.sync.pull_strategy
+	if strategy ~= "rebase" and strategy ~= "merge" then
+		error("gitflow config error: sync.pull_strategy must be 'rebase' or 'merge'", 3)
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
 	validate_git(config)
+	validate_sync(config)
 end
 
 ---@param opts table|nil

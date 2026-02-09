@@ -11,6 +11,25 @@ local git = require("gitflow.git")
 local M = {}
 local run_branch_cmd
 
+---@param output string
+---@return boolean
+local function output_mentions_no_upstream(output)
+	local normalized = (output or ""):lower()
+	if normalized:find("no upstream configured", 1, true) then
+		return true
+	end
+	if normalized:find("no upstream", 1, true) then
+		return true
+	end
+	if normalized:find("does not point to a branch", 1, true) then
+		return true
+	end
+	if normalized:find("has no upstream branch", 1, true) then
+		return true
+	end
+	return false
+end
+
 ---@param text string
 ---@return string[]
 local function split_lines(text)
@@ -106,6 +125,61 @@ function M.current(opts, cb)
 			return
 		end
 		cb(nil, branch, result)
+	end)
+end
+
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, ahead: boolean|nil, count: integer|nil, result: GitflowGitResult)
+function M.is_ahead_of_upstream(opts, cb)
+	git.git({ "rev-parse", "--abbrev-ref", "HEAD" }, opts, function(head_result)
+		if head_result.code ~= 0 then
+			cb(error_from_result(head_result, "rev-parse --abbrev-ref HEAD"), nil, nil, head_result)
+			return
+		end
+
+		local branch = vim.trim(head_result.stdout or "")
+		if branch == "" or branch == "HEAD" then
+			cb(nil, false, 0, head_result)
+			return
+		end
+
+		git.git({
+			"rev-parse",
+			"--abbrev-ref",
+			"--symbolic-full-name",
+			"@{upstream}",
+		}, opts, function(upstream_result)
+			if upstream_result.code ~= 0 then
+				local output = git.output(upstream_result)
+				if output_mentions_no_upstream(output) then
+					cb(nil, false, 0, upstream_result)
+					return
+				end
+				cb(error_from_result(upstream_result, "rev-parse @{upstream}"), nil, nil, upstream_result)
+				return
+			end
+
+			git.git({ "rev-list", "--count", "@{upstream}..HEAD" }, opts, function(count_result)
+				if count_result.code ~= 0 then
+					cb(
+						error_from_result(count_result, "rev-list --count @{upstream}..HEAD"),
+						nil,
+						nil,
+						count_result
+					)
+					return
+				end
+
+				local trimmed = vim.trim(count_result.stdout or "")
+				local count = tonumber(trimmed)
+				if count == nil then
+					cb(("Could not parse ahead count from '%s'"):format(trimmed), nil, nil, count_result)
+					return
+				end
+
+				cb(nil, count > 0, count, count_result)
+			end)
+		end)
 	end)
 end
 

@@ -19,11 +19,13 @@ local pr_panel = require("gitflow.panels.prs")
 local label_panel = require("gitflow.panels.labels")
 local review_panel = require("gitflow.panels.review")
 local conflict_panel = require("gitflow.panels.conflict")
+local palette_panel = require("gitflow.panels.palette")
 local git_conflict = require("gitflow.git.conflict")
 
 ---@class GitflowSubcommand
 ---@field description string
 ---@field run fun(ctx: table): string|nil
+---@field category string|nil
 
 ---@class GitflowCommandState
 ---@field panel_buffer integer|nil
@@ -181,16 +183,23 @@ local function open_commit_prompt(amend)
 	end)
 end
 
-local function push_with_upstream()
+---@param on_done fun(ok: boolean)|nil
+local function push_with_upstream(on_done)
 	git.git({ "rev-parse", "--abbrev-ref", "HEAD" }, {}, function(branch_result)
 		if branch_result.code ~= 0 then
 			show_error(result_message(branch_result, "Could not determine current branch"))
+			if on_done then
+				on_done(false)
+			end
 			return
 		end
 
 		local branch = vim.trim(branch_result.stdout)
 		if branch == "" or branch == "HEAD" then
 			show_error("Cannot set upstream from detached HEAD")
+			if on_done then
+				on_done(false)
+			end
 			return
 		end
 
@@ -199,33 +208,49 @@ local function push_with_upstream()
 			{ choices = { "&Push", "&Cancel" }, default_choice = 1 }
 		)
 		if not confirmed then
+			if on_done then
+				on_done(false)
+			end
 			return
 		end
 
 		git.git({ "push", "-u", "origin", branch }, {}, function(push_result)
 			if push_result.code ~= 0 then
 				show_error(result_message(push_result, "git push -u failed"))
+				if on_done then
+					on_done(false)
+				end
 				return
 			end
 			show_info(result_message(push_result, "Pushed with upstream tracking"))
+			if on_done then
+				on_done(true)
+			end
 		end)
 	end)
 end
 
-local function run_push()
+---@param on_done fun(ok: boolean)|nil
+local function run_push(on_done)
 	git.git({ "push" }, {}, function(result)
 		if result.code == 0 then
 			show_info(result_message(result, "Push completed"))
+			if on_done then
+				on_done(true)
+			end
 			return
 		end
 
 		local output = result_message(result, "git push failed")
 		if output_mentions_upstream_problem(output) then
-			push_with_upstream()
+			push_with_upstream(on_done)
 			return
 		end
 
 		show_error(output)
+		if on_done then
+			on_done(false)
+		end
 	end)
 end
 
@@ -250,6 +275,82 @@ local function run_fetch(remote)
 		if branch_panel.is_open() then
 			branch_panel.refresh()
 		end
+	end)
+end
+
+---@param on_done fun(ok: boolean)|nil
+local function run_quick_commit(on_done)
+	git_status.stage_all({}, function(stage_err)
+		if stage_err then
+			show_error(stage_err)
+			if on_done then
+				on_done(false)
+			end
+			return
+		end
+
+		git_status.fetch({}, function(fetch_err, _, grouped)
+			if fetch_err then
+				show_error(fetch_err)
+				if on_done then
+					on_done(false)
+				end
+				return
+			end
+
+			local staged_count = git_status.count_staged(grouped)
+			if staged_count == 0 then
+				utils.notify("No changes to commit", vim.log.levels.WARN)
+				if on_done then
+					on_done(false)
+				end
+				return
+			end
+
+			ui.input.prompt({
+				prompt = "Quick commit message: ",
+				on_cancel = function()
+					utils.notify("Quick commit canceled", vim.log.levels.INFO)
+					if on_done then
+						on_done(false)
+					end
+				end,
+			}, function(message)
+				local trimmed = vim.trim(message)
+				if trimmed == "" then
+					utils.notify("Commit message cannot be empty", vim.log.levels.WARN)
+					if on_done then
+						on_done(false)
+					end
+					return
+				end
+
+				git.git({ "commit", "-m", trimmed }, {}, function(commit_result)
+					if commit_result.code ~= 0 then
+						show_error(result_message(commit_result, "git commit failed"))
+						if on_done then
+							on_done(false)
+						end
+						return
+					end
+
+					show_info(result_message(commit_result, "Commit created"))
+					refresh_status_panel_if_open()
+					if on_done then
+						on_done(true)
+					end
+				end)
+			end)
+		end)
+	end)
+end
+
+local function run_quick_push()
+	run_quick_commit(function(ok)
+		if not ok then
+			return
+		end
+		run_push()
 	end)
 end
 
@@ -539,6 +640,128 @@ local function parse_pr_list_args(args, start_index)
 end
 
 ---@param cfg GitflowConfig
+local function run_sync(cfg)
+	local strategy = (cfg.sync and cfg.sync.pull_strategy) or "rebase"
+	local pull_args = { "pull" }
+	if strategy == "rebase" then
+		pull_args[#pull_args + 1] = "--rebase"
+	else
+		pull_args[#pull_args + 1] = "--no-rebase"
+	end
+
+	show_info("Sync step 1/3: git fetch --all --prune")
+	git_branch.fetch(nil, {}, function(fetch_err, fetch_result)
+		if fetch_err then
+			show_error(("Sync failed during fetch: %s"):format(fetch_err))
+			return
+		end
+		show_info(result_message(fetch_result, "Fetch completed"))
+		if branch_panel.is_open() then
+			branch_panel.refresh()
+		end
+
+		show_info(("Sync step 2/3: git pull (%s)"):format(strategy))
+		git.git(pull_args, {}, function(pull_result)
+			if pull_result.code ~= 0 then
+				local output = result_message(pull_result, "git pull failed")
+				handle_conflict_failure(
+					cfg,
+					output,
+					"Sync stopped at pull step.",
+					"Resolve conflicts, then run :Gitflow sync again."
+				)
+				return
+			end
+
+			show_info(result_message(pull_result, "Pull completed"))
+			git_branch.is_ahead_of_upstream({}, function(ahead_err, ahead, count)
+				if ahead_err then
+					show_error(
+						("Sync completed fetch/pull, but push check failed: %s"):format(ahead_err)
+					)
+					return
+				end
+
+				if not ahead then
+					show_info("Sync complete: no outgoing commits, push skipped")
+					refresh_status_panel_if_open()
+					return
+				end
+
+				show_info(
+					("Sync step 3/3: git push (%d outgoing commit(s))"):format(count or 0)
+				)
+				run_push(function(ok)
+					if ok then
+						show_info("Sync complete: fetch, pull, and push succeeded")
+					end
+					refresh_status_panel_if_open()
+				end)
+			end)
+		end)
+	end)
+end
+
+local github_subcommands = {
+	issue = true,
+	pr = true,
+	label = true,
+}
+
+local ui_subcommands = {
+	help = true,
+	open = true,
+	refresh = true,
+	close = true,
+	palette = true,
+}
+
+---@param name string
+---@param subcommand GitflowSubcommand
+---@return string
+local function subcommand_category(name, subcommand)
+	if subcommand.category and subcommand.category ~= "" then
+		return subcommand.category
+	end
+	if github_subcommands[name] then
+		return "GitHub"
+	end
+	if ui_subcommands[name] then
+		return "UI"
+	end
+	return "Git"
+end
+
+---@param cfg GitflowConfig
+---@return GitflowPaletteEntry[]
+function M.palette_entries(cfg)
+	local entries = {}
+	for _, name in ipairs(utils.sorted_keys(M.subcommands)) do
+		local subcommand = M.subcommands[name]
+		local keybinding = cfg.keybindings[name]
+		if not keybinding and name == "conflicts" then
+			keybinding = cfg.keybindings.conflict
+		end
+
+		entries[#entries + 1] = {
+			name = name,
+			description = subcommand.description,
+			category = subcommand_category(name, subcommand),
+			keybinding = keybinding,
+		}
+	end
+	return entries
+end
+
+---@param cfg GitflowConfig
+local function open_palette(cfg)
+	local entries = M.palette_entries(cfg)
+	palette_panel.open(cfg, entries, function(entry)
+		M.dispatch({ entry.name }, cfg)
+	end)
+end
+
+---@param cfg GitflowConfig
 local function register_builtin_subcommands(cfg)
 	M.subcommands.help = {
 		description = "Show Gitflow usage",
@@ -605,7 +828,16 @@ local function register_builtin_subcommands(cfg)
 			label_panel.close()
 			review_panel.close()
 			conflict_panel.close()
+			palette_panel.close()
 			return "Gitflow panels closed"
+		end,
+	}
+
+	M.subcommands.palette = {
+		description = "Open command palette",
+		run = function()
+			open_palette(cfg)
+			return "Command palette opened"
 		end,
 	}
 
@@ -657,6 +889,30 @@ local function register_builtin_subcommands(cfg)
 		run = function()
 			run_pull()
 			return "Running git pull..."
+		end,
+	}
+
+	M.subcommands.sync = {
+		description = "Fetch, pull, and push in sequence",
+		run = function()
+			run_sync(cfg)
+			return "Running sync..."
+		end,
+	}
+
+	M.subcommands["quick-commit"] = {
+		description = "Stage all changes, then commit with a prompt",
+		run = function()
+			run_quick_commit()
+			return "Running quick commit..."
+		end,
+	}
+
+	M.subcommands["quick-push"] = {
+		description = "Quick commit, then push",
+		run = function()
+			run_quick_push()
+			return "Running quick push..."
 		end,
 	}
 
@@ -1528,6 +1784,9 @@ function M.register_subcommand(name, subcommand)
 	if not utils.is_non_empty_string(subcommand.description) then
 		error("gitflow command error: subcommand must define a description", 2)
 	end
+	if subcommand.category ~= nil and type(subcommand.category) ~= "string" then
+		error("gitflow command error: subcommand category must be a string", 2)
+	end
 	M.subcommands[name] = subcommand
 end
 
@@ -1634,6 +1893,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowIssue)", "<Cmd>Gitflow issue list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPr)", "<Cmd>Gitflow pr list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPalette)", "<Cmd>Gitflow palette<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 
@@ -1654,6 +1914,7 @@ function M.setup(cfg)
 		issue = "<Plug>(GitflowIssue)",
 		pr = "<Plug>(GitflowPr)",
 		label = "<Plug>(GitflowLabel)",
+		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 	}
 	for action, mapping in pairs(current.keybindings) do
