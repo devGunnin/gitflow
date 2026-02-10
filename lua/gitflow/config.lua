@@ -65,6 +65,7 @@ function M.defaults()
 			diff = "gd",
 			log = "gl",
 			stash = "gS",
+			stash_push = "gZ",
 			branch = "<leader>gb",
 			issue = "<leader>gI",
 			pr = "<leader>gR",
