@@ -336,15 +336,30 @@ end)
 
 local prompt_bufnr = palette_panel.state.prompt_bufnr
 local prompt_winid = palette_panel.state.prompt_winid
+local list_bufnr = palette_panel.state.list_bufnr
 local list_winid = palette_panel.state.list_winid
+local highlight_ns = palette_panel.state.highlight_ns
 assert_true(prompt_bufnr ~= nil, "palette prompt buffer should exist")
 assert_true(prompt_winid ~= nil, "palette prompt window should exist")
+assert_true(list_bufnr ~= nil, "palette list buffer should exist")
 assert_true(list_winid ~= nil, "palette list window should exist")
+assert_true(highlight_ns ~= nil, "palette highlight namespace should exist")
 
 local function selected_palette_name()
 	local line = vim.api.nvim_win_get_cursor(list_winid)[1]
 	local entry = palette_panel.state.line_entries[line]
 	return entry and entry.name or nil
+end
+
+local function highlighted_palette_name()
+	local marks = vim.api.nvim_buf_get_extmarks(list_bufnr, highlight_ns, 0, -1, {})
+	if #marks ~= 1 then
+		return nil, #marks
+	end
+
+	local line = marks[1][2] + 1
+	local entry = palette_panel.state.line_entries[line]
+	return entry and entry.name or nil, #marks
 end
 
 local function feed_prompt(keys)
@@ -354,7 +369,9 @@ local function feed_prompt(keys)
 end
 
 wait_until(function()
-	return selected_palette_name() == "status"
+	local selected = selected_palette_name()
+	local highlighted, count = highlighted_palette_name()
+	return selected == "status" and highlighted == "status" and count == 1
 end, "palette should select first entry by default")
 
 feed_prompt("<Down>")
@@ -369,13 +386,17 @@ end, "prompt <Up> should move selection backward")
 
 feed_prompt("<C-n>")
 wait_until(function()
-	return selected_palette_name() == "sync"
-end, "prompt <C-n> should move selection forward")
+	local selected = selected_palette_name()
+	local highlighted, count = highlighted_palette_name()
+	return selected == "sync" and highlighted == "sync" and count == 1
+end, "prompt <C-n> should move and highlight selection forward")
 
 feed_prompt("<C-p>")
 wait_until(function()
-	return selected_palette_name() == "status"
-end, "prompt <C-p> should move selection backward")
+	local selected = selected_palette_name()
+	local highlighted, count = highlighted_palette_name()
+	return selected == "status" and highlighted == "status" and count == 1
+end, "prompt <C-p> should move and highlight selection backward")
 
 feed_prompt("<Tab>")
 wait_until(function()
@@ -400,7 +421,9 @@ wait_until(function()
 end, "palette should filter to sync entry")
 
 wait_until(function()
-	return selected_palette_name() == "sync"
+	local selected = selected_palette_name()
+	local highlighted, count = highlighted_palette_name()
+	return selected == "sync" and highlighted == "sync" and count == 1
 end, "filtered palette should keep sync selected")
 
 feed_prompt("<CR>")

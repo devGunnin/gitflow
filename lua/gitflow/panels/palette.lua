@@ -14,12 +14,15 @@ local utils = require("gitflow.utils")
 ---@field prompt_winid integer|nil
 ---@field list_winid integer|nil
 ---@field line_entries table<integer, GitflowPaletteEntry>
+---@field selected_line integer|nil
 ---@field entries GitflowPaletteEntry[]
 ---@field query string
 ---@field on_select fun(entry: GitflowPaletteEntry)|nil
 ---@field augroup integer|nil
+---@field highlight_ns integer|nil
 
 local M = {}
+local SELECTION_HIGHLIGHT = "GitflowPaletteSelection"
 
 ---@type GitflowPalettePanelState
 M.state = {
@@ -29,10 +32,12 @@ M.state = {
 	prompt_winid = nil,
 	list_winid = nil,
 	line_entries = {},
+	selected_line = nil,
 	entries = {},
 	query = "",
 	on_select = nil,
 	augroup = nil,
+	highlight_ns = nil,
 }
 
 local CATEGORY_ORDER = {
@@ -138,23 +143,62 @@ end
 
 ---@return integer|nil
 local function selected_line()
+	if M.state.selected_line and M.state.line_entries[M.state.selected_line] then
+		return M.state.selected_line
+	end
+
 	local winid = M.state.list_winid
 	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return nil
 	end
-	return vim.api.nvim_win_get_cursor(winid)[1]
+
+	local line = vim.api.nvim_win_get_cursor(winid)[1]
+	if M.state.line_entries[line] then
+		return line
+	end
+
+	return nil
+end
+
+local function clear_selection_highlight()
+	local bufnr = M.state.list_bufnr
+	local ns = M.state.highlight_ns
+	if not bufnr or not ns or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+end
+
+---@param line integer|nil
+local function apply_selection_highlight(line)
+	local bufnr = M.state.list_bufnr
+	local ns = M.state.highlight_ns
+	if not bufnr or not ns or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	clear_selection_highlight()
+	if not line or not M.state.line_entries[line] then
+		return
+	end
+
+	vim.api.nvim_buf_add_highlight(bufnr, ns, SELECTION_HIGHLIGHT, line - 1, 0, -1)
 end
 
 ---@param line integer
 local function set_selected_line(line)
 	local winid = M.state.list_winid
-	if not winid or not vim.api.nvim_win_is_valid(winid) then
+	local bufnr = M.state.list_bufnr
+	if not winid or not bufnr or not vim.api.nvim_win_is_valid(winid) then
 		return
 	end
 
-	local count = vim.api.nvim_buf_line_count(M.state.list_bufnr)
+	local count = vim.api.nvim_buf_line_count(bufnr)
 	local clamped = math.max(1, math.min(line, count))
+	M.state.selected_line = clamped
 	vim.api.nvim_win_set_cursor(winid, { clamped, 0 })
+	apply_selection_highlight(clamped)
 end
 
 ---@param delta integer
@@ -247,12 +291,17 @@ local function render()
 	M.state.line_entries = line_entries
 
 	local selection = selectable_lines()
-	if #selection > 0 then
-		local current = selected_line()
-		if not current or not M.state.line_entries[current] then
-			set_selected_line(selection[1])
-		end
+	if #selection == 0 then
+		M.state.selected_line = nil
+		apply_selection_highlight(nil)
+		return
 	end
+
+	local current = selected_line()
+	if not current or not M.state.line_entries[current] then
+		current = selection[1]
+	end
+	set_selected_line(current)
 end
 
 local function refresh_query()
@@ -366,6 +415,8 @@ local function apply_keymaps()
 end
 
 function M.close()
+	clear_selection_highlight()
+
 	if M.state.augroup then
 		pcall(vim.api.nvim_del_augroup_by_id, M.state.augroup)
 	end
@@ -390,10 +441,12 @@ function M.close()
 	M.state.prompt_winid = nil
 	M.state.list_winid = nil
 	M.state.line_entries = {}
+	M.state.selected_line = nil
 	M.state.entries = {}
 	M.state.query = ""
 	M.state.on_select = nil
 	M.state.augroup = nil
+	M.state.highlight_ns = nil
 end
 
 ---@param cfg GitflowConfig
@@ -407,6 +460,10 @@ function M.open(cfg, entries, on_select)
 	M.state.on_select = on_select
 	M.state.query = ""
 	M.state.line_entries = {}
+	M.state.selected_line = nil
+	M.state.highlight_ns = vim.api.nvim_create_namespace("GitflowPaletteSelection")
+
+	vim.api.nvim_set_hl(0, SELECTION_HIGHLIGHT, { default = true, link = "Visual" })
 
 	local width, prompt_height, list_height, row, col = compute_layout(cfg)
 	local prompt_bufnr = ui.buffer.create("palette_prompt", {
@@ -450,6 +507,7 @@ function M.open(cfg, entries, on_select)
 
 	vim.api.nvim_set_option_value("wrap", false, { win = M.state.prompt_winid })
 	vim.api.nvim_set_option_value("wrap", false, { win = M.state.list_winid })
+	vim.api.nvim_set_option_value("cursorline", true, { win = M.state.list_winid })
 
 	setup_prompt_autocmd()
 	apply_keymaps()
