@@ -1,7 +1,7 @@
 ---@class GitflowPromptOpts
 ---@field prompt string
 ---@field default? string
----@field completion? string
+---@field completion? string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]
 ---@field on_cancel? fun()
 
 ---@class GitflowConfirmOpts
@@ -10,15 +10,51 @@
 ---@field on_choice? fun(confirmed: boolean, index: integer)
 
 local M = {}
+local next_completion_id = 0
+
+---@param completion string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]|nil
+---@return string|nil, fun()
+local function resolve_completion(completion)
+	if type(completion) ~= "function" then
+		return completion, function() end
+	end
+
+	next_completion_id = next_completion_id + 1
+	local completion_name = ("__gitflow_input_completion_%d"):format(next_completion_id)
+
+	_G[completion_name] = function(arglead, cmdline, cursorpos)
+		local ok, candidates = pcall(completion, arglead or "", cmdline or "", cursorpos or 0)
+		if not ok or type(candidates) ~= "table" then
+			return {}
+		end
+
+		local normalized = {}
+		for _, candidate in ipairs(candidates) do
+			local text = vim.trim(tostring(candidate))
+			if text ~= "" then
+				normalized[#normalized + 1] = text
+			end
+		end
+		return normalized
+	end
+
+	local cleanup = function()
+		_G[completion_name] = nil
+	end
+
+	return "customlist,v:lua." .. completion_name, cleanup
+end
 
 ---@param opts GitflowPromptOpts
 ---@param on_confirm fun(value: string)
 function M.prompt(opts, on_confirm)
+	local completion, cleanup_completion = resolve_completion(opts.completion)
 	vim.ui.input({
 		prompt = opts.prompt,
 		default = opts.default,
-		completion = opts.completion,
+		completion = completion,
 	}, function(input)
+		cleanup_completion()
 		if input == nil then
 			if opts.on_cancel then
 				opts.on_cancel()

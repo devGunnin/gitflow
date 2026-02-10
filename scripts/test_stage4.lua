@@ -311,6 +311,59 @@ wait_until(function()
 	return find_line(lines, "Issue #1: Stage4 issue") ~= nil
 end, "issue view should render issue details")
 
+local issues_panel = require("gitflow.panels.issues")
+local issue_prompt_completion = nil
+local completion_function_name = nil
+local original_input = vim.ui.input
+
+vim.ui.input = function(opts, on_confirm)
+	issue_prompt_completion = opts.completion
+	assert_true(
+		type(issue_prompt_completion) == "string",
+		"issue label prompt should configure completion"
+	)
+
+	completion_function_name = issue_prompt_completion:match("^customlist,v:lua%.([%w_]+)$")
+	assert_true(completion_function_name ~= nil, "issue label prompt should use custom completion")
+	assert_true(
+		type(_G[completion_function_name]) == "function",
+		"custom completion function should exist"
+	)
+
+	local add_candidates = _G[completion_function_name]("d", "", 0)
+	assert_true(
+		contains(add_candidates, "docs"),
+		"issue label completion should suggest matching add label"
+	)
+
+	local remove_candidates = _G[completion_function_name]("-d", "", 0)
+	assert_true(
+		contains(remove_candidates, "-docs"),
+		"issue label completion should preserve remove prefix"
+	)
+
+	local multi_candidates = _G[completion_function_name]("+bug,d", "", 0)
+	assert_true(
+		contains(multi_candidates, "+bug,docs"),
+		"issue label completion should support comma-separated values"
+	)
+
+	on_confirm("+docs")
+end
+
+local gh_lines_before_label_edit = #read_lines(gh_log)
+issues_panel.edit_labels_under_cursor()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "issue edit 1 --add-label docs", gh_lines_before_label_edit + 1) ~= nil
+end, "issue panel label edit should invoke gh issue edit")
+
+assert_true(
+	completion_function_name ~= nil and _G[completion_function_name] == nil,
+	"issue label completion function should be cleaned up after input"
+)
+vim.ui.input = original_input
+
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
 	local bufnr = buffer.get("prs")
