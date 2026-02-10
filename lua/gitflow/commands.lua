@@ -133,12 +133,6 @@ local function refresh_status_panel_if_open()
 	end
 end
 
----@param output string
----@return boolean
-local function output_mentions_no_local_changes(output)
-	return output:lower():find("no local changes to save", 1, true) ~= nil
-end
-
 ---@param message string|nil
 local function run_stash_push(message)
 	git_stash.push({ message = message }, function(err, result)
@@ -148,7 +142,7 @@ local function run_stash_push(message)
 		end
 
 		local output = result_message(result, "Created stash entry")
-		if output_mentions_no_local_changes(output) then
+		if git_stash.output_mentions_no_local_changes(output) then
 			utils.notify(output, vim.log.levels.WARN)
 		else
 			show_info(output)
