@@ -1199,7 +1199,7 @@ local function register_builtin_subcommands(cfg)
 
 	M.subcommands.pr = {
 		description = "GitHub PRs: list|view|review|submit-review|respond|create|comment|"
-			.. "merge|checkout|close",
+			.. "merge|checkout|close|edit",
 		run = function(ctx)
 			local ready, prerequisite_error = gh.ensure_prerequisites()
 			if not ready then
@@ -1445,6 +1445,42 @@ local function register_builtin_subcommands(cfg)
 				return ("Closing PR #%s..."):format(number)
 			end
 
+			if action == "edit" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr edit <number> [add=...] [remove=...] [reviewers=...]"
+				end
+
+				local edit_opts = {}
+				for i = 4, #ctx.args do
+					local token = ctx.args[i]
+					local add = token:match("^add=(.+)$")
+					if add then
+						edit_opts.add_labels = parse_csv(add)
+					end
+					local remove = token:match("^remove=(.+)$")
+					if remove then
+						edit_opts.remove_labels = parse_csv(remove)
+					end
+					local reviewers = token:match("^reviewers=(.+)$")
+					if reviewers then
+						edit_opts.reviewers = parse_csv(reviewers)
+					end
+				end
+
+				gh_prs.edit(number, edit_opts, {}, function(err, _result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Updated PR #%s"):format(number))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Updating PR #%s..."):format(number)
+			end
+
 			return ("Unknown pr action: %s"):format(action)
 		end,
 	}
@@ -1678,9 +1714,16 @@ end
 local issue_actions = { "list", "view", "create", "comment", "close", "reopen", "edit" }
 local pr_actions = {
 	"list", "view", "review", "submit-review", "respond",
-	"create", "comment", "merge", "checkout", "close",
+	"create", "comment", "merge", "checkout", "close", "edit",
 }
 local label_actions = { "list", "create", "delete" }
+local LABEL_COMPLETION_CACHE_TTL_SECONDS = 60
+
+---@type table{fetched_at: integer, labels: string[]}
+local label_completion_cache = {
+	fetched_at = 0,
+	labels = {},
+}
 
 ---@param cmdline string
 ---@param args string[]
@@ -1723,6 +1766,91 @@ local function complete_issue(subaction, arglead)
 	return {}
 end
 
+---@return string[]
+local function fetch_repo_label_candidates()
+	local cmd = { "gh", "label", "list", "--json", "name", "--limit", "200" }
+	local stdout = ""
+	if vim.system then
+		local result = vim.system(cmd, { text = true }):wait()
+		if (result.code or 1) ~= 0 then
+			return {}
+		end
+		stdout = result.stdout or ""
+	else
+		local output = vim.fn.system(cmd)
+		if vim.v.shell_error ~= 0 then
+			return {}
+		end
+		stdout = output or ""
+	end
+
+	local text = vim.trim(stdout)
+	if text == "" then
+		return {}
+	end
+
+	local ok, decoded = pcall(vim.json.decode, text)
+	if not ok or type(decoded) ~= "table" then
+		return {}
+	end
+
+	local names = {}
+	for _, label in ipairs(decoded) do
+		local name = type(label) == "table" and vim.trim(tostring(label.name or "")) or ""
+		if name ~= "" then
+			names[#names + 1] = name
+		end
+	end
+	table.sort(names)
+	return names
+end
+
+---@return string[]
+local function list_repo_label_candidates()
+	local now = os.time()
+	if now - label_completion_cache.fetched_at <= LABEL_COMPLETION_CACHE_TTL_SECONDS then
+		return label_completion_cache.labels
+	end
+
+	local labels = fetch_repo_label_candidates()
+	label_completion_cache = {
+		fetched_at = now,
+		labels = labels,
+	}
+	return labels
+end
+
+---@param arglead string
+---@param key "add"|"remove"
+---@return string[]
+local function complete_label_patch(arglead, key)
+	local prefix = ("%s="):format(key)
+	if not vim.startswith(arglead, prefix) then
+		return {}
+	end
+
+	local raw = arglead:sub(#prefix + 1)
+	local prefix_csv = raw:match("^(.*,)") or ""
+	local current = raw:match("([^,]*)$") or raw
+	local selected = {}
+	if prefix_csv ~= "" then
+		for _, token in ipairs(vim.split(prefix_csv, ",", { trimempty = true })) do
+			local trimmed = vim.trim(token)
+			if trimmed ~= "" then
+				selected[trimmed] = true
+			end
+		end
+	end
+
+	local candidates = {}
+	for _, label in ipairs(list_repo_label_candidates()) do
+		if not selected[label] and (current == "" or vim.startswith(label, current)) then
+			candidates[#candidates + 1] = ("%s%s%s"):format(prefix, prefix_csv, label)
+		end
+	end
+	return candidates
+end
+
 ---@param subaction string|nil
 ---@param arglead string
 ---@return string[]
@@ -1755,6 +1883,10 @@ local function complete_pr(subaction, arglead)
 		return filter_candidates(
 			arglead, { "merge", "squash", "rebase" }
 		)
+	end
+
+	if subaction == "edit" then
+		return filter_candidates(arglead, { "add=", "remove=", "reviewers=" })
 	end
 
 	if subaction == "review" or subaction == "submit-review" then
@@ -1880,11 +2012,23 @@ function M.complete(arglead, cmdline, _cursorpos)
 		if completing_action(cmdline, args) then
 			return filter_candidates(arglead, issue_actions)
 		end
+		if args[3] == "edit" and vim.startswith(arglead, "add=") then
+			return complete_label_patch(arglead, "add")
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "remove=") then
+			return complete_label_patch(arglead, "remove")
+		end
 		return complete_issue(args[3], arglead)
 	end
 	if subcommand == "pr" then
 		if completing_action(cmdline, args) then
 			return filter_candidates(arglead, pr_actions)
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "add=") then
+			return complete_label_patch(arglead, "add")
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "remove=") then
+			return complete_label_patch(arglead, "remove")
 		end
 		return complete_pr(args[3], arglead)
 	end

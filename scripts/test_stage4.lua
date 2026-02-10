@@ -228,6 +228,46 @@ for _, expected in ipairs({ "list", "view", "create", "comment", "close", "reope
 	assert_true(contains(issue_actions, expected), ("missing issue action '%s'"):format(expected))
 end
 
+local pr_actions = commands.complete("", "Gitflow pr ", 0)
+for _, expected in ipairs({
+	"list",
+	"view",
+	"review",
+	"submit-review",
+	"respond",
+	"create",
+	"comment",
+	"merge",
+	"checkout",
+	"close",
+	"edit",
+}) do
+	assert_true(contains(pr_actions, expected), ("missing pr action '%s'"):format(expected))
+end
+
+local issue_edit_tokens = commands.complete("", "Gitflow issue edit 1 ", 0)
+assert_true(contains(issue_edit_tokens, "add="), "issue edit completion should include add=")
+assert_true(contains(issue_edit_tokens, "remove="), "issue edit completion should include remove=")
+
+local issue_add_completion = commands.complete("add=b", "Gitflow issue edit 1 add=b", 0)
+assert_true(
+	contains(issue_add_completion, "add=bug"),
+	"issue edit add completion should suggest labels"
+)
+
+local issue_add_multi = commands.complete("add=bug,d", "Gitflow issue edit 1 add=bug,d", 0)
+assert_true(
+	contains(issue_add_multi, "add=bug,docs"),
+	"issue edit add completion should support comma-separated labels"
+)
+
+local pr_edit_tokens = commands.complete("", "Gitflow pr edit 7 ", 0)
+assert_true(contains(pr_edit_tokens, "add="), "pr edit completion should include add=")
+assert_true(contains(pr_edit_tokens, "remove="), "pr edit completion should include remove=")
+
+local pr_add_completion = commands.complete("add=d", "Gitflow pr edit 7 add=d", 0)
+assert_true(contains(pr_add_completion, "add=docs"), "pr edit add completion should suggest labels")
+
 commands.dispatch({ "issue", "list", "open" }, cfg)
 local buffer = require("gitflow.ui.buffer")
 wait_until(function()
@@ -333,6 +373,7 @@ wait_until(function()
 end, "label list should render labels")
 
 commands.dispatch({ "label", "create", "stage4", "00ff00", "Green", "label" }, cfg)
+commands.dispatch({ "pr", "edit", "7", "add=bug,docs", "remove=wip", "reviewers=octocat" }, cfg)
 commands.dispatch({ "pr", "merge", "7", "squash" }, cfg)
 commands.dispatch({ "pr", "checkout", "7" }, cfg)
 commands.dispatch({ "issue", "close", "1" }, cfg)
@@ -340,6 +381,9 @@ commands.dispatch({ "issue", "close", "1" }, cfg)
 wait_until(function()
 	local lines = read_lines(gh_log)
 	return find_line(lines, "label create stage4 --color 00ff00 --description Green label") ~= nil
+		and find_line(lines, "label list --json name --limit 200") ~= nil
+		and find_line(lines, "pr edit 7 --add-label bug,docs --remove-label wip --add-reviewer octocat")
+			~= nil
 		and find_line(lines, "pr merge 7 --squash") ~= nil
 		and find_line(lines, "pr checkout 7") ~= nil
 		and find_line(lines, "issue close 1") ~= nil
