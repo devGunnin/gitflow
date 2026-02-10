@@ -2,6 +2,7 @@ local config = require("gitflow.config")
 local commands = require("gitflow.commands")
 local gh = require("gitflow.gh")
 local highlights = require("gitflow.highlights")
+local signs = require("gitflow.signs")
 
 local M = {}
 
@@ -14,6 +15,7 @@ function M.setup(opts)
 	local cfg = config.setup(opts or {})
 	highlights.setup(cfg.highlights)
 	commands.setup(cfg)
+	signs.setup(cfg)
 	gh.check_prerequisites({ notify = true })
 	M.initialized = true
 	return cfg
