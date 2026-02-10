@@ -163,7 +163,7 @@ local function run_stash_push(message)
 		end
 		refresh_status_panel_if_open()
 		emit_post_operation()
-		end)
+	end)
 end
 
 local function prompt_and_run_stash_push()
@@ -179,7 +179,7 @@ local function prompt_and_run_stash_push()
 			message = nil
 		end
 		run_stash_push(message)
-		end)
+	end)
 end
 
 ---@param amend boolean
