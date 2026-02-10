@@ -317,6 +317,7 @@ local fuzzy = palette_panel.filter_entries(entries, "qpsh")
 assert_true(find_name(fuzzy, "quick-push"), "palette fuzzy filter should match quick-push")
 
 local picked = nil
+local mode_when_picked = nil
 palette_panel.open(cfg, {
 	{
 		name = "status",
@@ -332,6 +333,7 @@ palette_panel.open(cfg, {
 	},
 }, function(entry)
 	picked = entry.name
+	mode_when_picked = vim.api.nvim_get_mode().mode
 end)
 
 local prompt_bufnr = palette_panel.state.prompt_bufnr
@@ -431,6 +433,11 @@ feed_prompt("<CR>")
 wait_until(function()
 	return picked == "sync"
 end, "pressing <CR> in prompt should execute selected command")
+assert_true(mode_when_picked ~= nil, "palette selection callback should capture mode")
+assert_true(
+	not mode_when_picked:match("^i"),
+	"prompt <CR> should exit insert mode before dispatch"
+)
 assert_true(not palette_panel.is_open(), "palette should close after selection")
 
 palette_panel.close()

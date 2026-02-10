@@ -234,6 +234,13 @@ local function focus_prompt()
 	end
 end
 
+local function stop_insert_mode_if_active()
+	local mode = vim.api.nvim_get_mode().mode
+	if mode:match("^[iRrSs]") then
+		vim.cmd("stopinsert")
+	end
+end
+
 local function execute_selected()
 	local line = selected_line()
 	if not line then
@@ -246,6 +253,8 @@ local function execute_selected()
 		utils.notify("No command selected", vim.log.levels.WARN)
 		return
 	end
+
+	stop_insert_mode_if_active()
 
 	local on_select = M.state.on_select
 	M.close()
