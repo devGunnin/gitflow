@@ -158,11 +158,11 @@ local function run_stash_push(message)
 			show_info(output)
 		end
 
-			if stash_panel.is_open() then
-				stash_panel.refresh()
-			end
-			refresh_status_panel_if_open()
-			emit_post_operation()
+		if stash_panel.is_open() then
+			stash_panel.refresh()
+		end
+		refresh_status_panel_if_open()
+		emit_post_operation()
 		end)
 end
 
@@ -178,7 +178,7 @@ local function prompt_and_run_stash_push()
 		if message == "" then
 			message = nil
 		end
-			run_stash_push(message)
+		run_stash_push(message)
 		end)
 end
 
@@ -1058,19 +1058,19 @@ local function register_builtin_subcommands(cfg)
 				return "Stash view opened"
 			end
 
-				if action == "push" then
-					local has_message_arg = ctx.args[3] ~= nil
-					if has_message_arg then
-						local message = table.concat(ctx.args, " ", 3)
-						if vim.trim(message) == "" then
+			if action == "push" then
+				local has_message_arg = ctx.args[3] ~= nil
+				if has_message_arg then
+					local message = table.concat(ctx.args, " ", 3)
+					if vim.trim(message) == "" then
 						message = nil
 					end
 					run_stash_push(message)
-					else
-						prompt_and_run_stash_push()
-					end
-					return "Running git stash push..."
+				else
+					prompt_and_run_stash_push()
 				end
+				return "Running git stash push..."
+			end
 
 			if action == "pop" then
 				local index = tonumber(ctx.args[3])
