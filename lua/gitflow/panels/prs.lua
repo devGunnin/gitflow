@@ -14,6 +14,7 @@ local review_panel = require("gitflow.panels.review")
 ---@field active_pr_number integer|nil
 
 local M = {}
+local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -127,6 +128,21 @@ local function pr_state(pr)
 	return state
 end
 
+---@param state string
+---@return string
+local function pr_highlight_group(state)
+	if state == "open" then
+		return "GitflowPROpen"
+	end
+	if state == "merged" then
+		return "GitflowPRMerged"
+	end
+	if state == "draft" then
+		return "GitflowPRDraft"
+	end
+	return "GitflowPRClosed"
+end
+
 ---@param text string
 ---@return string[]
 local function split_lines(text)
@@ -143,6 +159,14 @@ local function render_loading(message)
 		message,
 	})
 	M.state.line_entries = {}
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
 end
 
 ---@param prs table[]
@@ -179,6 +203,20 @@ local function render_list(prs)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+
+	for line_no, pr in pairs(line_entries) do
+		local group = pr_highlight_group(pr_state(pr))
+		vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
+	end
 end
 
 ---@param pr table
@@ -214,6 +252,23 @@ local function render_view(pr)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+	vim.api.nvim_buf_add_highlight(
+		bufnr,
+		PRS_HIGHLIGHT_NS,
+		pr_highlight_group(pr_state(pr)),
+		1,
+		0,
+		-1
+	)
 end
 
 ---@return table|nil

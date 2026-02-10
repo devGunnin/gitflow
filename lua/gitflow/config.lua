@@ -35,6 +35,9 @@ local utils = require("gitflow.utils")
 ---@field quick_commit GitflowQuickActionStep[]
 ---@field quick_push GitflowQuickActionStep[]
 
+---@class GitflowHighlightConfig
+---@field [string] table
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
@@ -42,6 +45,7 @@ local utils = require("gitflow.utils")
 ---@field git GitflowGitConfig
 ---@field sync GitflowSyncConfig
 ---@field quick_actions GitflowQuickActionsConfig
+---@field highlights GitflowHighlightConfig
 
 local M = {}
 
@@ -98,6 +102,7 @@ function M.defaults()
 			quick_commit = { "commit" },
 			quick_push = { "commit", "push" },
 		},
+		highlights = {},
 	}
 end
 
@@ -242,6 +247,22 @@ local function validate_quick_actions(config)
 end
 
 ---@param config GitflowConfig
+local function validate_highlights(config)
+	if type(config.highlights) ~= "table" then
+		error("gitflow config error: highlights must be a table", 3)
+	end
+
+	for group, attrs in pairs(config.highlights) do
+		if not utils.is_non_empty_string(group) then
+			error("gitflow config error: highlights keys must be non-empty strings", 3)
+		end
+		if type(attrs) ~= "table" then
+			error(("gitflow config error: highlights.%s must be a table"):format(group), 3)
+		end
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
@@ -249,6 +270,7 @@ function M.validate(config)
 	validate_git(config)
 	validate_sync(config)
 	validate_quick_actions(config)
+	validate_highlights(config)
 end
 
 ---@param opts table|nil
