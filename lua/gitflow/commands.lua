@@ -137,6 +137,51 @@ local function emit_post_operation()
 	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
 end
 
+---@param output string
+---@return boolean
+local function output_mentions_no_local_changes(output)
+	return output:lower():find("no local changes to save", 1, true) ~= nil
+end
+
+---@param message string|nil
+local function run_stash_push(message)
+	git_stash.push({ message = message }, function(err, result)
+		if err then
+			show_error(err)
+			return
+		end
+
+		local output = result_message(result, "Created stash entry")
+		if output_mentions_no_local_changes(output) then
+			utils.notify(output, vim.log.levels.WARN)
+		else
+			show_info(output)
+		end
+
+			if stash_panel.is_open() then
+				stash_panel.refresh()
+			end
+			refresh_status_panel_if_open()
+			emit_post_operation()
+		end)
+end
+
+local function prompt_and_run_stash_push()
+	vim.ui.input({
+		prompt = "Stash message (optional): ",
+	}, function(input)
+		if input == nil then
+			return
+		end
+
+		local message = vim.trim(input)
+		if message == "" then
+			message = nil
+		end
+			run_stash_push(message)
+		end)
+end
+
 ---@param amend boolean
 local function open_commit_prompt(amend)
 	git_status.fetch({}, function(err, _, grouped)
@@ -1013,25 +1058,19 @@ local function register_builtin_subcommands(cfg)
 				return "Stash view opened"
 			end
 
-			if action == "push" then
-				local message = table.concat(ctx.args, " ", 3)
-				if message == "" then
-					message = nil
+				if action == "push" then
+					local has_message_arg = ctx.args[3] ~= nil
+					if has_message_arg then
+						local message = table.concat(ctx.args, " ", 3)
+						if vim.trim(message) == "" then
+						message = nil
+					end
+					run_stash_push(message)
+					else
+						prompt_and_run_stash_push()
+					end
+					return "Running git stash push..."
 				end
-				git_stash.push({ message = message }, function(err, result)
-					if err then
-						show_error(err)
-						return
-					end
-					show_info(result_message(result, "Created stash entry"))
-					if stash_panel.is_open() then
-						stash_panel.refresh()
-					end
-					refresh_status_panel_if_open()
-					emit_post_operation()
-				end)
-				return "Running git stash push..."
-			end
 
 			if action == "pop" then
 				local index = tonumber(ctx.args[3])
@@ -1946,6 +1985,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowDiff)", "<Cmd>Gitflow diff<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowStashPush)", "<Cmd>Gitflow stash push<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowIssue)", "<Cmd>Gitflow issue list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPr)", "<Cmd>Gitflow pr list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
@@ -1967,6 +2007,7 @@ function M.setup(cfg)
 		diff = "<Plug>(GitflowDiff)",
 		log = "<Plug>(GitflowLog)",
 		stash = "<Plug>(GitflowStash)",
+		stash_push = "<Plug>(GitflowStashPush)",
 		issue = "<Plug>(GitflowIssue)",
 		pr = "<Plug>(GitflowPr)",
 		label = "<Plug>(GitflowLabel)",

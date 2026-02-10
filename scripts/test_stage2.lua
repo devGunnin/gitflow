@@ -160,6 +160,17 @@ assert_mapping(
 	"<Plug>(GitflowFetch)",
 	"default fetch keymap should be registered"
 )
+assert_equals(cfg.keybindings.stash_push, "gZ", "default stash push keybinding should exist")
+assert_mapping(
+	"<Plug>(GitflowStashPush)",
+	"<Cmd>Gitflow stash push<CR>",
+	"stash push plug keymap should be registered"
+)
+assert_mapping(
+	cfg.keybindings.stash_push,
+	"<Plug>(GitflowStashPush)",
+	"default stash push keymap should be registered"
+)
 
 local commands = require("gitflow.commands")
 local all_subcommands = commands.complete("")
@@ -523,15 +534,19 @@ assert_true(stash_buf ~= nil, "stash panel should create a stash buffer")
 local stash_keymaps = vim.api.nvim_buf_get_keymap(stash_buf, "n")
 local has_pop_keymap = false
 local has_drop_keymap = false
+local has_push_keymap = false
 for _, mapping in ipairs(stash_keymaps) do
 	if mapping.lhs == "P" then
 		has_pop_keymap = true
 	elseif mapping.lhs == "D" then
 		has_drop_keymap = true
+	elseif mapping.lhs == "S" then
+		has_push_keymap = true
 	end
 end
 assert_true(has_pop_keymap, "stash panel should map P for stash pop")
 assert_true(has_drop_keymap, "stash panel should map D for stash drop")
+assert_true(has_push_keymap, "stash panel should map S for stash push")
 
 local log_err, log_entries = wait_async(function(done)
 	git_log.list({ count = 10, format = "%h %s" }, function(inner_err, entries)
@@ -543,12 +558,17 @@ assert_true(#log_entries >= 1, "log should contain at least one commit")
 
 write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "stash-change" })
 
-local stash_push_err = wait_async(function(done)
-	stash.push({ message = "stage2 stash" }, function(inner_err)
-		done(inner_err)
-	end)
-end)
-assert_equals(stash_push_err, nil, "stash push should succeed")
+local stash_input = vim.ui.input
+vim.ui.input = function(_, on_confirm)
+	on_confirm("stage2 stash")
+end
+commands.dispatch({ "stash", "push" }, cfg)
+local stash_push_seen = vim.wait(5000, function()
+	local output = run_git(repo_dir, { "stash", "list", "-n", "1" })
+	return output:find("stage2 stash", 1, true) ~= nil
+end, 25)
+vim.ui.input = stash_input
+assert_true(stash_push_seen, "stash push command should support prompted message")
 
 local stash_list_err, stash_entries = wait_async(function(done)
 	stash.list({}, function(inner_err, entries)

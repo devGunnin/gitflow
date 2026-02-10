@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_stash = require("gitflow.git.stash")
 local git_branch = require("gitflow.git.branch")
+local status_panel = require("gitflow.panels.status")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -19,6 +20,12 @@ M.state = {
 	line_entries = {},
 	cfg = nil,
 }
+
+local function refresh_status_panel_if_open()
+	if status_panel.is_open() then
+		status_panel.refresh()
+	end
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -56,6 +63,10 @@ local function ensure_window(cfg)
 		M.drop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "S", function()
+		M.push_with_prompt()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "r", function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -70,6 +81,7 @@ end
 local function render(entries, current_branch)
 	local lines = {
 		"Gitflow Stash",
+		"P=Pop  D=Drop  S=Stash  r=Refresh  q=Close",
 		"",
 	}
 	local line_entries = {}
@@ -108,11 +120,52 @@ local function output_or_default(result)
 	return output
 end
 
+---@param output string
+---@return boolean
+local function output_mentions_no_local_changes(output)
+	return output:lower():find("no local changes to save", 1, true) ~= nil
+end
+
+---@param result GitflowGitResult
+local function notify_push_result(result)
+	local output = output_or_default(result)
+	if output_mentions_no_local_changes(output) then
+		utils.notify(output, vim.log.levels.WARN)
+		return
+	end
+	utils.notify(output, vim.log.levels.INFO)
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
 	ensure_window(cfg)
 	M.refresh()
+end
+
+function M.push_with_prompt()
+	vim.ui.input({
+		prompt = "Stash message (optional): ",
+	}, function(input)
+		if input == nil then
+			return
+		end
+
+		local message = vim.trim(input)
+		if message == "" then
+			message = nil
+		end
+
+		git_stash.push({ message = message }, function(err, result)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			notify_push_result(result)
+			M.refresh()
+			refresh_status_panel_if_open()
+		end)
+	end)
 end
 
 function M.refresh()
