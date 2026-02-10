@@ -124,13 +124,6 @@ local function hunk_index_for_line(line)
 	return nil
 end
 
-local function define_highlights()
-	vim.api.nvim_set_hl(0, "GitflowConflictLocal", { default = true, link = "DiffAdd" })
-	vim.api.nvim_set_hl(0, "GitflowConflictBase", { default = true, link = "DiffChange" })
-	vim.api.nvim_set_hl(0, "GitflowConflictRemote", { default = true, link = "DiffDelete" })
-	vim.api.nvim_set_hl(0, "GitflowConflictResolved", { default = true, link = "DiffText" })
-end
-
 ---@param bufnr integer|nil
 ---@param group string
 local function highlight_hunks(bufnr, group)
@@ -680,7 +673,6 @@ local function open_layout(path, ctx, callbacks)
 	M.state.on_resolved = callbacks.on_resolved
 	M.state.on_closed = callbacks.on_closed
 
-	define_highlights()
 	apply_highlights()
 	vim.api.nvim_set_current_win(merged_winid)
 end

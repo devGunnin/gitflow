@@ -13,6 +13,7 @@ local gh_issues = require("gitflow.gh.issues")
 ---@field active_issue_number integer|nil
 
 local M = {}
+local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -116,6 +117,15 @@ local function issue_state(issue)
 	return state
 end
 
+---@param state string
+---@return string
+local function issue_highlight_group(state)
+	if state == "open" then
+		return "GitflowIssueOpen"
+	end
+	return "GitflowIssueClosed"
+end
+
 ---@param issue table
 ---@return string
 local function join_label_names(issue)
@@ -154,6 +164,14 @@ local function render_loading(message)
 		message,
 	})
 	M.state.line_entries = {}
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
 end
 
 ---@param issues table[]
@@ -189,6 +207,20 @@ local function render_list(issues)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+
+	for line_no, issue in pairs(line_entries) do
+		local group = issue_highlight_group(issue_state(issue))
+		vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
+	end
 end
 
 ---@param issue table
@@ -241,6 +273,23 @@ local function render_view(issue)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+	vim.api.nvim_buf_add_highlight(
+		bufnr,
+		ISSUES_HIGHLIGHT_NS,
+		issue_highlight_group(issue_state(issue)),
+		1,
+		0,
+		-1
+	)
 end
 
 ---@return table|nil

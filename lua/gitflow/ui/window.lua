@@ -140,6 +140,11 @@ function M.open_float(opts)
 	local winid = vim.api.nvim_open_win(
 		opts.bufnr, opts.enter ~= false, win_opts
 	)
+	vim.api.nvim_set_option_value(
+		"winhighlight",
+		"FloatBorder:GitflowBorder,FloatTitle:GitflowTitle",
+		{ win = winid }
+	)
 
 	register_window(opts.name, winid, opts.on_close)
 	return winid

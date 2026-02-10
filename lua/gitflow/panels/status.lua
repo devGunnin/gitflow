@@ -36,6 +36,7 @@ local conflict_panel = require("gitflow.panels.conflict")
 ---@field active boolean
 
 local M = {}
+local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 
 ---@type GitflowStatusPanelState
 M.state = {
@@ -337,6 +338,51 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 
 	ui.buffer.update("status", lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, STATUS_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+
+	for line_no, line in ipairs(lines) do
+		if vim.startswith(line, "Staged")
+			or vim.startswith(line, "Unstaged")
+			or vim.startswith(line, "Untracked")
+			or vim.startswith(line, "Outgoing")
+			or vim.startswith(line, "Incoming")
+			or vim.startswith(line, "Commit History")
+		then
+			vim.api.nvim_buf_add_highlight(
+				bufnr,
+				STATUS_HIGHLIGHT_NS,
+				"GitflowHeader",
+				line_no - 1,
+				0,
+				-1
+			)
+		end
+	end
+
+	for line_no, entry in pairs(line_entries) do
+		if entry.kind ~= "file" then
+			goto continue
+		end
+
+		local group = "GitflowUnstaged"
+		if entry.entry.untracked then
+			group = "GitflowUntracked"
+		elseif entry.diff_staged then
+			group = "GitflowStaged"
+		end
+
+		vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
+
+		::continue::
+	end
 end
 
 ---@param err string|nil

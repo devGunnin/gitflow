@@ -62,6 +62,7 @@ local gh_prs = require("gitflow.gh.prs")
 ---@field pending_comments GitflowPrReviewDraftThread[]
 
 local M = {}
+local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
 
 ---@type GitflowPrReviewPanelState
 M.state = {
@@ -334,6 +335,18 @@ local function status_indicator(status)
 	return "[~]"
 end
 
+---@param status string|nil
+---@return string
+local function status_highlight_group(status)
+	if status == "A" then
+		return "GitflowAdded"
+	end
+	if status == "D" then
+		return "GitflowRemoved"
+	end
+	return "GitflowModified"
+end
+
 ---@param comments table[]
 ---@return GitflowPrReviewCommentThread[]
 local function build_comment_threads(comments)
@@ -491,6 +504,92 @@ local function render_review(
 	M.state.comment_threads = comment_threads
 	M.state.thread_line_map = thread_line_map
 
+	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
+		vim.api.nvim_buf_clear_namespace(M.state.bufnr, REVIEW_HIGHLIGHT_NS, 0, -1)
+		vim.api.nvim_buf_add_highlight(
+			M.state.bufnr,
+			REVIEW_HIGHLIGHT_NS,
+			"GitflowTitle",
+			0,
+			0,
+			-1
+		)
+		vim.api.nvim_buf_add_highlight(
+			M.state.bufnr,
+			REVIEW_HIGHLIGHT_NS,
+			"GitflowHeader",
+			2,
+			0,
+			-1
+		)
+
+		for idx, file in ipairs(files) do
+			vim.api.nvim_buf_add_highlight(
+				M.state.bufnr,
+				REVIEW_HIGHLIGHT_NS,
+				status_highlight_group(file.status),
+				2 + idx,
+				0,
+				-1
+			)
+		end
+
+		for line_no, line in ipairs(lines) do
+			if vim.startswith(line, "Navigation:")
+				or vim.startswith(line, "Actions:")
+				or vim.startswith(line, "         ")
+			then
+				vim.api.nvim_buf_add_highlight(
+					M.state.bufnr,
+					REVIEW_HIGHLIGHT_NS,
+					"GitflowFooter",
+					line_no - 1,
+					0,
+					-1
+				)
+			elseif vim.startswith(line, "Review Comments") then
+				vim.api.nvim_buf_add_highlight(
+					M.state.bufnr,
+					REVIEW_HIGHLIGHT_NS,
+					"GitflowHeader",
+					line_no - 1,
+					0,
+					-1
+				)
+			elseif vim.startswith(line, "  >>") or vim.startswith(line, "  |") then
+				vim.api.nvim_buf_add_highlight(
+					M.state.bufnr,
+					REVIEW_HIGHLIGHT_NS,
+					"GitflowReviewComment",
+					line_no - 1,
+					0,
+					-1
+				)
+			end
+		end
+
+		for idx, line in ipairs(diff_lines) do
+			local group = nil
+			if vim.startswith(line, "@@") then
+				group = "GitflowModified"
+			elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
+				group = "GitflowAdded"
+			elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
+				group = "GitflowRemoved"
+			end
+			if group then
+				vim.api.nvim_buf_add_highlight(
+					M.state.bufnr,
+					REVIEW_HIGHLIGHT_NS,
+					group,
+					diff_start_line + idx - 2,
+					0,
+					-1
+				)
+			end
+		end
+	end
+
 	-- N3: apply virtual text for dual line numbers via extmarks
 	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
 		local ns = vim.api.nvim_create_namespace("gitflow_review_lines")
@@ -505,7 +604,7 @@ local function render_review(
 				pcall(
 					vim.api.nvim_buf_set_extmark,
 					M.state.bufnr, ns, line_no - 1, 0,
-					{ virt_text = { { label, "Comment" } },
+					{ virt_text = { { label, "GitflowReviewComment" } },
 						virt_text_pos = "right_align" }
 				)
 			end
@@ -541,7 +640,7 @@ local function render_review(
 					vim.api.nvim_buf_set_extmark,
 					M.state.bufnr, ns_comments,
 					target_line - 1, 0,
-					{ virt_text = { { label, "WarningMsg" } },
+					{ virt_text = { { label, "GitflowReviewChangesRequested" } },
 						virt_text_pos = "eol" }
 				)
 			end
@@ -560,7 +659,7 @@ local function render_review(
 					M.state.bufnr, ns_comments,
 					pc.line - 1, 0,
 					{ virt_text = {
-						{ pending_label, "DiagnosticInfo" },
+						{ pending_label, "GitflowReviewComment" },
 					}, virt_text_pos = "eol" }
 				)
 			end
@@ -578,6 +677,18 @@ local function render_loading(message)
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}
 	M.state.line_context = {}
+
+	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
+		vim.api.nvim_buf_clear_namespace(M.state.bufnr, REVIEW_HIGHLIGHT_NS, 0, -1)
+		vim.api.nvim_buf_add_highlight(
+			M.state.bufnr,
+			REVIEW_HIGHLIGHT_NS,
+			"GitflowTitle",
+			0,
+			0,
+			-1
+		)
+	end
 end
 
 ---@param markers table[]

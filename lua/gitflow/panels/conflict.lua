@@ -22,6 +22,7 @@ local conflict_view = require("gitflow.ui.conflict")
 ---@field prompt_when_resolved boolean
 
 local M = {}
+local CONFLICT_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_conflict_hl")
 
 ---@type GitflowConflictPanelState
 M.state = {
@@ -164,6 +165,42 @@ local function render(files, operation)
 	M.state.files = files
 	M.state.line_entries = line_entries
 	M.state.active_operation = operation
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, CONFLICT_HIGHLIGHT_NS, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 2, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 3, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowFooter", #lines - 2, 0, -1)
+	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+
+	for line_no, _ in pairs(line_entries) do
+		vim.api.nvim_buf_add_highlight(
+			bufnr,
+			CONFLICT_HIGHLIGHT_NS,
+			"GitflowConflictBase",
+			line_no - 1,
+			0,
+			-1
+		)
+	end
+
+	for line_no, line in ipairs(lines) do
+		if vim.startswith(line, "    ! ") then
+			vim.api.nvim_buf_add_highlight(
+				bufnr,
+				CONFLICT_HIGHLIGHT_NS,
+				"GitflowConflictRemote",
+				line_no - 1,
+				0,
+				-1
+			)
+		end
+	end
 end
 
 ---@return GitflowConflictFileEntry|nil

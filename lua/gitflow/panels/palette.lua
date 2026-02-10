@@ -472,8 +472,6 @@ function M.open(cfg, entries, on_select)
 	M.state.selected_line = nil
 	M.state.highlight_ns = vim.api.nvim_create_namespace("GitflowPaletteSelection")
 
-	vim.api.nvim_set_hl(0, SELECTION_HIGHLIGHT, { default = true, link = "Visual" })
-
 	local width, prompt_height, list_height, row, col = compute_layout(cfg)
 	local prompt_bufnr = ui.buffer.create("palette_prompt", {
 		filetype = "gitflowpaletteprompt",
