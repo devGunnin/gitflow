@@ -314,9 +314,30 @@ end, "issue view should render issue details")
 local issues_panel = require("gitflow.panels.issues")
 local issue_prompt_completion = nil
 local completion_function_name = nil
-local original_input = vim.ui.input
+local ui_input_calls = 0
+local inputsave_calls = 0
+local inputrestore_calls = 0
+local original_ui_input = vim.ui.input
+local original_fn_input = vim.fn.input
+local original_inputsave = vim.fn.inputsave
+local original_inputrestore = vim.fn.inputrestore
 
-vim.ui.input = function(opts, on_confirm)
+vim.ui.input = function(_, _)
+	ui_input_calls = ui_input_calls + 1
+	error("issue label prompt should not use vim.ui.input when completion is configured", 2)
+end
+
+vim.fn.inputsave = function()
+	inputsave_calls = inputsave_calls + 1
+	return 1
+end
+
+vim.fn.inputrestore = function()
+	inputrestore_calls = inputrestore_calls + 1
+	return 1
+end
+
+vim.fn.input = function(opts)
 	issue_prompt_completion = opts.completion
 	assert_true(
 		type(issue_prompt_completion) == "string",
@@ -348,7 +369,7 @@ vim.ui.input = function(opts, on_confirm)
 		"issue label completion should support comma-separated values"
 	)
 
-	on_confirm("+docs")
+	return "+docs"
 end
 
 local gh_lines_before_label_edit = #read_lines(gh_log)
@@ -362,7 +383,13 @@ assert_true(
 	completion_function_name ~= nil and _G[completion_function_name] == nil,
 	"issue label completion function should be cleaned up after input"
 )
-vim.ui.input = original_input
+assert_equals(ui_input_calls, 0, "issue label prompt should bypass vim.ui.input")
+assert_equals(inputsave_calls, 1, "issue label prompt should call inputsave once")
+assert_equals(inputrestore_calls, 1, "issue label prompt should call inputrestore once")
+vim.ui.input = original_ui_input
+vim.fn.input = original_fn_input
+vim.fn.inputsave = original_inputsave
+vim.fn.inputrestore = original_inputrestore
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()

@@ -11,6 +11,7 @@
 
 local M = {}
 local next_completion_id = 0
+local next_cancel_id = 0
 
 ---@param completion string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]|nil
 ---@return string|nil, fun()
@@ -46,9 +47,52 @@ local function resolve_completion(completion)
 end
 
 ---@param opts GitflowPromptOpts
+---@param completion string
+---@return string|nil
+local function prompt_with_builtin_completion(opts, completion)
+	next_cancel_id = next_cancel_id + 1
+	local cancel_token = ("__gitflow_prompt_cancel_%d__"):format(next_cancel_id)
+
+	vim.fn.inputsave()
+	local ok, value = pcall(vim.fn.input, {
+		prompt = opts.prompt,
+		default = opts.default or "",
+		completion = completion,
+		cancelreturn = cancel_token,
+	})
+	vim.fn.inputrestore()
+
+	if not ok then
+		if opts.on_cancel then
+			opts.on_cancel()
+		end
+		return nil
+	end
+
+	local text = tostring(value or "")
+	if text == cancel_token then
+		if opts.on_cancel then
+			opts.on_cancel()
+		end
+		return nil
+	end
+	return text
+end
+
+---@param opts GitflowPromptOpts
 ---@param on_confirm fun(value: string)
 function M.prompt(opts, on_confirm)
 	local completion, cleanup_completion = resolve_completion(opts.completion)
+	if completion then
+		local value = prompt_with_builtin_completion(opts, completion)
+		cleanup_completion()
+		if value == nil then
+			return
+		end
+		on_confirm(value)
+		return
+	end
+
 	vim.ui.input({
 		prompt = opts.prompt,
 		default = opts.default,
