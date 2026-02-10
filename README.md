@@ -12,9 +12,9 @@ Example plugin setup (lazy.nvim style):
   "devGunnin/gitflow",
   config = function()
     require("gitflow").setup({
-      theme = "nvim",
-      keymaps = "default",
-      gh_sync = "on_demand", -- single keystroke sync entrypoint
+      sync = {
+        pull_strategy = "rebase", -- "rebase" or "merge"
+      },
     })
   end,
 }
@@ -38,7 +38,7 @@ Example plugin setup (lazy.nvim style):
 | `<leader>gs` | open unified status view |
 | `<leader>ga` | stage current file/hunk |
 | `<leader>gc` | commit flow |
-| `<leader>gp` | push current branch |
+| `gp` | push current branch |
 | `<leader>gP` | pull/rebase flow |
 | `<leader>gf` | fetch remotes |
 | `<leader>gi` | open issue dashboard |
@@ -46,6 +46,16 @@ Example plugin setup (lazy.nvim style):
 | `<leader>gv` | open review diff view |
 | `<leader>gm` | open merge/conflict center |
 | `<leader>gS` | sync git + gh state |
+| `<leader>gp` | open command palette |
+
+## Stage 7 Commands
+
+| Command | Description |
+| --- | --- |
+| `:Gitflow sync` | Run fetch + pull (`rebase` or `merge`) + push when ahead |
+| `:Gitflow palette` | Open fuzzy-searchable command palette with grouped commands |
+| `:Gitflow quick-commit` | Stage all changes and commit from a single prompt |
+| `:Gitflow quick-push` | Quick commit flow followed by push |
 
 ## Delivery Roadmap
 
