@@ -168,7 +168,7 @@ if [ "$#" -ge 2 ] && [ "$1" = "api" ]; then
       exit 0
       ;;
     *pulls/7/comments*)
-      echo '[{"id":101,"path":"lua/gitflow/commands.lua","line":11,"original_line":10,"diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Consider renaming this variable","user":{"login":"reviewer1"},"in_reply_to_id":null},{"id":102,"path":"lua/gitflow/commands.lua","line":11,"original_line":10,"diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Agreed, needs a better name","user":{"login":"reviewer2"},"in_reply_to_id":101}]'
+      echo '[{"id":"101","path":"lua/gitflow/commands.lua","line":"11","original_line":"10","diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Consider renaming this variable","user":{"login":"reviewer1"},"in_reply_to_id":null},{"id":"102","path":"lua/gitflow/commands.lua","line":"11","original_line":"10","diff_hunk":"@@ -10,2 +10,3 @@ local M = {}","body":"Agreed, needs a better name","user":{"login":"reviewer2"},"in_reply_to_id":101}]'
       exit 0
       ;;
     *pulls/7/reviews*)
@@ -312,12 +312,23 @@ assert_true(
 	"review panel should show Review Comments section"
 )
 assert_true(
+	find_line(review_lines, "Review Comments (1 threads)") ~= nil,
+	"review panel should group reply comments under one thread"
+)
+assert_true(
 	find_line(review_lines, "@reviewer1") ~= nil,
 	"review panel should display reviewer1 comment"
 )
 assert_true(
 	find_line(review_lines, "@reviewer2") ~= nil,
 	"review panel should display reviewer2 reply"
+)
+assert_true(
+	find_line(
+		review_lines,
+		"@reviewer1 on lua/gitflow/commands.lua:11"
+	) ~= nil,
+	"review thread header should include numeric line suffix"
 )
 
 -- N2: verify file status indicators

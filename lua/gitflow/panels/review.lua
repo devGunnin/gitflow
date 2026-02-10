@@ -349,18 +349,18 @@ local function build_comment_threads(comments)
 		end
 
 		local comment = {
-			id = c.id or 0,
+			id = tonumber(c.id) or 0,
 			path = c.path or "",
-			line = c.line or c.original_line,
-			original_line = c.original_line,
+			line = tonumber(c.line) or tonumber(c.original_line),
+			original_line = tonumber(c.original_line),
 			diff_hunk = c.diff_hunk,
 			body = c.body or "",
 			user = user,
-			in_reply_to_id = c.in_reply_to_id,
-			start_line = c.start_line,
+			in_reply_to_id = tonumber(c.in_reply_to_id),
+			start_line = tonumber(c.start_line),
 		}
 
-		if not c.in_reply_to_id then
+		if not comment.in_reply_to_id then
 			local thread = {
 				id = comment.id,
 				path = comment.path,
@@ -372,7 +372,7 @@ local function build_comment_threads(comments)
 			threads[#threads + 1] = thread
 			root_map[comment.id] = thread
 		else
-			local parent = root_map[c.in_reply_to_id]
+			local parent = root_map[comment.in_reply_to_id]
 			if parent then
 				parent.comments[#parent.comments + 1] = comment
 			else
@@ -402,8 +402,9 @@ local function render_thread_lines(thread)
 		thread.comments[1].user,
 		thread.path
 	)
-	if thread.comments[1].line then
-		header = header .. (":%d"):format(thread.comments[1].line)
+	local line = tonumber(thread.comments[1].line)
+	if line then
+		header = header .. (":%d"):format(line)
 	end
 	out[#out + 1] = header
 
