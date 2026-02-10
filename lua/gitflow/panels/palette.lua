@@ -307,27 +307,40 @@ local function apply_keymaps()
 		return
 	end
 
-	local prompt_opts = { buffer = prompt_bufnr, silent = true, nowait = true }
+	local prompt_normal_opts = { buffer = prompt_bufnr, silent = true, nowait = true }
+	local prompt_insert_opts = {
+		buffer = prompt_bufnr,
+		silent = true,
+		nowait = true,
+		expr = true,
+	}
 	local list_opts = { buffer = list_bufnr, silent = true, nowait = true }
+	local prompt_navigation_keys = {
+		{ key = "<Down>", delta = 1 },
+		{ key = "<Up>", delta = -1 },
+		{ key = "<C-n>", delta = 1 },
+		{ key = "<C-p>", delta = -1 },
+		{ key = "<Tab>", delta = 1 },
+		{ key = "<S-Tab>", delta = -1 },
+		{ key = "<C-j>", delta = 1 },
+		{ key = "<C-k>", delta = -1 },
+	}
 
 	vim.keymap.set({ "n", "i" }, "<Esc>", function()
 		M.close()
-	end, prompt_opts)
+	end, prompt_normal_opts)
 	vim.keymap.set({ "n", "i" }, "<CR>", function()
 		execute_selected()
-	end, prompt_opts)
-	vim.keymap.set({ "n", "i" }, "<Down>", function()
-		move_selection(1)
-	end, prompt_opts)
-	vim.keymap.set({ "n", "i" }, "<Up>", function()
-		move_selection(-1)
-	end, prompt_opts)
-	vim.keymap.set({ "n", "i" }, "<C-n>", function()
-		move_selection(1)
-	end, prompt_opts)
-	vim.keymap.set({ "n", "i" }, "<C-p>", function()
-		move_selection(-1)
-	end, prompt_opts)
+	end, prompt_normal_opts)
+	for _, mapping in ipairs(prompt_navigation_keys) do
+		vim.keymap.set("n", mapping.key, function()
+			move_selection(mapping.delta)
+		end, prompt_normal_opts)
+		vim.keymap.set("i", mapping.key, function()
+			move_selection(mapping.delta)
+			return ""
+		end, prompt_insert_opts)
+	end
 
 	vim.keymap.set("n", "<CR>", function()
 		execute_selected()

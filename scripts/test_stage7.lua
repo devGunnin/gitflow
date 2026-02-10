@@ -335,9 +335,57 @@ palette_panel.open(cfg, {
 end)
 
 local prompt_bufnr = palette_panel.state.prompt_bufnr
+local prompt_winid = palette_panel.state.prompt_winid
 local list_winid = palette_panel.state.list_winid
 assert_true(prompt_bufnr ~= nil, "palette prompt buffer should exist")
+assert_true(prompt_winid ~= nil, "palette prompt window should exist")
 assert_true(list_winid ~= nil, "palette list window should exist")
+
+local function selected_palette_name()
+	local line = vim.api.nvim_win_get_cursor(list_winid)[1]
+	local entry = palette_panel.state.line_entries[line]
+	return entry and entry.name or nil
+end
+
+local function feed_prompt(keys)
+	vim.api.nvim_set_current_win(prompt_winid)
+	local termcodes = vim.api.nvim_replace_termcodes(keys, true, false, true)
+	vim.api.nvim_feedkeys(termcodes, "xt", false)
+end
+
+wait_until(function()
+	return selected_palette_name() == "status"
+end, "palette should select first entry by default")
+
+feed_prompt("<Down>")
+wait_until(function()
+	return selected_palette_name() == "sync"
+end, "prompt <Down> should move selection forward")
+
+feed_prompt("<Up>")
+wait_until(function()
+	return selected_palette_name() == "status"
+end, "prompt <Up> should move selection backward")
+
+feed_prompt("<C-n>")
+wait_until(function()
+	return selected_palette_name() == "sync"
+end, "prompt <C-n> should move selection forward")
+
+feed_prompt("<C-p>")
+wait_until(function()
+	return selected_palette_name() == "status"
+end, "prompt <C-p> should move selection backward")
+
+feed_prompt("<Tab>")
+wait_until(function()
+	return selected_palette_name() == "sync"
+end, "prompt <Tab> should move selection forward")
+
+feed_prompt("<S-Tab>")
+wait_until(function()
+	return selected_palette_name() == "status"
+end, "prompt <S-Tab> should move selection backward")
 
 vim.api.nvim_buf_set_lines(prompt_bufnr, 0, 1, false, { "sync" })
 vim.api.nvim_exec_autocmds("TextChanged", { buffer = prompt_bufnr })
@@ -351,23 +399,15 @@ wait_until(function()
 	return false
 end, "palette should filter to sync entry")
 
-local selected_line = nil
-for line, entry in pairs(palette_panel.state.line_entries) do
-	if entry.name == "sync" then
-		selected_line = line
-		break
-	end
-end
-assert_true(selected_line ~= nil, "filtered palette should include sync line")
+wait_until(function()
+	return selected_palette_name() == "sync"
+end, "filtered palette should keep sync selected")
 
-vim.api.nvim_set_current_win(list_winid)
-vim.cmd("stopinsert")
-vim.api.nvim_win_set_cursor(list_winid, { selected_line, 0 })
-vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
+feed_prompt("<CR>")
 
 wait_until(function()
 	return picked == "sync"
-end, "pressing <CR> in palette should execute selected command")
+end, "pressing <CR> in prompt should execute selected command")
 assert_true(not palette_panel.is_open(), "palette should close after selection")
 
 palette_panel.close()
