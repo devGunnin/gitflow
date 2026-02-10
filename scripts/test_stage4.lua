@@ -48,6 +48,16 @@ local function read_lines(path)
 	return vim.fn.readfile(path)
 end
 
+local function count_lines_with(lines, needle)
+	local count = 0
+	for _, line in ipairs(lines) do
+		if line:find(needle, 1, true) ~= nil then
+			count = count + 1
+		end
+	end
+	return count
+end
+
 local function assert_keymaps(bufnr, required)
 	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
 	local missing = {}
@@ -193,6 +203,8 @@ vim.fn.writefile(vim.split(gh_script, "\n", { plain = true }), gh_path)
 vim.fn.setfperm(gh_path, "rwxr-xr-x")
 
 local original_path = vim.env.PATH
+local original_input = vim.ui.input
+local original_notify = vim.notify
 vim.env.PATH = stub_bin .. ":" .. (original_path or "")
 vim.env.GITFLOW_GH_LOG = gh_log
 
@@ -218,6 +230,14 @@ assert_true(find_line(gh_log_lines, "--version") ~= nil, "setup should call gh -
 assert_true(find_line(gh_log_lines, "auth status") ~= nil, "setup should call gh auth status")
 
 local commands = require("gitflow.commands")
+local pr_panel = require("gitflow.panels.prs")
+local notifications = {}
+vim.notify = function(message, level, _)
+	notifications[#notifications + 1] = {
+		message = tostring(message),
+		level = level,
+	}
+end
 local subcommands = commands.complete("")
 for _, expected in ipairs({ "issue", "pr", "label" }) do
 	assert_true(contains(subcommands, expected), ("missing subcommand '%s'"):format(expected))
@@ -292,7 +312,41 @@ end, "pr list should render pr entries")
 
 local pr_buf = buffer.get("prs")
 assert_true(pr_buf ~= nil, "pr panel should open")
-assert_keymaps(pr_buf, { "<CR>", "c", "C", "m", "o", "q" })
+assert_keymaps(pr_buf, { "<CR>", "c", "C", "l", "m", "o", "q" })
+
+local pr_lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
+local pr_line = find_line(pr_lines, "#7 [open] Stage4 PR")
+assert_true(pr_line ~= nil, "pr list line should exist")
+vim.api.nvim_set_current_win(pr_panel.state.winid)
+vim.api.nvim_win_set_cursor(pr_panel.state.winid, { pr_line, 0 })
+
+local prompt_values = { "+bug,-wip,docs" }
+vim.ui.input = function(_, on_confirm)
+	on_confirm(table.remove(prompt_values, 1))
+end
+pr_panel.edit_labels_under_cursor()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "pr edit 7 --add-label bug,docs --remove-label wip") ~= nil
+end, "pr list label edit should call gh pr edit with add/remove labels")
+
+commands.dispatch({ "pr", "list", "open" }, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "#7 [open] Stage4 PR") ~= nil
+end, "pr list should re-render before no-selection test")
+
+vim.api.nvim_set_current_win(pr_panel.state.winid)
+vim.api.nvim_win_set_cursor(pr_panel.state.winid, { 1, 0 })
+pr_panel.edit_labels_under_cursor()
+assert_true(
+	notifications[#notifications].message == "No pull request selected",
+	"no selection should warn in pr list mode"
+)
 
 commands.dispatch({ "pr", "view", "7" }, cfg)
 wait_until(function()
@@ -312,6 +366,30 @@ wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "PR #7: Stage4 PR") ~= nil
 end, "pr view should render details")
+
+prompt_values = { "-bug,triage" }
+vim.ui.input = function(_, on_confirm)
+	on_confirm(table.remove(prompt_values, 1))
+end
+pr_panel.edit_labels_under_cursor()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "pr edit 7 --add-label triage --remove-label bug") ~= nil
+end, "pr view label edit should call gh pr edit with add/remove labels")
+
+local edit_count_before = count_lines_with(read_lines(gh_log), "pr edit 7")
+prompt_values = { "   " }
+vim.ui.input = function(_, on_confirm)
+	on_confirm(table.remove(prompt_values, 1))
+end
+pr_panel.edit_labels_under_cursor()
+assert_true(
+	notifications[#notifications].message == "No label edits provided",
+	"blank label input should warn"
+)
+vim.wait(150)
+local edit_count_after = count_lines_with(read_lines(gh_log), "pr edit 7")
+assert_equals(edit_count_after, edit_count_before, "blank label input should not call gh pr edit")
 
 commands.dispatch({ "label", "list" }, cfg)
 wait_until(function()
@@ -345,5 +423,7 @@ wait_until(function()
 		and find_line(lines, "issue close 1") ~= nil
 end, "stage4 command actions should invoke gh")
 
+vim.notify = original_notify
+vim.ui.input = original_input
 vim.env.PATH = original_path
 print("Stage 4 smoke tests passed")
