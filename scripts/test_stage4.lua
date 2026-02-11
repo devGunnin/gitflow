@@ -79,6 +79,7 @@ assert_equals(vim.fn.mkdir(stub_root, "p"), 1, "stub root should be created")
 local stub_bin = stub_root .. "/bin"
 assert_equals(vim.fn.mkdir(stub_bin, "p"), 1, "stub bin should be created")
 local gh_log = stub_root .. "/gh.log"
+local pr_edit_fail_once = stub_root .. "/pr_edit_fail_once"
 
 local gh_script = [[#!/bin/sh
 set -eu
@@ -168,10 +169,39 @@ if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "close" ]; then
   exit 0
 fi
 
-if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
-  echo "pr edit ok"
-  exit 0
-fi
+	if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+	  case " $* " in
+	    *" --add-label "*)
+	      case " $* " in
+	        *" --remove-label "*)
+	          if [ ! -f "$GITFLOW_PR_EDIT_FAIL_ONCE" ]; then
+	            : > "$GITFLOW_PR_EDIT_FAIL_ONCE"
+	            echo "GraphQL: Projects (classic) is being deprecated in favor" >&2
+	            echo "of the new Projects experience. (repository.pullRequest.projectCards)" >&2
+	            exit 1
+	          fi
+	          ;;
+	      esac
+	      ;;
+	  esac
+	  echo "pr edit ok"
+	  exit 0
+	fi
+
+	if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "POST" ] \
+	  && [ "$4" = "repos/{owner}/{repo}/issues/7/labels" ]; then
+	  echo '{"ok":true}'
+	  exit 0
+	fi
+
+	if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "DELETE" ]; then
+	  case "$4" in
+	    repos/{owner}/{repo}/issues/7/labels/*)
+	      echo '{"ok":true}'
+	      exit 0
+	      ;;
+	  esac
+	fi
 
 if [ "$#" -ge 2 ] && [ "$1" = "label" ] && [ "$2" = "list" ]; then
   sleep 0.15
@@ -207,6 +237,7 @@ local original_input = vim.ui.input
 local original_notify = vim.notify
 vim.env.PATH = stub_bin .. ":" .. (original_path or "")
 vim.env.GITFLOW_GH_LOG = gh_log
+vim.env.GITFLOW_PR_EDIT_FAIL_ONCE = pr_edit_fail_once
 
 local gitflow = require("gitflow")
 local cfg = gitflow.setup({
@@ -329,6 +360,17 @@ wait_until(function()
 	local lines = read_lines(gh_log)
 	return find_line(lines, "pr edit 7 --add-label bug,docs --remove-label wip") ~= nil
 end, "pr list label edit should call gh pr edit with add/remove labels")
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "api --method POST repos/{owner}/{repo}/issues/7/labels") ~= nil
+		and find_line(lines, "labels[]=bug") ~= nil
+		and find_line(lines, "labels[]=docs") ~= nil
+		and find_line(lines, "api --method DELETE repos/{owner}/{repo}/issues/7/labels/wip") ~= nil
+end, "pr label fallback should call gh api issue label endpoints")
+wait_until(function()
+	local notification = notifications[#notifications]
+	return notification ~= nil and notification.message == "Updated labels for PR #7"
+end, "pr list fallback should still report label update")
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -426,4 +468,5 @@ end, "stage4 command actions should invoke gh")
 vim.notify = original_notify
 vim.ui.input = original_input
 vim.env.PATH = original_path
+vim.env.GITFLOW_PR_EDIT_FAIL_ONCE = nil
 print("Stage 4 smoke tests passed")

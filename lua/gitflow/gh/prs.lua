@@ -84,6 +84,113 @@ local function error_from_result(result, action)
 	return ("gh pr %s failed: %s"):format(action, output)
 end
 
+---@param result GitflowGitResult
+---@return boolean
+local function is_project_cards_deprecation_error(result)
+	local output = vim.trim(gh.output(result)):lower()
+	if output == "" then
+		return false
+	end
+	if output:find("repository.pullrequest.projectcards", 1, true) ~= nil then
+		return true
+	end
+	return output:find("projects %(classic%) is being deprecated", 1, true) ~= nil
+end
+
+---@param result GitflowGitResult
+---@param action string
+---@return string
+local function fallback_error_from_result(result, action)
+	local output = gh.output(result)
+	if output == "" then
+		return ("gh pr edit fallback failed (%s)"):format(action)
+	end
+	return ("gh pr edit fallback failed (%s): %s"):format(action, output)
+end
+
+---@param value string|nil
+---@return string[]
+local function csv_to_list(value)
+	local items = {}
+	for _, token in ipairs(vim.split(value or "", ",", { trimempty = true })) do
+		local trimmed = vim.trim(token)
+		if trimmed ~= "" then
+			items[#items + 1] = trimmed
+		end
+	end
+	return items
+end
+
+---@param value string
+---@return string
+local function url_encode(value)
+	return (tostring(value):gsub("[^%w%-._~]", function(char)
+		return ("%%%02X"):format(string.byte(char))
+	end))
+end
+
+---@param number integer|string
+---@param add_labels string[]
+---@param remove_labels string[]
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+local function edit_labels_via_api(number, add_labels, remove_labels, opts, cb)
+	local normalized_number = normalize_number(number)
+	local endpoint = ("repos/{owner}/{repo}/issues/%s/labels"):format(normalized_number)
+
+	local function success_result(result)
+		cb(nil, result or {
+			code = 0,
+			signal = 0,
+			stdout = "PR labels updated via gh api fallback",
+			stderr = "",
+			cmd = { "gh", "api", "--method", "POST", endpoint },
+		})
+	end
+
+	local function remove_at(index, last_result)
+		if index > #remove_labels then
+			success_result(last_result)
+			return
+		end
+		local remove_endpoint = ("%s/%s"):format(endpoint, url_encode(remove_labels[index]))
+		gh.run({ "api", "--method", "DELETE", remove_endpoint }, opts, function(result)
+			if result.code ~= 0 then
+				cb(fallback_error_from_result(result, "remove-label"), result)
+				return
+			end
+			remove_at(index + 1, result)
+		end)
+	end
+
+	local function run_remove_phase(last_result)
+		if #remove_labels == 0 then
+			success_result(last_result)
+			return
+		end
+		remove_at(1, last_result)
+	end
+
+	if #add_labels == 0 then
+		run_remove_phase(nil)
+		return
+	end
+
+	local add_args = { "api", "--method", "POST", endpoint }
+	for _, label in ipairs(add_labels) do
+		add_args[#add_args + 1] = "-f"
+		add_args[#add_args + 1] = ("labels[]=%s"):format(label)
+	end
+
+	gh.run(add_args, opts, function(result)
+		if result.code ~= 0 then
+			cb(fallback_error_from_result(result, "add-label"), result)
+			return
+		end
+		run_remove_phase(result)
+	end)
+end
+
 ---@param mode string|nil
 ---@return string|nil
 local function normalize_review_mode(mode)
@@ -388,6 +495,9 @@ function M.edit(number, input, opts, cb)
 		changed = true
 	end
 
+	local add_label_list = csv_to_list(add_labels)
+	local remove_label_list = csv_to_list(remove_labels)
+
 	if not changed then
 		cb(nil, {
 			code = 0,
@@ -401,6 +511,11 @@ function M.edit(number, input, opts, cb)
 
 	gh.run(args, opts, function(result)
 		if result.code ~= 0 then
+			local has_label_edits = #add_label_list > 0 or #remove_label_list > 0
+			if has_label_edits and not reviewers and is_project_cards_deprecation_error(result) then
+				edit_labels_via_api(number, add_label_list, remove_label_list, opts, cb)
+				return
+			end
 			cb(error_from_result(result, "edit"), result)
 			return
 		end
