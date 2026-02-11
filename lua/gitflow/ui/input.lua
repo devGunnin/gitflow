@@ -13,6 +13,25 @@ local M = {}
 local next_completion_id = 0
 local next_cancel_id = 0
 
+---@param lhs string
+---@return table|nil
+local function get_cmdline_mapping(lhs)
+	local mapping = vim.fn.maparg(lhs, "c", false, true)
+	if type(mapping) ~= "table" or mapping.lhs == nil then
+		return nil
+	end
+	return mapping
+end
+
+---@param lhs string
+---@param mapping table|nil
+local function restore_cmdline_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "c", lhs)
+	if mapping then
+		pcall(vim.fn.mapset, "c", false, mapping)
+	end
+end
+
 ---@param completion string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]|nil
 ---@return string|nil, fun(), boolean
 local function resolve_completion(completion)
@@ -68,6 +87,16 @@ local function force_cmdline_completion_defaults()
 	end
 end
 
+---@return fun()
+local function force_cmdline_tab_completion_key()
+	local original_tab_mapping = get_cmdline_mapping("<Tab>")
+	pcall(vim.keymap.del, "c", "<Tab>")
+
+	return function()
+		restore_cmdline_mapping("<Tab>", original_tab_mapping)
+	end
+end
+
 ---@param opts GitflowPromptOpts
 ---@param completion string
 ---@param force_completion_defaults boolean
@@ -76,8 +105,10 @@ local function prompt_with_builtin_completion(opts, completion, force_completion
 	next_cancel_id = next_cancel_id + 1
 	local cancel_token = ("__gitflow_prompt_cancel_%d__"):format(next_cancel_id)
 	local cleanup_cmdline_defaults = function() end
+	local cleanup_cmdline_tab_completion_key = function() end
 	if force_completion_defaults then
 		cleanup_cmdline_defaults = force_cmdline_completion_defaults()
+		cleanup_cmdline_tab_completion_key = force_cmdline_tab_completion_key()
 	end
 
 	vim.fn.inputsave()
@@ -88,6 +119,7 @@ local function prompt_with_builtin_completion(opts, completion, force_completion
 		cancelreturn = cancel_token,
 	})
 	vim.fn.inputrestore()
+	cleanup_cmdline_tab_completion_key()
 	cleanup_cmdline_defaults()
 
 	if not ok then

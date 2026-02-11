@@ -317,6 +317,7 @@ local completion_function_name = nil
 local ui_input_calls = 0
 local inputsave_calls = 0
 local inputrestore_calls = 0
+local sentinel_tab_mapping = "PleneryBustedDirectory"
 local original_ui_input = vim.ui.input
 local original_fn_input = vim.fn.input
 local original_inputsave = vim.fn.inputsave
@@ -325,6 +326,23 @@ local original_wildchar = vim.o.wildchar
 local original_wildcharm = vim.o.wildcharm
 local original_wildmenu = vim.o.wildmenu
 local original_wildmode = vim.o.wildmode
+
+local function current_cmdline_mapping(lhs)
+	local mapping = vim.fn.maparg(lhs, "c", false, true)
+	if type(mapping) ~= "table" or mapping.lhs == nil then
+		return nil
+	end
+	return mapping
+end
+
+local function restore_cmdline_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "c", lhs)
+	if mapping then
+		vim.fn.mapset("c", false, mapping)
+	end
+end
+
+local original_tab_mapping = current_cmdline_mapping("<Tab>")
 local sentinel_wildchar = 26
 local sentinel_wildcharm = 26
 local sentinel_wildmenu = false
@@ -334,6 +352,8 @@ vim.o.wildchar = sentinel_wildchar
 vim.o.wildcharm = sentinel_wildcharm
 vim.o.wildmenu = sentinel_wildmenu
 vim.o.wildmode = sentinel_wildmode
+
+vim.cmd(("cnoremap <Tab> %s"):format(sentinel_tab_mapping))
 
 vim.ui.input = function(_, _)
 	ui_input_calls = ui_input_calls + 1
@@ -363,6 +383,10 @@ vim.fn.input = function(opts)
 		vim.o.wildmode,
 		"longest:full,full",
 		"issue label prompt should force completion wildmode"
+	)
+	assert_true(
+		current_cmdline_mapping("<Tab>") == nil,
+		"issue label prompt should temporarily disable cmdline <Tab> mappings"
 	)
 
 	completion_function_name = issue_prompt_completion:match("^customlist,v:lua%.([%w_]+)$")
@@ -411,6 +435,14 @@ assert_equals(vim.o.wildchar, sentinel_wildchar, "issue label prompt should rest
 assert_equals(vim.o.wildcharm, sentinel_wildcharm, "issue label prompt should restore wildcharm")
 assert_equals(vim.o.wildmenu, sentinel_wildmenu, "issue label prompt should restore wildmenu")
 assert_equals(vim.o.wildmode, sentinel_wildmode, "issue label prompt should restore wildmode")
+local restored_tab_mapping = current_cmdline_mapping("<Tab>")
+assert_true(restored_tab_mapping ~= nil, "issue label prompt should restore cmdline <Tab> mapping")
+assert_equals(
+	restored_tab_mapping.rhs,
+	sentinel_tab_mapping,
+	"issue label prompt should restore cmdline <Tab> mapping"
+)
+restore_cmdline_mapping("<Tab>", original_tab_mapping)
 vim.ui.input = original_ui_input
 vim.fn.input = original_fn_input
 vim.fn.inputsave = original_inputsave
