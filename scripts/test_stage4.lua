@@ -321,6 +321,19 @@ local original_ui_input = vim.ui.input
 local original_fn_input = vim.fn.input
 local original_inputsave = vim.fn.inputsave
 local original_inputrestore = vim.fn.inputrestore
+local original_wildchar = vim.o.wildchar
+local original_wildcharm = vim.o.wildcharm
+local original_wildmenu = vim.o.wildmenu
+local original_wildmode = vim.o.wildmode
+local sentinel_wildchar = 26
+local sentinel_wildcharm = 26
+local sentinel_wildmenu = false
+local sentinel_wildmode = "full"
+
+vim.o.wildchar = sentinel_wildchar
+vim.o.wildcharm = sentinel_wildcharm
+vim.o.wildmenu = sentinel_wildmenu
+vim.o.wildmode = sentinel_wildmode
 
 vim.ui.input = function(_, _)
 	ui_input_calls = ui_input_calls + 1
@@ -342,6 +355,14 @@ vim.fn.input = function(opts)
 	assert_true(
 		type(issue_prompt_completion) == "string",
 		"issue label prompt should configure completion"
+	)
+	assert_equals(vim.o.wildchar, 9, "issue label prompt should force wildchar to <Tab>")
+	assert_equals(vim.o.wildcharm, 9, "issue label prompt should force wildcharm to <Tab>")
+	assert_true(vim.o.wildmenu, "issue label prompt should force wildmenu")
+	assert_equals(
+		vim.o.wildmode,
+		"longest:full,full",
+		"issue label prompt should force completion wildmode"
 	)
 
 	completion_function_name = issue_prompt_completion:match("^customlist,v:lua%.([%w_]+)$")
@@ -386,10 +407,18 @@ assert_true(
 assert_equals(ui_input_calls, 0, "issue label prompt should bypass vim.ui.input")
 assert_equals(inputsave_calls, 1, "issue label prompt should call inputsave once")
 assert_equals(inputrestore_calls, 1, "issue label prompt should call inputrestore once")
+assert_equals(vim.o.wildchar, sentinel_wildchar, "issue label prompt should restore wildchar")
+assert_equals(vim.o.wildcharm, sentinel_wildcharm, "issue label prompt should restore wildcharm")
+assert_equals(vim.o.wildmenu, sentinel_wildmenu, "issue label prompt should restore wildmenu")
+assert_equals(vim.o.wildmode, sentinel_wildmode, "issue label prompt should restore wildmode")
 vim.ui.input = original_ui_input
 vim.fn.input = original_fn_input
 vim.fn.inputsave = original_inputsave
 vim.fn.inputrestore = original_inputrestore
+vim.o.wildchar = original_wildchar
+vim.o.wildcharm = original_wildcharm
+vim.o.wildmenu = original_wildmenu
+vim.o.wildmode = original_wildmode
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()

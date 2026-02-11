@@ -14,10 +14,10 @@ local next_completion_id = 0
 local next_cancel_id = 0
 
 ---@param completion string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]|nil
----@return string|nil, fun()
+---@return string|nil, fun(), boolean
 local function resolve_completion(completion)
 	if type(completion) ~= "function" then
-		return completion, function() end
+		return completion, function() end, false
 	end
 
 	next_completion_id = next_completion_id + 1
@@ -43,15 +43,42 @@ local function resolve_completion(completion)
 		_G[completion_name] = nil
 	end
 
-	return "customlist,v:lua." .. completion_name, cleanup
+	return "customlist,v:lua." .. completion_name, cleanup, true
+end
+
+---@return fun()
+local function force_cmdline_completion_defaults()
+	local previous = {
+		wildchar = vim.o.wildchar,
+		wildcharm = vim.o.wildcharm,
+		wildmenu = vim.o.wildmenu,
+		wildmode = vim.o.wildmode,
+	}
+
+	vim.o.wildchar = 9
+	vim.o.wildcharm = 9
+	vim.o.wildmenu = true
+	vim.o.wildmode = "longest:full,full"
+
+	return function()
+		vim.o.wildchar = previous.wildchar
+		vim.o.wildcharm = previous.wildcharm
+		vim.o.wildmenu = previous.wildmenu
+		vim.o.wildmode = previous.wildmode
+	end
 end
 
 ---@param opts GitflowPromptOpts
 ---@param completion string
+---@param force_completion_defaults boolean
 ---@return string|nil
-local function prompt_with_builtin_completion(opts, completion)
+local function prompt_with_builtin_completion(opts, completion, force_completion_defaults)
 	next_cancel_id = next_cancel_id + 1
 	local cancel_token = ("__gitflow_prompt_cancel_%d__"):format(next_cancel_id)
+	local cleanup_cmdline_defaults = function() end
+	if force_completion_defaults then
+		cleanup_cmdline_defaults = force_cmdline_completion_defaults()
+	end
 
 	vim.fn.inputsave()
 	local ok, value = pcall(vim.fn.input, {
@@ -61,6 +88,7 @@ local function prompt_with_builtin_completion(opts, completion)
 		cancelreturn = cancel_token,
 	})
 	vim.fn.inputrestore()
+	cleanup_cmdline_defaults()
 
 	if not ok then
 		if opts.on_cancel then
@@ -82,9 +110,10 @@ end
 ---@param opts GitflowPromptOpts
 ---@param on_confirm fun(value: string)
 function M.prompt(opts, on_confirm)
-	local completion, cleanup_completion = resolve_completion(opts.completion)
+	local completion, cleanup_completion, force_completion_defaults =
+		resolve_completion(opts.completion)
 	if completion then
-		local value = prompt_with_builtin_completion(opts, completion)
+		local value = prompt_with_builtin_completion(opts, completion, force_completion_defaults)
 		cleanup_completion()
 		if value == nil then
 			return
