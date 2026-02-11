@@ -169,39 +169,39 @@ if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "close" ]; then
   exit 0
 fi
 
-	if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
-	  case " $* " in
-	    *" --add-label "*)
-	      case " $* " in
-	        *" --remove-label "*)
-	          if [ ! -f "$GITFLOW_PR_EDIT_FAIL_ONCE" ]; then
-	            : > "$GITFLOW_PR_EDIT_FAIL_ONCE"
-	            echo "GraphQL: Projects (classic) is being deprecated in favor" >&2
-	            echo "of the new Projects experience. (repository.pullRequest.projectCards)" >&2
-	            exit 1
-	          fi
-	          ;;
-	      esac
-	      ;;
-	  esac
-	  echo "pr edit ok"
-	  exit 0
-	fi
+if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  case " $* " in
+    *" --add-label "*)
+      case " $* " in
+        *" --remove-label "*)
+          if [ ! -f "$GITFLOW_PR_EDIT_FAIL_ONCE" ]; then
+            : > "$GITFLOW_PR_EDIT_FAIL_ONCE"
+            echo "GraphQL: Projects (classic) is being deprecated in favor" >&2
+            echo "of the new Projects experience. (repository.pullRequest.projectCards)" >&2
+            exit 1
+          fi
+          ;;
+      esac
+      ;;
+  esac
+  echo "pr edit ok"
+  exit 0
+fi
 
-	if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "POST" ] \
-	  && [ "$4" = "repos/{owner}/{repo}/issues/7/labels" ]; then
-	  echo '{"ok":true}'
-	  exit 0
-	fi
+if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "POST" ] \
+  && [ "$4" = "repos/{owner}/{repo}/issues/7/labels" ]; then
+  echo '{"ok":true}'
+  exit 0
+fi
 
-	if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "DELETE" ]; then
-	  case "$4" in
-	    repos/{owner}/{repo}/issues/7/labels/*)
-	      echo '{"ok":true}'
-	      exit 0
-	      ;;
-	  esac
-	fi
+if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "DELETE" ]; then
+  case "$4" in
+    repos/{owner}/{repo}/issues/7/labels/*)
+      echo '{"ok":true}'
+      exit 0
+      ;;
+  esac
+fi
 
 if [ "$#" -ge 2 ] && [ "$1" = "label" ] && [ "$2" = "list" ]; then
   sleep 0.15

@@ -94,7 +94,7 @@ local function is_project_cards_deprecation_error(result)
 	if output:find("repository.pullrequest.projectcards", 1, true) ~= nil then
 		return true
 	end
-	return output:find("projects %(classic%) is being deprecated", 1, true) ~= nil
+	return output:find("projects (classic) is being deprecated", 1, true) ~= nil
 end
 
 ---@param result GitflowGitResult
