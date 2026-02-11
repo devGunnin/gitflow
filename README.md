@@ -29,9 +29,9 @@ flowchart TB
   PANELS --> GITMOD
   PANELS --> GHMOD
   UI -->|Lua API calls| NVAPI
-  GITMOD -->|Process I/O (stdout/stderr)| GITCLI
-  GHMOD -->|CLI JSON over stdout| GHCLI
-  GHCLI -->|HTTPS REST/GraphQL| GHAPI
+  GITMOD -->|Process IO stdout and stderr| GITCLI
+  GHMOD -->|CLI JSON output| GHCLI
+  GHCLI -->|HTTPS REST and GraphQL| GHAPI
 ```
 
 ## Basic Configuration
