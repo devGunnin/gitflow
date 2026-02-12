@@ -16,6 +16,10 @@ local review_panel = require("gitflow.panels.review")
 
 local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
+local PRS_FLOAT_TITLE = "Gitflow Pull Requests"
+local PRS_FLOAT_FOOTER =
+	"<CR> view  c create  C comment  L labels  m merge  o checkout"
+	.. "  v review  r refresh  b back  q close"
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -46,15 +50,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "prs",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "prs",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = PRS_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and PRS_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "prs",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "<CR>", function()
 		M.view_under_cursor()
@@ -180,7 +201,11 @@ local function render_list(prs)
 		"Gitflow Pull Requests",
 		"",
 		("Filters: state=%s base=%s head=%s"):
-			format(maybe_text(M.state.filters.state), maybe_text(M.state.filters.base), maybe_text(M.state.filters.head)),
+			format(
+				maybe_text(M.state.filters.state),
+				maybe_text(M.state.filters.base),
+				maybe_text(M.state.filters.head)
+			),
 		("PRs (%d)"):format(#prs),
 	}
 	local line_entries = {}
@@ -246,7 +271,8 @@ local function render_view(pr)
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Review requests: %d"):format(type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0)
+	lines[#lines + 1] = ("Review requests: %d"):
+		format(type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0)
 	lines[#lines + 1] = ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0)
 	lines[#lines + 1] = ("Comments: %d"):format(type(pr.comments) == "table" and #pr.comments or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)

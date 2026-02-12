@@ -37,6 +37,10 @@ local conflict_panel = require("gitflow.panels.conflict")
 
 local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
+local STATUS_FLOAT_TITLE = "Gitflow Status"
+local STATUS_FLOAT_FOOTER =
+	"s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
+	.. "  cx conflicts  p push  X revert  r refresh  q close"
 
 ---@type GitflowStatusPanelState
 M.state = {
@@ -188,16 +192,34 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "status",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-			M.state.active = false
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "status",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = STATUS_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and STATUS_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+				M.state.active = false
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "status",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+				M.state.active = false
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "s", function()
 		M.stage_under_cursor()

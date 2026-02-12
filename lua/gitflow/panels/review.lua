@@ -63,6 +63,10 @@ local gh_prs = require("gitflow.gh.prs")
 
 local M = {}
 local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
+local REVIEW_FLOAT_FOOTER =
+	"]f/[f files  ]c/[c hunks  c comment  S submit"
+	.. "  a approve  x changes  R reply"
+	.. "  <leader>t toggle  <leader>b back  r refresh  q close"
 
 ---@type GitflowPrReviewPanelState
 M.state = {
@@ -103,6 +107,11 @@ local function ensure_window(cfg)
 	-- B3: save current window so we can restore it on close
 	M.state.prev_winid = vim.api.nvim_get_current_win()
 
+	local title = "Gitflow PR Review"
+	if M.state.pr_number then
+		title = ("Gitflow PR Review #%d"):format(M.state.pr_number)
+	end
+
 	-- B3: fullscreen floating window that overlays the editor
 	M.state.winid = ui.window.open_float({
 		name = "review",
@@ -111,7 +120,11 @@ local function ensure_window(cfg)
 		height = 1.0,
 		row = 0,
 		col = 0,
-		border = "none",
+		border = cfg.ui.float.border,
+		title = title,
+		title_pos = cfg.ui.float.title_pos,
+		footer = cfg.ui.float.footer and REVIEW_FLOAT_FOOTER or nil,
+		footer_pos = cfg.ui.float.footer_pos,
 		on_close = function()
 			M.state.winid = nil
 		end,
