@@ -38,6 +38,13 @@ local utils = require("gitflow.utils")
 ---@class GitflowHighlightConfig
 ---@field [string] table
 
+---@class GitflowSignsConfig
+---@field enable boolean
+---@field added string
+---@field modified string
+---@field deleted string
+---@field conflict string
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
@@ -46,6 +53,7 @@ local utils = require("gitflow.utils")
 ---@field sync GitflowSyncConfig
 ---@field quick_actions GitflowQuickActionsConfig
 ---@field highlights GitflowHighlightConfig
+---@field signs GitflowSignsConfig
 
 local M = {}
 
@@ -104,6 +112,13 @@ function M.defaults()
 			quick_push = { "commit", "push" },
 		},
 		highlights = {},
+		signs = {
+			enable = true,
+			added = "+",
+			modified = "~",
+			deleted = "−",
+			conflict = "!",
+		},
 	}
 end
 
@@ -264,6 +279,36 @@ local function validate_highlights(config)
 end
 
 ---@param config GitflowConfig
+local function validate_signs(config)
+	if type(config.signs) ~= "table" then
+		error("gitflow config error: signs must be a table", 3)
+	end
+
+	if type(config.signs.enable) ~= "boolean" then
+		error("gitflow config error: signs.enable must be a boolean", 3)
+	end
+
+	local function validate_sign_text(name, value)
+		if type(value) ~= "string" then
+			error(("gitflow config error: signs.%s must be a string"):format(name), 3)
+		end
+
+		local width = vim.fn.strdisplaywidth(value)
+		if width < 1 or width > 2 then
+			error(
+				("gitflow config error: signs.%s must be 1-2 cells wide"):format(name),
+				3
+			)
+		end
+	end
+
+	validate_sign_text("added", config.signs.added)
+	validate_sign_text("modified", config.signs.modified)
+	validate_sign_text("deleted", config.signs.deleted)
+	validate_sign_text("conflict", config.signs.conflict)
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
@@ -272,6 +317,7 @@ function M.validate(config)
 	validate_sync(config)
 	validate_quick_actions(config)
 	validate_highlights(config)
+	validate_signs(config)
 end
 
 ---@param opts table|nil

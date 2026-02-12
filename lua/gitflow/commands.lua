@@ -134,6 +134,10 @@ local function refresh_status_panel_if_open()
 	end
 end
 
+local function emit_post_operation()
+	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
+end
+
 ---@param message string|nil
 local function run_stash_push(message)
 	git_stash.push({ message = message }, function(err, result)
@@ -153,6 +157,7 @@ local function run_stash_push(message)
 			stash_panel.refresh()
 		end
 		refresh_status_panel_if_open()
+		emit_post_operation()
 	end)
 end
 
@@ -217,6 +222,7 @@ local function open_commit_prompt(amend)
 
 				show_info(result_message(commit_result, "Commit created"))
 				refresh_status_panel_if_open()
+				emit_post_operation()
 			end)
 		end)
 	end)
@@ -262,6 +268,7 @@ local function push_with_upstream(on_done)
 				return
 			end
 			show_info(result_message(push_result, "Pushed with upstream tracking"))
+			emit_post_operation()
 			if on_done then
 				on_done(true)
 			end
@@ -274,6 +281,7 @@ local function run_push(on_done)
 	git.git({ "push" }, {}, function(result)
 		if result.code == 0 then
 			show_info(result_message(result, "Push completed"))
+			emit_post_operation()
 			if on_done then
 				on_done(true)
 			end
@@ -300,6 +308,7 @@ local function run_pull()
 			return
 		end
 		show_info(result_message(result, "Pull completed"))
+		emit_post_operation()
 	end)
 end
 
@@ -311,6 +320,7 @@ local function run_fetch(remote)
 			return
 		end
 		show_info(result_message(result, "Fetch completed"))
+		emit_post_operation()
 		if branch_panel.is_open() then
 			branch_panel.refresh()
 		end
@@ -375,6 +385,7 @@ local function run_quick_commit_flow(on_done)
 
 					show_info(result_message(commit_result, "Commit created"))
 					refresh_status_panel_if_open()
+					emit_post_operation()
 					if on_done then
 						on_done(true)
 					end
@@ -496,6 +507,7 @@ local function run_merge(branch, cfg)
 
 			show_info(("%s\n%s"):format(merge_type, output))
 			refresh_status_panel_if_open()
+			emit_post_operation()
 			return
 		end
 
@@ -517,6 +529,7 @@ local function run_merge_abort(cfg)
 			conflict_panel.close()
 		end
 		refresh_status_panel_if_open()
+		emit_post_operation()
 	end)
 end
 
@@ -537,6 +550,7 @@ local function run_rebase(args, cfg)
 				conflict_panel.close()
 			end
 			refresh_status_panel_if_open()
+			emit_post_operation()
 			return
 		end
 
@@ -558,6 +572,7 @@ local function run_cherry_pick(commit, cfg)
 			local output = result_message(result, ("Cherry-picked %s"):format(commit))
 			show_info(output)
 			refresh_status_panel_if_open()
+			emit_post_operation()
 			return
 		end
 
@@ -751,6 +766,7 @@ local function run_sync(cfg)
 			end
 
 			show_info(result_message(pull_result, "Pull completed"))
+			emit_post_operation()
 			git_branch.is_ahead_of_upstream({}, function(ahead_err, ahead, count)
 				if ahead_err then
 					show_error(
@@ -1063,6 +1079,7 @@ local function register_builtin_subcommands(cfg)
 						stash_panel.refresh()
 					end
 					refresh_status_panel_if_open()
+					emit_post_operation()
 				end)
 				return "Running git stash pop..."
 			end
@@ -1081,6 +1098,7 @@ local function register_builtin_subcommands(cfg)
 					if stash_panel.is_open() then
 						stash_panel.refresh()
 					end
+					emit_post_operation()
 				end)
 				return "Running git stash drop..."
 			end

@@ -394,12 +394,17 @@ local function notify_if_error(err)
 	return false
 end
 
+local function emit_post_operation()
+	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
+end
+
 ---@param operation fun(cb: fun(err: string|nil))
 local function run_status_operation(operation)
 	operation(function(err)
 		if notify_if_error(err) then
 			return
 		end
+		emit_post_operation()
 		M.refresh()
 	end)
 end
@@ -583,6 +588,7 @@ function M.push_under_cursor()
 				output = ("Pushed through %s"):format(commit.short_sha)
 			end
 			utils.notify(output, vim.log.levels.INFO)
+			emit_post_operation()
 			M.refresh()
 		end)
 	end)
@@ -609,6 +615,7 @@ function M.revert_under_cursor()
 			return
 		end
 		utils.notify(("Reverted changes in '%s'"):format(entry.path), vim.log.levels.INFO)
+		emit_post_operation()
 		M.refresh()
 	end)
 end
