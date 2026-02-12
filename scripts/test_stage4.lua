@@ -74,6 +74,21 @@ local function assert_keymaps(bufnr, required)
 	end
 end
 
+local function current_cmdline_mapping(lhs)
+	local mapping = vim.fn.maparg(lhs, "c", false, true)
+	if type(mapping) ~= "table" or mapping.lhs == nil then
+		return nil
+	end
+	return mapping
+end
+
+local function restore_cmdline_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "c", lhs)
+	if mapping then
+		vim.fn.mapset("c", false, mapping)
+	end
+end
+
 local stub_root = vim.fn.tempname()
 assert_equals(vim.fn.mkdir(stub_root, "p"), 1, "stub root should be created")
 local stub_bin = stub_root .. "/bin"
@@ -234,6 +249,13 @@ vim.fn.setfperm(gh_path, "rwxr-xr-x")
 
 local original_path = vim.env.PATH
 local original_input = vim.ui.input
+local original_fn_input = vim.fn.input
+local original_inputsave = vim.fn.inputsave
+local original_inputrestore = vim.fn.inputrestore
+local original_wildchar = vim.o.wildchar
+local original_wildcharm = vim.o.wildcharm
+local original_wildmenu = vim.o.wildmenu
+local original_wildmode = vim.o.wildmode
 local original_notify = vim.notify
 vim.env.PATH = stub_bin .. ":" .. (original_path or "")
 vim.env.GITFLOW_GH_LOG = gh_log
@@ -352,9 +374,75 @@ vim.api.nvim_set_current_win(pr_panel.state.winid)
 vim.api.nvim_win_set_cursor(pr_panel.state.winid, { pr_line, 0 })
 
 local prompt_values = { "+bug,-wip,docs" }
-vim.ui.input = function(_, on_confirm)
-	on_confirm(table.remove(prompt_values, 1))
+local completion_function_name = nil
+local ui_input_calls = 0
+local inputsave_calls = 0
+local inputrestore_calls = 0
+local sentinel_tab_mapping = "PlenaryBustedDirectory"
+local original_tab_mapping = current_cmdline_mapping("<Tab>")
+local sentinel_wildchar = 26
+local sentinel_wildcharm = 26
+local sentinel_wildmenu = false
+local sentinel_wildmode = "full"
+
+vim.o.wildchar = sentinel_wildchar
+vim.o.wildcharm = sentinel_wildcharm
+vim.o.wildmenu = sentinel_wildmenu
+vim.o.wildmode = sentinel_wildmode
+vim.cmd(("cnoremap <Tab> %s"):format(sentinel_tab_mapping))
+
+vim.ui.input = function(_, _)
+	ui_input_calls = ui_input_calls + 1
+	error("pr label prompt should not use vim.ui.input when completion is configured", 2)
 end
+
+vim.fn.inputsave = function()
+	inputsave_calls = inputsave_calls + 1
+	return 1
+end
+
+vim.fn.inputrestore = function()
+	inputrestore_calls = inputrestore_calls + 1
+	return 1
+end
+
+vim.fn.input = function(opts)
+	local completion = opts.completion
+	assert_true(type(completion) == "string", "pr label prompt should configure completion")
+	assert_equals(vim.o.wildchar, 9, "pr label prompt should force wildchar to <Tab>")
+	assert_equals(vim.o.wildcharm, 9, "pr label prompt should force wildcharm to <Tab>")
+	assert_true(vim.o.wildmenu, "pr label prompt should force wildmenu")
+	assert_equals(vim.o.wildmode, "longest:full,full", "pr label prompt should force wildmode")
+	assert_true(
+		current_cmdline_mapping("<Tab>") == nil,
+		"pr label prompt should temporarily disable cmdline <Tab> mappings"
+	)
+
+	completion_function_name = completion:match("^customlist,v:lua%.([%w_]+)$")
+	assert_true(completion_function_name ~= nil, "pr label prompt should use custom completion")
+	assert_true(type(_G[completion_function_name]) == "function", "completion function should exist")
+
+	local add_candidates = _G[completion_function_name]("d", "", 0)
+	assert_true(
+		contains(add_candidates, "docs"),
+		"pr label completion should suggest matching add label"
+	)
+
+	local remove_candidates = _G[completion_function_name]("-d", "", 0)
+	assert_true(
+		contains(remove_candidates, "-docs"),
+		"pr label completion should preserve remove prefix"
+	)
+
+	local multi_candidates = _G[completion_function_name]("+bug,d", "", 0)
+	assert_true(
+		contains(multi_candidates, "+bug,docs"),
+		"pr label completion should support comma-separated values"
+	)
+
+	return table.remove(prompt_values, 1)
+end
+
 pr_panel.edit_labels_under_cursor()
 wait_until(function()
 	local lines = read_lines(gh_log)
@@ -371,6 +459,35 @@ wait_until(function()
 	local notification = notifications[#notifications]
 	return notification ~= nil and notification.message == "Updated labels for PR #7"
 end, "pr list fallback should still report label update")
+assert_true(
+	completion_function_name ~= nil and _G[completion_function_name] == nil,
+	"pr label completion function should be cleaned up after input"
+)
+assert_equals(ui_input_calls, 0, "pr label prompt should bypass vim.ui.input")
+assert_equals(inputsave_calls, 1, "pr label prompt should call inputsave once")
+assert_equals(inputrestore_calls, 1, "pr label prompt should call inputrestore once")
+assert_equals(vim.o.wildchar, sentinel_wildchar, "pr label prompt should restore wildchar")
+assert_equals(vim.o.wildcharm, sentinel_wildcharm, "pr label prompt should restore wildcharm")
+assert_equals(vim.o.wildmenu, sentinel_wildmenu, "pr label prompt should restore wildmenu")
+assert_equals(vim.o.wildmode, sentinel_wildmode, "pr label prompt should restore wildmode")
+local restored_tab_mapping = current_cmdline_mapping("<Tab>")
+assert_true(restored_tab_mapping ~= nil, "pr label prompt should restore cmdline <Tab> mapping")
+assert_equals(
+	restored_tab_mapping.rhs,
+	sentinel_tab_mapping,
+	"pr label prompt should restore cmdline <Tab> mapping"
+)
+restore_cmdline_mapping("<Tab>", original_tab_mapping)
+vim.ui.input = original_input
+vim.fn.input = function(_)
+	return table.remove(prompt_values, 1)
+end
+vim.fn.inputsave = function()
+	return 1
+end
+vim.fn.inputrestore = function()
+	return 1
+end
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -410,9 +527,6 @@ wait_until(function()
 end, "pr view should render details")
 
 prompt_values = { "-bug,triage" }
-vim.ui.input = function(_, on_confirm)
-	on_confirm(table.remove(prompt_values, 1))
-end
 pr_panel.edit_labels_under_cursor()
 wait_until(function()
 	local lines = read_lines(gh_log)
@@ -421,9 +535,6 @@ end, "pr view label edit should call gh pr edit with add/remove labels")
 
 local edit_count_before = count_lines_with(read_lines(gh_log), "pr edit 7")
 prompt_values = { "   " }
-vim.ui.input = function(_, on_confirm)
-	on_confirm(table.remove(prompt_values, 1))
-end
 pr_panel.edit_labels_under_cursor()
 assert_true(
 	notifications[#notifications].message == "No label edits provided",
@@ -467,6 +578,13 @@ end, "stage4 command actions should invoke gh")
 
 vim.notify = original_notify
 vim.ui.input = original_input
+vim.fn.input = original_fn_input
+vim.fn.inputsave = original_inputsave
+vim.fn.inputrestore = original_inputrestore
+vim.o.wildchar = original_wildchar
+vim.o.wildcharm = original_wildcharm
+vim.o.wildmenu = original_wildmenu
+vim.o.wildmode = original_wildmode
 vim.env.PATH = original_path
 vim.env.GITFLOW_PR_EDIT_FAIL_ONCE = nil
 print("Stage 4 smoke tests passed")
