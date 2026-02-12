@@ -3,6 +3,37 @@
 Unified Neovim workflow for `git` and `gh`: local git primitives, GitHub workflows,
 and review UI in one interface.
 
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph NV["Neovim Runtime (Lua)"]
+    ENTRY["plugin/gitflow.lua<br/>Entry + command registration"]
+    CORE["lua/gitflow/init.lua<br/>Setup + orchestration"]
+    SUPPORT["Support modules<br/>config, commands, highlights, utils"]
+    PANELS["Panel layer<br/>lua/gitflow/panels/*"]
+    UI["UI primitives<br/>lua/gitflow/ui/*"]
+    GITMOD["Git modules<br/>lua/gitflow/git/*"]
+    GHMOD["GitHub modules<br/>lua/gitflow/gh/*"]
+  end
+
+  NVAPI["Neovim API"]
+  GITCLI["git CLI"]
+  GHCLI["gh CLI"]
+  GHAPI["GitHub API"]
+
+  ENTRY --> CORE
+  CORE --> SUPPORT
+  CORE --> PANELS
+  PANELS --> UI
+  PANELS --> GITMOD
+  PANELS --> GHMOD
+  UI -->|Lua API calls| NVAPI
+  GITMOD -->|Process IO stdout and stderr| GITCLI
+  GHMOD -->|CLI JSON output| GHCLI
+  GHCLI -->|HTTPS REST and GraphQL| GHAPI
+```
+
 ## Basic Configuration
 
 Example plugin setup (lazy.nvim style):

@@ -120,16 +120,10 @@ local function output_or_default(result)
 	return output
 end
 
----@param output string
----@return boolean
-local function output_mentions_no_local_changes(output)
-	return output:lower():find("no local changes to save", 1, true) ~= nil
-end
-
 ---@param result GitflowGitResult
 local function notify_push_result(result)
 	local output = output_or_default(result)
-	if output_mentions_no_local_changes(output) then
+	if git_stash.output_mentions_no_local_changes(output) then
 		utils.notify(output, vim.log.levels.WARN)
 		return
 	end

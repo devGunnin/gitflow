@@ -301,6 +301,46 @@ for _, expected in ipairs({ "list", "view", "create", "comment", "close", "reope
 	assert_true(contains(issue_actions, expected), ("missing issue action '%s'"):format(expected))
 end
 
+local pr_actions = commands.complete("", "Gitflow pr ", 0)
+for _, expected in ipairs({
+	"list",
+	"view",
+	"review",
+	"submit-review",
+	"respond",
+	"create",
+	"comment",
+	"merge",
+	"checkout",
+	"close",
+	"edit",
+}) do
+	assert_true(contains(pr_actions, expected), ("missing pr action '%s'"):format(expected))
+end
+
+local issue_edit_tokens = commands.complete("", "Gitflow issue edit 1 ", 0)
+assert_true(contains(issue_edit_tokens, "add="), "issue edit completion should include add=")
+assert_true(contains(issue_edit_tokens, "remove="), "issue edit completion should include remove=")
+
+local issue_add_completion = commands.complete("add=b", "Gitflow issue edit 1 add=b", 0)
+assert_true(
+	contains(issue_add_completion, "add=bug"),
+	"issue edit add completion should suggest labels"
+)
+
+local issue_add_multi = commands.complete("add=bug,d", "Gitflow issue edit 1 add=bug,d", 0)
+assert_true(
+	contains(issue_add_multi, "add=bug,docs"),
+	"issue edit add completion should support comma-separated labels"
+)
+
+local pr_edit_tokens = commands.complete("", "Gitflow pr edit 7 ", 0)
+assert_true(contains(pr_edit_tokens, "add="), "pr edit completion should include add=")
+assert_true(contains(pr_edit_tokens, "remove="), "pr edit completion should include remove=")
+
+local pr_add_completion = commands.complete("add=d", "Gitflow pr edit 7 add=d", 0)
+assert_true(contains(pr_add_completion, "add=docs"), "pr edit add completion should suggest labels")
+
 commands.dispatch({ "issue", "list", "open" }, cfg)
 local buffer = require("gitflow.ui.buffer")
 wait_until(function()
@@ -343,6 +383,147 @@ wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "Issue #1: Stage4 issue") ~= nil
 end, "issue view should render issue details")
+
+local issues_panel = require("gitflow.panels.issues")
+local issue_prompt_completion = nil
+local completion_function_name = nil
+local ui_input_calls = 0
+local inputsave_calls = 0
+local inputrestore_calls = 0
+local sentinel_tab_mapping = "PleneryBustedDirectory"
+local original_ui_input = vim.ui.input
+local original_fn_input = vim.fn.input
+local original_inputsave = vim.fn.inputsave
+local original_inputrestore = vim.fn.inputrestore
+local original_wildchar = vim.o.wildchar
+local original_wildcharm = vim.o.wildcharm
+local original_wildmenu = vim.o.wildmenu
+local original_wildmode = vim.o.wildmode
+
+local function current_cmdline_mapping(lhs)
+	local mapping = vim.fn.maparg(lhs, "c", false, true)
+	if type(mapping) ~= "table" or mapping.lhs == nil then
+		return nil
+	end
+	return mapping
+end
+
+local function restore_cmdline_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "c", lhs)
+	if mapping then
+		vim.fn.mapset("c", false, mapping)
+	end
+end
+
+local original_tab_mapping = current_cmdline_mapping("<Tab>")
+local sentinel_wildchar = 26
+local sentinel_wildcharm = 26
+local sentinel_wildmenu = false
+local sentinel_wildmode = "full"
+
+vim.o.wildchar = sentinel_wildchar
+vim.o.wildcharm = sentinel_wildcharm
+vim.o.wildmenu = sentinel_wildmenu
+vim.o.wildmode = sentinel_wildmode
+
+vim.cmd(("cnoremap <Tab> %s"):format(sentinel_tab_mapping))
+
+vim.ui.input = function(_, _)
+	ui_input_calls = ui_input_calls + 1
+	error("issue label prompt should not use vim.ui.input when completion is configured", 2)
+end
+
+vim.fn.inputsave = function()
+	inputsave_calls = inputsave_calls + 1
+	return 1
+end
+
+vim.fn.inputrestore = function()
+	inputrestore_calls = inputrestore_calls + 1
+	return 1
+end
+
+vim.fn.input = function(opts)
+	issue_prompt_completion = opts.completion
+	assert_true(
+		type(issue_prompt_completion) == "string",
+		"issue label prompt should configure completion"
+	)
+	assert_equals(vim.o.wildchar, 9, "issue label prompt should force wildchar to <Tab>")
+	assert_equals(vim.o.wildcharm, 9, "issue label prompt should force wildcharm to <Tab>")
+	assert_true(vim.o.wildmenu, "issue label prompt should force wildmenu")
+	assert_equals(
+		vim.o.wildmode,
+		"longest:full,full",
+		"issue label prompt should force completion wildmode"
+	)
+	assert_true(
+		current_cmdline_mapping("<Tab>") == nil,
+		"issue label prompt should temporarily disable cmdline <Tab> mappings"
+	)
+
+	completion_function_name = issue_prompt_completion:match("^customlist,v:lua%.([%w_]+)$")
+	assert_true(completion_function_name ~= nil, "issue label prompt should use custom completion")
+	assert_true(
+		type(_G[completion_function_name]) == "function",
+		"custom completion function should exist"
+	)
+
+	local add_candidates = _G[completion_function_name]("d", "", 0)
+	assert_true(
+		contains(add_candidates, "docs"),
+		"issue label completion should suggest matching add label"
+	)
+
+	local remove_candidates = _G[completion_function_name]("-d", "", 0)
+	assert_true(
+		contains(remove_candidates, "-docs"),
+		"issue label completion should preserve remove prefix"
+	)
+
+	local multi_candidates = _G[completion_function_name]("+bug,d", "", 0)
+	assert_true(
+		contains(multi_candidates, "+bug,docs"),
+		"issue label completion should support comma-separated values"
+	)
+
+	return "+docs"
+end
+
+local gh_lines_before_label_edit = #read_lines(gh_log)
+issues_panel.edit_labels_under_cursor()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "issue edit 1 --add-label docs", gh_lines_before_label_edit + 1) ~= nil
+end, "issue panel label edit should invoke gh issue edit")
+
+assert_true(
+	completion_function_name ~= nil and _G[completion_function_name] == nil,
+	"issue label completion function should be cleaned up after input"
+)
+assert_equals(ui_input_calls, 0, "issue label prompt should bypass vim.ui.input")
+assert_equals(inputsave_calls, 1, "issue label prompt should call inputsave once")
+assert_equals(inputrestore_calls, 1, "issue label prompt should call inputrestore once")
+assert_equals(vim.o.wildchar, sentinel_wildchar, "issue label prompt should restore wildchar")
+assert_equals(vim.o.wildcharm, sentinel_wildcharm, "issue label prompt should restore wildcharm")
+assert_equals(vim.o.wildmenu, sentinel_wildmenu, "issue label prompt should restore wildmenu")
+assert_equals(vim.o.wildmode, sentinel_wildmode, "issue label prompt should restore wildmode")
+local restored_tab_mapping = current_cmdline_mapping("<Tab>")
+assert_true(restored_tab_mapping ~= nil, "issue label prompt should restore cmdline <Tab> mapping")
+assert_equals(
+	restored_tab_mapping.rhs,
+	sentinel_tab_mapping,
+	"issue label prompt should restore cmdline <Tab> mapping"
+)
+restore_cmdline_mapping("<Tab>", original_tab_mapping)
+vim.ui.input = original_ui_input
+vim.fn.input = original_fn_input
+vim.fn.inputsave = original_inputsave
+vim.fn.inputrestore = original_inputrestore
+vim.o.wildchar = original_wildchar
+vim.o.wildcharm = original_wildcharm
+vim.o.wildmenu = original_wildmenu
+vim.o.wildmode = original_wildmode
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -564,6 +745,7 @@ wait_until(function()
 end, "label list should render labels")
 
 commands.dispatch({ "label", "create", "stage4", "00ff00", "Green", "label" }, cfg)
+commands.dispatch({ "pr", "edit", "7", "add=bug,docs", "remove=wip", "reviewers=octocat" }, cfg)
 commands.dispatch({ "pr", "merge", "7", "squash" }, cfg)
 commands.dispatch({ "pr", "checkout", "7" }, cfg)
 commands.dispatch({ "issue", "close", "1" }, cfg)
@@ -571,6 +753,9 @@ commands.dispatch({ "issue", "close", "1" }, cfg)
 wait_until(function()
 	local lines = read_lines(gh_log)
 	return find_line(lines, "label create stage4 --color 00ff00 --description Green label") ~= nil
+		and find_line(lines, "label list --json name --limit 200") ~= nil
+		and find_line(lines, "pr edit 7 --add-label bug,docs --remove-label wip --add-reviewer octocat")
+			~= nil
 		and find_line(lines, "pr merge 7 --squash") ~= nil
 		and find_line(lines, "pr checkout 7") ~= nil
 		and find_line(lines, "issue close 1") ~= nil
