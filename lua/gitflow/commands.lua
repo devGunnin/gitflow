@@ -21,6 +21,7 @@ local review_panel = require("gitflow.panels.review")
 local conflict_panel = require("gitflow.panels.conflict")
 local palette_panel = require("gitflow.panels.palette")
 local git_conflict = require("gitflow.git.conflict")
+local label_completion = require("gitflow.completion.labels")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -1238,7 +1239,7 @@ local function register_builtin_subcommands(cfg)
 
 	M.subcommands.pr = {
 		description = "GitHub PRs: list|view|review|submit-review|respond|create|comment|"
-			.. "merge|checkout|close",
+			.. "merge|checkout|close|edit",
 		run = function(ctx)
 			local ready, prerequisite_error = gh.ensure_prerequisites()
 			if not ready then
@@ -1484,6 +1485,42 @@ local function register_builtin_subcommands(cfg)
 				return ("Closing PR #%s..."):format(number)
 			end
 
+			if action == "edit" then
+				local number = first_positional_from(ctx.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr edit <number> [add=...] [remove=...] [reviewers=...]"
+				end
+
+				local edit_opts = {}
+				for i = 4, #ctx.args do
+					local token = ctx.args[i]
+					local add = token:match("^add=(.+)$")
+					if add then
+						edit_opts.add_labels = parse_csv(add)
+					end
+					local remove = token:match("^remove=(.+)$")
+					if remove then
+						edit_opts.remove_labels = parse_csv(remove)
+					end
+					local reviewers = token:match("^reviewers=(.+)$")
+					if reviewers then
+						edit_opts.reviewers = parse_csv(reviewers)
+					end
+				end
+
+				gh_prs.edit(number, edit_opts, {}, function(err, _result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Updated PR #%s"):format(number))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Updating PR #%s..."):format(number)
+			end
+
 			return ("Unknown pr action: %s"):format(action)
 		end,
 	}
@@ -1717,7 +1754,7 @@ end
 local issue_actions = { "list", "view", "create", "comment", "close", "reopen", "edit" }
 local pr_actions = {
 	"list", "view", "review", "submit-review", "respond",
-	"create", "comment", "merge", "checkout", "close",
+	"create", "comment", "merge", "checkout", "close", "edit",
 }
 local label_actions = { "list", "create", "delete" }
 
@@ -1794,6 +1831,10 @@ local function complete_pr(subaction, arglead)
 		return filter_candidates(
 			arglead, { "merge", "squash", "rebase" }
 		)
+	end
+
+	if subaction == "edit" then
+		return filter_candidates(arglead, { "add=", "remove=", "reviewers=" })
 	end
 
 	if subaction == "review" or subaction == "submit-review" then
@@ -1919,11 +1960,23 @@ function M.complete(arglead, cmdline, _cursorpos)
 		if completing_action(cmdline, args) then
 			return filter_candidates(arglead, issue_actions)
 		end
+		if args[3] == "edit" and vim.startswith(arglead, "add=") then
+			return label_completion.complete_token(arglead, "add")
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "remove=") then
+			return label_completion.complete_token(arglead, "remove")
+		end
 		return complete_issue(args[3], arglead)
 	end
 	if subcommand == "pr" then
 		if completing_action(cmdline, args) then
 			return filter_candidates(arglead, pr_actions)
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "add=") then
+			return label_completion.complete_token(arglead, "add")
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "remove=") then
+			return label_completion.complete_token(arglead, "remove")
 		end
 		return complete_pr(args[3], arglead)
 	end

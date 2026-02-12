@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_issues = require("gitflow.gh.issues")
+local label_completion = require("gitflow.completion.labels")
 
 ---@class GitflowIssuePanelState
 ---@field bufnr integer|nil
@@ -534,7 +535,12 @@ function M.edit_labels_under_cursor()
 		return
 	end
 
-	input.prompt({ prompt = "Labels (+bug,-wip,docs): " }, function(value)
+	input.prompt({
+		prompt = "Labels (+bug,-wip,docs): ",
+		completion = function(arglead, _, _)
+			return label_completion.complete_issue_patch(arglead)
+		end,
+	}, function(value)
 		local add_labels, remove_labels = parse_label_patch(value)
 		if #add_labels == 0 and #remove_labels == 0 then
 			utils.notify("No label edits provided", vim.log.levels.WARN)
