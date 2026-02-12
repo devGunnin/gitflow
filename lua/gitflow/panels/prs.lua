@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
+local label_completion = require("gitflow.completion.labels")
 local review_panel = require("gitflow.panels.review")
 
 ---@class GitflowPrPanelState
@@ -65,6 +66,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "C", function()
 		M.comment_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "L", function()
+		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "m", function()
@@ -196,8 +201,8 @@ local function render_list(prs)
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] =
-		"<CR>: view  c: create  C: comment  m: merge  o: checkout  v: review  r: refresh  q: quit"
+	lines[#lines + 1] = "<CR>: view  c: create  C: comment  L: labels  m: merge"
+		.. "  o: checkout  v: review  r: refresh  q: quit"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = line_entries
@@ -246,7 +251,8 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Comments: %d"):format(type(pr.comments) == "table" and #pr.comments or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "b: back to list  C: comment  m: merge  o: checkout  v: review  r: refresh"
+	lines[#lines + 1] =
+		"b: back to list  C: comment  L: labels  m: merge  o: checkout  v: review  r: refresh"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}
@@ -354,6 +360,28 @@ local function parse_csv_input(value)
 	return items
 end
 
+---@param value string
+---@return string[], string[]
+local function parse_label_patch(value)
+	local add = {}
+	local remove = {}
+	for _, token in ipairs(vim.split(value or "", ",", { trimempty = true })) do
+		local trimmed = vim.trim(token)
+		if trimmed == "" then
+			goto continue
+		end
+		if vim.startswith(trimmed, "+") then
+			add[#add + 1] = vim.trim(trimmed:sub(2))
+		elseif vim.startswith(trimmed, "-") then
+			remove[#remove + 1] = vim.trim(trimmed:sub(2))
+		else
+			add[#add + 1] = trimmed
+		end
+		::continue::
+	end
+	return add, remove
+end
+
 function M.create_interactive()
 	if not M.state.cfg then
 		return
@@ -433,6 +461,52 @@ function M.comment_under_cursor()
 		return
 	end
 	comment_on_pr(number)
+end
+
+function M.edit_labels_under_cursor()
+	local number = M.state.active_pr_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No pull request selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+
+	input.prompt({
+		prompt = "Labels (+bug,-wip,docs): ",
+		completion = function(arglead, _, _)
+			return label_completion.complete_issue_patch(arglead)
+		end,
+	}, function(value)
+		local add_labels, remove_labels = parse_label_patch(value)
+		if #add_labels == 0 and #remove_labels == 0 then
+			utils.notify("No label edits provided", vim.log.levels.WARN)
+			return
+		end
+
+		gh_prs.edit(number, {
+			add_labels = add_labels,
+			remove_labels = remove_labels,
+		}, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(("Updated labels for PR #%s"):format(tostring(number)), vim.log.levels.INFO)
+			if M.state.mode == "view" then
+				M.open_view(number)
+			else
+				M.refresh()
+			end
+		end)
+	end)
 end
 
 function M.merge_under_cursor()

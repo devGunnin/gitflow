@@ -48,6 +48,16 @@ local function read_lines(path)
 	return vim.fn.readfile(path)
 end
 
+local function count_lines_with(lines, needle)
+	local count = 0
+	for _, line in ipairs(lines) do
+		if line:find(needle, 1, true) ~= nil then
+			count = count + 1
+		end
+	end
+	return count
+end
+
 local function assert_keymaps(bufnr, required)
 	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
 	local missing = {}
@@ -64,11 +74,36 @@ local function assert_keymaps(bufnr, required)
 	end
 end
 
+local function assert_keymap_absent(bufnr, lhs)
+	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
+	for _, map in ipairs(keymaps) do
+		if map.lhs == lhs then
+			error(("unexpected keymap '%s'"):format(lhs), 2)
+		end
+	end
+end
+
+local function current_cmdline_mapping(lhs)
+	local mapping = vim.fn.maparg(lhs, "c", false, true)
+	if type(mapping) ~= "table" or mapping.lhs == nil then
+		return nil
+	end
+	return mapping
+end
+
+local function restore_cmdline_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "c", lhs)
+	if mapping then
+		vim.fn.mapset("c", false, mapping)
+	end
+end
+
 local stub_root = vim.fn.tempname()
 assert_equals(vim.fn.mkdir(stub_root, "p"), 1, "stub root should be created")
 local stub_bin = stub_root .. "/bin"
 assert_equals(vim.fn.mkdir(stub_bin, "p"), 1, "stub bin should be created")
 local gh_log = stub_root .. "/gh.log"
+local pr_edit_fail_once = stub_root .. "/pr_edit_fail_once"
 
 local gh_script = [[#!/bin/sh
 set -eu
@@ -159,8 +194,37 @@ if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "close" ]; then
 fi
 
 if [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  case " $* " in
+    *" --add-label "*)
+      case " $* " in
+        *" --remove-label "*)
+          if [ ! -f "$GITFLOW_PR_EDIT_FAIL_ONCE" ]; then
+            : > "$GITFLOW_PR_EDIT_FAIL_ONCE"
+            echo "GraphQL: Projects (classic) is being deprecated in favor" >&2
+            echo "of the new Projects experience. (repository.pullRequest.projectCards)" >&2
+            exit 1
+          fi
+          ;;
+      esac
+      ;;
+  esac
   echo "pr edit ok"
   exit 0
+fi
+
+if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "POST" ] \
+  && [ "$4" = "repos/{owner}/{repo}/issues/7/labels" ]; then
+  echo '{"ok":true}'
+  exit 0
+fi
+
+if [ "$#" -ge 4 ] && [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "DELETE" ]; then
+  case "$4" in
+    repos/{owner}/{repo}/issues/7/labels/*)
+      echo '{"ok":true}'
+      exit 0
+      ;;
+  esac
 fi
 
 if [ "$#" -ge 2 ] && [ "$1" = "label" ] && [ "$2" = "list" ]; then
@@ -193,8 +257,18 @@ vim.fn.writefile(vim.split(gh_script, "\n", { plain = true }), gh_path)
 vim.fn.setfperm(gh_path, "rwxr-xr-x")
 
 local original_path = vim.env.PATH
+local original_input = vim.ui.input
+local original_fn_input = vim.fn.input
+local original_inputsave = vim.fn.inputsave
+local original_inputrestore = vim.fn.inputrestore
+local original_wildchar = vim.o.wildchar
+local original_wildcharm = vim.o.wildcharm
+local original_wildmenu = vim.o.wildmenu
+local original_wildmode = vim.o.wildmode
+local original_notify = vim.notify
 vim.env.PATH = stub_bin .. ":" .. (original_path or "")
 vim.env.GITFLOW_GH_LOG = gh_log
+vim.env.GITFLOW_PR_EDIT_FAIL_ONCE = pr_edit_fail_once
 
 local gitflow = require("gitflow")
 local cfg = gitflow.setup({
@@ -218,6 +292,14 @@ assert_true(find_line(gh_log_lines, "--version") ~= nil, "setup should call gh -
 assert_true(find_line(gh_log_lines, "auth status") ~= nil, "setup should call gh auth status")
 
 local commands = require("gitflow.commands")
+local pr_panel = require("gitflow.panels.prs")
+local notifications = {}
+vim.notify = function(message, level, _)
+	notifications[#notifications + 1] = {
+		message = tostring(message),
+		level = level,
+	}
+end
 local subcommands = commands.complete("")
 for _, expected in ipairs({ "issue", "pr", "label" }) do
 	assert_true(contains(subcommands, expected), ("missing subcommand '%s'"):format(expected))
@@ -290,7 +372,8 @@ end, "issue list should render issue entries")
 
 local issue_buf = buffer.get("issues")
 assert_true(issue_buf ~= nil, "issue panel should open")
-assert_keymaps(issue_buf, { "<CR>", "c", "C", "x", "l", "q" })
+assert_keymaps(issue_buf, { "<CR>", "c", "C", "x", "L", "q" })
+assert_keymap_absent(issue_buf, "l")
 
 commands.dispatch({ "issue", "view", "1" }, cfg)
 wait_until(function()
@@ -473,7 +556,148 @@ end, "pr list should render pr entries")
 
 local pr_buf = buffer.get("prs")
 assert_true(pr_buf ~= nil, "pr panel should open")
-assert_keymaps(pr_buf, { "<CR>", "c", "C", "m", "o", "q" })
+assert_keymaps(pr_buf, { "<CR>", "c", "C", "L", "m", "o", "q" })
+assert_keymap_absent(pr_buf, "l")
+
+local pr_lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
+local pr_line = find_line(pr_lines, "#7 [open] Stage4 PR")
+assert_true(pr_line ~= nil, "pr list line should exist")
+vim.api.nvim_set_current_win(pr_panel.state.winid)
+vim.api.nvim_win_set_cursor(pr_panel.state.winid, { pr_line, 0 })
+
+local prompt_values = { "+bug,-wip,docs" }
+local completion_function_name = nil
+local ui_input_calls = 0
+local inputsave_calls = 0
+local inputrestore_calls = 0
+local sentinel_tab_mapping = "PlenaryBustedDirectory"
+local original_tab_mapping = current_cmdline_mapping("<Tab>")
+local sentinel_wildchar = 26
+local sentinel_wildcharm = 26
+local sentinel_wildmenu = false
+local sentinel_wildmode = "full"
+
+vim.o.wildchar = sentinel_wildchar
+vim.o.wildcharm = sentinel_wildcharm
+vim.o.wildmenu = sentinel_wildmenu
+vim.o.wildmode = sentinel_wildmode
+vim.cmd(("cnoremap <Tab> %s"):format(sentinel_tab_mapping))
+
+vim.ui.input = function(_, _)
+	ui_input_calls = ui_input_calls + 1
+	error("pr label prompt should not use vim.ui.input when completion is configured", 2)
+end
+
+vim.fn.inputsave = function()
+	inputsave_calls = inputsave_calls + 1
+	return 1
+end
+
+vim.fn.inputrestore = function()
+	inputrestore_calls = inputrestore_calls + 1
+	return 1
+end
+
+vim.fn.input = function(opts)
+	local completion = opts.completion
+	assert_true(type(completion) == "string", "pr label prompt should configure completion")
+	assert_equals(vim.o.wildchar, 9, "pr label prompt should force wildchar to <Tab>")
+	assert_equals(vim.o.wildcharm, 9, "pr label prompt should force wildcharm to <Tab>")
+	assert_true(vim.o.wildmenu, "pr label prompt should force wildmenu")
+	assert_equals(vim.o.wildmode, "longest:full,full", "pr label prompt should force wildmode")
+	assert_true(
+		current_cmdline_mapping("<Tab>") == nil,
+		"pr label prompt should temporarily disable cmdline <Tab> mappings"
+	)
+
+	completion_function_name = completion:match("^customlist,v:lua%.([%w_]+)$")
+	assert_true(completion_function_name ~= nil, "pr label prompt should use custom completion")
+	assert_true(type(_G[completion_function_name]) == "function", "completion function should exist")
+
+	local add_candidates = _G[completion_function_name]("d", "", 0)
+	assert_true(
+		contains(add_candidates, "docs"),
+		"pr label completion should suggest matching add label"
+	)
+
+	local remove_candidates = _G[completion_function_name]("-d", "", 0)
+	assert_true(
+		contains(remove_candidates, "-docs"),
+		"pr label completion should preserve remove prefix"
+	)
+
+	local multi_candidates = _G[completion_function_name]("+bug,d", "", 0)
+	assert_true(
+		contains(multi_candidates, "+bug,docs"),
+		"pr label completion should support comma-separated values"
+	)
+
+	return table.remove(prompt_values, 1)
+end
+
+pr_panel.edit_labels_under_cursor()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "pr edit 7 --add-label bug,docs --remove-label wip") ~= nil
+end, "pr list label edit should call gh pr edit with add/remove labels")
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "api --method POST repos/{owner}/{repo}/issues/7/labels") ~= nil
+		and find_line(lines, "labels[]=bug") ~= nil
+		and find_line(lines, "labels[]=docs") ~= nil
+		and find_line(lines, "api --method DELETE repos/{owner}/{repo}/issues/7/labels/wip") ~= nil
+end, "pr label fallback should call gh api issue label endpoints")
+wait_until(function()
+	local notification = notifications[#notifications]
+	return notification ~= nil and notification.message == "Updated labels for PR #7"
+end, "pr list fallback should still report label update")
+assert_true(
+	completion_function_name ~= nil and _G[completion_function_name] == nil,
+	"pr label completion function should be cleaned up after input"
+)
+assert_equals(ui_input_calls, 0, "pr label prompt should bypass vim.ui.input")
+assert_equals(inputsave_calls, 1, "pr label prompt should call inputsave once")
+assert_equals(inputrestore_calls, 1, "pr label prompt should call inputrestore once")
+assert_equals(vim.o.wildchar, sentinel_wildchar, "pr label prompt should restore wildchar")
+assert_equals(vim.o.wildcharm, sentinel_wildcharm, "pr label prompt should restore wildcharm")
+assert_equals(vim.o.wildmenu, sentinel_wildmenu, "pr label prompt should restore wildmenu")
+assert_equals(vim.o.wildmode, sentinel_wildmode, "pr label prompt should restore wildmode")
+local restored_tab_mapping = current_cmdline_mapping("<Tab>")
+assert_true(restored_tab_mapping ~= nil, "pr label prompt should restore cmdline <Tab> mapping")
+assert_equals(
+	restored_tab_mapping.rhs,
+	sentinel_tab_mapping,
+	"pr label prompt should restore cmdline <Tab> mapping"
+)
+restore_cmdline_mapping("<Tab>", original_tab_mapping)
+vim.ui.input = original_input
+vim.fn.input = function(_)
+	return table.remove(prompt_values, 1)
+end
+vim.fn.inputsave = function()
+	return 1
+end
+vim.fn.inputrestore = function()
+	return 1
+end
+
+commands.dispatch({ "pr", "list", "open" }, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "#7 [open] Stage4 PR") ~= nil
+end, "pr list should re-render before no-selection test")
+
+vim.api.nvim_set_current_win(pr_panel.state.winid)
+vim.api.nvim_win_set_cursor(pr_panel.state.winid, { 1, 0 })
+pr_panel.edit_labels_under_cursor()
+assert_true(
+	notifications[#notifications].message == "No pull request selected",
+	"no selection should warn in pr list mode"
+)
 
 commands.dispatch({ "pr", "view", "7" }, cfg)
 wait_until(function()
@@ -493,6 +717,24 @@ wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "PR #7: Stage4 PR") ~= nil
 end, "pr view should render details")
+
+prompt_values = { "-bug,triage" }
+pr_panel.edit_labels_under_cursor()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "pr edit 7 --add-label triage --remove-label bug") ~= nil
+end, "pr view label edit should call gh pr edit with add/remove labels")
+
+local edit_count_before = count_lines_with(read_lines(gh_log), "pr edit 7")
+prompt_values = { "   " }
+pr_panel.edit_labels_under_cursor()
+assert_true(
+	notifications[#notifications].message == "No label edits provided",
+	"blank label input should warn"
+)
+vim.wait(150)
+local edit_count_after = count_lines_with(read_lines(gh_log), "pr edit 7")
+assert_equals(edit_count_after, edit_count_before, "blank label input should not call gh pr edit")
 
 commands.dispatch({ "label", "list" }, cfg)
 wait_until(function()
@@ -530,5 +772,15 @@ wait_until(function()
 		and find_line(lines, "issue close 1") ~= nil
 end, "stage4 command actions should invoke gh")
 
+vim.notify = original_notify
+vim.ui.input = original_input
+vim.fn.input = original_fn_input
+vim.fn.inputsave = original_inputsave
+vim.fn.inputrestore = original_inputrestore
+vim.o.wildchar = original_wildchar
+vim.o.wildcharm = original_wildcharm
+vim.o.wildmenu = original_wildmenu
+vim.o.wildmode = original_wildmode
 vim.env.PATH = original_path
+vim.env.GITFLOW_PR_EDIT_FAIL_ONCE = nil
 print("Stage 4 smoke tests passed")

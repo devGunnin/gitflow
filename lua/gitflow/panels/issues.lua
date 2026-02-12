@@ -71,7 +71,7 @@ local function ensure_window(cfg)
 		M.close_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "l", function()
+	vim.keymap.set("n", "L", function()
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -202,7 +202,7 @@ local function render_list(issues)
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: view  c: create  C: comment  x: close  l: labels  r: refresh  q: quit"
+	lines[#lines + 1] = "<CR>: view  c: create  C: comment  x: close  L: labels  r: refresh  q: quit"
 
 	ui.buffer.update("issues", lines)
 	M.state.line_entries = line_entries
@@ -268,7 +268,7 @@ local function render_view(issue)
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  x: close  l: labels  r: refresh"
+	lines[#lines + 1] = "b: back to list  C: comment  x: close  L: labels  r: refresh"
 
 	ui.buffer.update("issues", lines)
 	M.state.line_entries = {}
