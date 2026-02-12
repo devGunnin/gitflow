@@ -119,6 +119,10 @@ gh.check_prerequisites = function(_)
 end
 
 local gitflow = require("gitflow")
+assert_true(
+	type(gitflow.statusline) == "function",
+	"statusline export should be a callable function"
+)
 gitflow.setup({})
 
 assert_true(type(gitflow.statusline()) == "string", "statusline() should return plain string")
@@ -128,6 +132,16 @@ wait_until(function()
 	return value:find(branch, 1, true) ~= nil and output_has_count(value, "↑1")
 		and output_has_count(value, "↓1")
 end, "statusline should include branch and ahead/behind counts")
+
+local original_cmd = vim.cmd
+local redrawstatus_calls = 0
+vim.cmd = function(command)
+	if type(command) == "string" and vim.trim(command) == "redrawstatus" then
+		redrawstatus_calls = redrawstatus_calls + 1
+		return
+	end
+	return original_cmd(command)
+end
 
 vim.cmd("edit " .. vim.fn.fnameescape(repo_dir .. "/tracked.txt"))
 vim.api.nvim_buf_set_lines(0, 0, -1, false, {
@@ -139,6 +153,9 @@ vim.cmd("write")
 wait_until(function()
 	return output_has_count(gitflow.statusline(), "*")
 end, "BufWritePost should refresh statusline dirty marker")
+wait_until(function()
+	return redrawstatus_calls > 0
+end, "statusline refresh should request redrawstatus after cache updates")
 
 run_git(repo_dir, { "add", "tracked.txt" })
 run_git(repo_dir, { "commit", "-m", "clear dirty state" })
@@ -147,6 +164,9 @@ vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
 wait_until(function()
 	return not output_has_count(gitflow.statusline(), "*")
 end, "GitflowPostOperation should refresh cache after git operations")
+wait_until(function()
+	return redrawstatus_calls > 1
+end, "post-operation refresh should request redrawstatus")
 
 wait_until(function()
 	return not output_has_count(gitflow.statusline(), "*")
@@ -168,6 +188,7 @@ wait_until(function()
 	return gitflow.statusline() == ""
 end, "statusline should return empty string outside git repositories")
 
+vim.cmd = original_cmd
 gh.check_prerequisites = original_check_prerequisites
 vim.fn.chdir(previous_cwd)
 

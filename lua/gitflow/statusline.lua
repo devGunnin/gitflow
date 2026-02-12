@@ -79,14 +79,26 @@ local function notify_waiters(value)
 	end
 end
 
+local function redraw_statusline()
+	vim.schedule(function()
+		pcall(vim.cmd, "redrawstatus")
+	end)
+end
+
 ---@param value string
 ---@param cwd string
 local function finish_refresh(value, cwd)
-	M.state.cache = value or ""
+	local normalized = value or ""
+	local changed = M.state.cache ~= normalized or M.state.cwd ~= cwd or not M.state.warmed
+
+	M.state.cache = normalized
 	M.state.cwd = cwd
 	M.state.warmed = true
 	M.state.updating = false
 	notify_waiters(M.state.cache)
+	if changed then
+		redraw_statusline()
+	end
 
 	if M.state.pending then
 		M.state.pending = false
