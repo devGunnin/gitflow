@@ -68,7 +68,7 @@ local function ensure_window(cfg)
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "l", function()
+	vim.keymap.set("n", "L", function()
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -201,7 +201,7 @@ local function render_list(prs)
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: view  c: create  C: comment  l: labels  m: merge"
+	lines[#lines + 1] = "<CR>: view  c: create  C: comment  L: labels  m: merge"
 		.. "  o: checkout  v: review  r: refresh  q: quit"
 
 	ui.buffer.update("prs", lines)
@@ -252,7 +252,7 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
 	lines[#lines + 1] = ""
 	lines[#lines + 1] =
-		"b: back to list  C: comment  l: labels  m: merge  o: checkout  v: review  r: refresh"
+		"b: back to list  C: comment  L: labels  m: merge  o: checkout  v: review  r: refresh"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}

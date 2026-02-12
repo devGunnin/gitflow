@@ -74,6 +74,15 @@ local function assert_keymaps(bufnr, required)
 	end
 end
 
+local function assert_keymap_absent(bufnr, lhs)
+	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
+	for _, map in ipairs(keymaps) do
+		if map.lhs == lhs then
+			error(("unexpected keymap '%s'"):format(lhs), 2)
+		end
+	end
+end
+
 local function current_cmdline_mapping(lhs)
 	local mapping = vim.fn.maparg(lhs, "c", false, true)
 	if type(mapping) ~= "table" or mapping.lhs == nil then
@@ -363,7 +372,8 @@ end, "issue list should render issue entries")
 
 local issue_buf = buffer.get("issues")
 assert_true(issue_buf ~= nil, "issue panel should open")
-assert_keymaps(issue_buf, { "<CR>", "c", "C", "x", "l", "q" })
+assert_keymaps(issue_buf, { "<CR>", "c", "C", "x", "L", "q" })
+assert_keymap_absent(issue_buf, "l")
 
 commands.dispatch({ "issue", "view", "1" }, cfg)
 wait_until(function()
@@ -546,7 +556,8 @@ end, "pr list should render pr entries")
 
 local pr_buf = buffer.get("prs")
 assert_true(pr_buf ~= nil, "pr panel should open")
-assert_keymaps(pr_buf, { "<CR>", "c", "C", "l", "m", "o", "q" })
+assert_keymaps(pr_buf, { "<CR>", "c", "C", "L", "m", "o", "q" })
+assert_keymap_absent(pr_buf, "l")
 
 local pr_lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
 local pr_line = find_line(pr_lines, "#7 [open] Stage4 PR")
