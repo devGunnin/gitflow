@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
 
@@ -8,6 +9,12 @@ local git_diff = require("gitflow.git.diff")
 ---@field request table|nil
 
 local M = {}
+
+local BASE_TITLE = "Gitflow Diff"
+local FOOTER_HINTS = {
+	{ key = "r", label = "Refresh" },
+	{ key = "q", label = "Close" },
+}
 
 ---@type GitflowDiffPanelState
 M.state = {
@@ -20,7 +27,7 @@ M.state = {
 ---@return string[]
 local function to_lines(text)
 	if text == "" then
-		return { "(no diff output)" }
+		return {}
 	end
 	return vim.split(text, "\n", { plain = true })
 end
@@ -29,18 +36,51 @@ end
 ---@return string
 local function request_to_title(request)
 	if request.commit then
-		return ("Gitflow Diff (%s)"):format(request.commit:sub(1, 8))
+		return ("%s (%s)"):format(BASE_TITLE, request.commit:sub(1, 8))
 	end
 	if request.staged then
 		if request.path then
-			return ("Gitflow Diff --staged (%s)"):format(request.path)
+			return ("%s --staged (%s)"):format(BASE_TITLE, request.path)
 		end
-		return "Gitflow Diff --staged"
+		return ("%s --staged"):format(BASE_TITLE)
 	end
 	if request.path then
-		return ("Gitflow Diff (%s)"):format(request.path)
+		return ("%s (%s)"):format(BASE_TITLE, request.path)
 	end
-	return "Gitflow Diff"
+	return BASE_TITLE
+end
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@param title string
+---@return integer
+local function open_panel_window(cfg, bufnr, title)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "diff",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = title,
+			title_pos = cfg.ui.float.title_pos,
+			footer = ui_render.format_key_hints(FOOTER_HINTS),
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "diff",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
 end
 
 ---@param cfg GitflowConfig
@@ -62,15 +102,8 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "diff",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	local title = request_to_title(M.state.request or {})
+	M.state.winid = open_panel_window(cfg, bufnr, title)
 
 	vim.keymap.set("n", "q", function()
 		M.close()
@@ -83,11 +116,28 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
----@param _title string
+---@param title string
 ---@param text string
-local function render(_title, text)
+local function render(title, text)
+	local spec = ui_render.new()
+	ui_render.title(spec, title)
+
 	local lines = to_lines(text)
-	ui.buffer.update("diff", lines)
+	if #lines == 0 then
+		ui_render.empty(spec, "no diff output")
+	else
+		for _, line in ipairs(lines) do
+			local line_number = ui_render.line(spec, line)
+			if vim.startswith(line, "diff --git") then
+				ui_render.highlight(spec, line_number, "GitflowHeader")
+			elseif vim.startswith(line, "@@") then
+				ui_render.highlight(spec, line_number, "GitflowSection")
+			end
+		end
+	end
+
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("diff", spec)
 end
 
 ---@param cfg GitflowConfig

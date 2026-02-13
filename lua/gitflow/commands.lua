@@ -79,6 +79,9 @@ local function open_panel(cfg)
 			height = cfg.ui.float.height,
 			border = cfg.ui.float.border,
 			title = cfg.ui.float.title,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer,
+			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.panel_window = nil
 			end,

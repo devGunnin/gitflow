@@ -20,6 +20,41 @@ Example plugin setup (lazy.nvim style):
 }
 ```
 
+## Unified Theme System
+
+All panels now share a common title/header/footer renderer and the same highlight group set.
+You can override any group through `setup({ highlights = { ... } })`.
+
+```lua
+require("gitflow").setup({
+  ui = {
+    default_layout = "float",
+    float = {
+      border = "rounded",
+      title_pos = "center",
+      footer_pos = "center",
+    },
+  },
+  highlights = {
+    GitflowTitle = { link = "Title" },
+    GitflowBorder = { link = "FloatBorder" },
+  },
+})
+```
+
+Default theme groups:
+- `GitflowBorder`
+- `GitflowTitle`
+- `GitflowHeader`
+- `GitflowSection`
+- `GitflowSeparator`
+- `GitflowMuted`
+- `GitflowFooter`
+- `GitflowKeyHint`
+- `GitflowStatusStaged`
+- `GitflowStatusUnstaged`
+- `GitflowStatusUntracked`
+
 ## Functionality Wiki
 
 | Area | Scope |

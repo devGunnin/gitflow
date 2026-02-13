@@ -101,6 +101,21 @@ local function find_line(lines, needle, start_line)
 	return nil
 end
 
+local function wait_for_buffer_line(buffer_name, needle, timeout_ms)
+	local timeout = timeout_ms or 5000
+	return vim.wait(timeout, function()
+		local bufnr = require("gitflow.ui.buffer").get(buffer_name)
+		if not bufnr then
+			return false
+		end
+		if not needle then
+			return true
+		end
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		return find_line(lines, needle) ~= nil
+	end, 25)
+end
+
 local repo_dir = vim.fn.tempname()
 assert_equals(vim.fn.mkdir(repo_dir, "p"), 1, "temp repo directory should be created")
 
@@ -267,16 +282,28 @@ end
 assert_true(has_revert_keymap, "status panel should map X for file revert")
 
 local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
+assert_true(
+	status_lines[1]:find("Gitflow Status", 1, true) ~= nil,
+	"status panel should render title"
+)
 local staged_header_line = find_line(status_lines, "Staged")
 assert_true(staged_header_line ~= nil, "status panel should include staged section")
 local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
 assert_true(staged_tracked_line ~= nil, "staged tracked file should be visible")
+assert_true(
+	find_line(status_lines, "[q] Close") ~= nil,
+	"status panel should render standardized footer hints"
+)
 
 vim.api.nvim_set_current_win(status_panel.state.winid)
 vim.api.nvim_win_set_cursor(status_panel.state.winid, { staged_tracked_line, 0 })
 status_panel.open_diff_under_cursor()
 assert_true(captured_diff_request ~= nil, "dd should send a diff request")
-assert_equals(captured_diff_request.path, "tracked.txt", "diff request should include selected path")
+assert_equals(
+	captured_diff_request.path,
+	"tracked.txt",
+	"diff request should include selected path"
+)
 assert_equals(captured_diff_request.staged, true, "staged file diff should use --staged")
 
 local revert_confirm = vim.fn.confirm
@@ -299,6 +326,31 @@ assert_deep_equals(
 commands.dispatch({ "diff" }, cfg)
 commands.dispatch({ "log" }, cfg)
 commands.dispatch({ "stash", "list" }, cfg)
+
+assert_true(
+	wait_for_buffer_line("diff", "Gitflow Diff"),
+	"diff panel should render a title section"
+)
+assert_true(
+	wait_for_buffer_line("diff", "[q] Close"),
+	"diff panel should render standardized footer"
+)
+assert_true(
+	wait_for_buffer_line("log", "Recent Commits"),
+	"log panel should render section headers"
+)
+assert_true(
+	wait_for_buffer_line("log", "[q] Close"),
+	"log panel should render standardized footer"
+)
+assert_true(
+	wait_for_buffer_line("stash", "Entries"),
+	"stash panel should render section headers"
+)
+assert_true(
+	wait_for_buffer_line("stash", "[q] Close"),
+	"stash panel should render standardized footer"
+)
 
 local log_err, log_entries = wait_async(function(done)
 	git_log.list({ count = 10, format = "%h %s" }, function(inner_err, entries)

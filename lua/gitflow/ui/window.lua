@@ -16,6 +16,8 @@
 ---@field border? string|string[]
 ---@field title? string
 ---@field title_pos? "left"|"center"|"right"
+---@field footer? string
+---@field footer_pos? "left"|"center"|"right"
 ---@field enter? boolean
 ---@field on_close? fun(winid: integer)
 
@@ -27,6 +29,19 @@ local M = {}
 
 ---@type table<string, GitflowWindowRecord>
 M.registry = {}
+
+local HAS_FLOAT_FOOTER = vim.fn.has("nvim-0.10") == 1
+
+---@param winid integer
+local function apply_window_highlights(winid)
+	local winhighlight = table.concat({
+		"FloatBorder:GitflowBorder",
+		"FloatTitle:GitflowTitle",
+		"FloatFooter:GitflowFooter",
+		"WinSeparator:GitflowBorder",
+	}, ",")
+	vim.api.nvim_set_option_value("winhighlight", winhighlight, { win = winid })
+end
 
 ---@param dimension number
 ---@param max_value integer
@@ -105,6 +120,8 @@ function M.open_split(opts)
 		vim.api.nvim_win_set_buf(winid, options.bufnr)
 	end
 
+	apply_window_highlights(winid)
+
 	register_window(options.name, winid, options.on_close)
 
 	if options.enter == false and vim.api.nvim_win_is_valid(current_win) then
@@ -124,7 +141,7 @@ function M.open_float(opts)
 	local row = opts.row or math.floor((lines - height) / 2)
 	local col = opts.col or math.floor((columns - width) / 2)
 
-	local winid = vim.api.nvim_open_win(opts.bufnr, opts.enter ~= false, {
+	local winopts = {
 		relative = "editor",
 		style = "minimal",
 		width = width,
@@ -134,7 +151,15 @@ function M.open_float(opts)
 		border = opts.border or "rounded",
 		title = opts.title,
 		title_pos = opts.title_pos or "center",
-	})
+	}
+
+	if HAS_FLOAT_FOOTER and opts.footer and opts.footer ~= "" then
+		winopts.footer = opts.footer
+		winopts.footer_pos = opts.footer_pos or "center"
+	end
+
+	local winid = vim.api.nvim_open_win(opts.bufnr, opts.enter ~= false, winopts)
+	apply_window_highlights(winid)
 
 	register_window(opts.name, winid, opts.on_close)
 	return winid

@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_stash = require("gitflow.git.stash")
@@ -10,6 +11,46 @@ local git_stash = require("gitflow.git.stash")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
+
+local TITLE = "Gitflow Stash"
+local FOOTER_HINTS = {
+	{ key = "p", label = "Pop" },
+	{ key = "d", label = "Drop" },
+	{ key = "r", label = "Refresh" },
+	{ key = "q", label = "Close" },
+}
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "stash",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = ui_render.format_key_hints(FOOTER_HINTS),
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "stash",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
 
 ---@type GitflowStashPanelState
 M.state = {
@@ -24,7 +65,7 @@ local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
 	if not bufnr then
 		bufnr = ui.buffer.create("stash", {
-			filetype = "gitflowstash",
+			filetype = "gitflow",
 			lines = { "Loading stash list..." },
 		})
 		M.state.bufnr = bufnr
@@ -37,15 +78,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "stash",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "p", function()
 		M.pop_under_cursor()
@@ -66,22 +99,22 @@ end
 
 ---@param entries GitflowStashEntry[]
 local function render(entries)
-	local lines = {
-		"Gitflow Stash",
-		"",
-	}
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.section(spec, "Entries")
 	local line_entries = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = "(no stash entries)"
+		ui_render.empty(spec, "no stash entries")
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ("%s %s"):format(entry.ref, entry.description)
-			line_entries[#lines] = entry
+			local line = ui_render.entry(spec, ("%s %s"):format(entry.ref, entry.description))
+			line_entries[line] = entry
 		end
 	end
 
-	ui.buffer.update("stash", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("stash", spec)
 	M.state.line_entries = line_entries
 end
 

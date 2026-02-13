@@ -9,6 +9,9 @@ local utils = require("gitflow.utils")
 ---@field height number
 ---@field border string|string[]
 ---@field title string
+---@field title_pos "left"|"center"|"right"
+---@field footer string|nil
+---@field footer_pos "left"|"center"|"right"
 
 ---@class GitflowUiConfig
 ---@field default_layout "split"|"float"
@@ -31,6 +34,7 @@ local utils = require("gitflow.utils")
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
 ---@field git GitflowGitConfig
+---@field highlights table<string, table>
 
 local M = {}
 
@@ -61,6 +65,9 @@ function M.defaults()
 				height = 0.7,
 				border = "rounded",
 				title = "Gitflow",
+				title_pos = "center",
+				footer = nil,
+				footer_pos = "center",
 			},
 		},
 		behavior = {
@@ -73,6 +80,7 @@ function M.defaults()
 				format = "%h %s",
 			},
 		},
+		highlights = {},
 	}
 end
 
@@ -136,6 +144,15 @@ local function validate_ui(config)
 	if not utils.is_non_empty_string(float.title) then
 		error("gitflow config error: ui.float.title must be a non-empty string", 3)
 	end
+	if float.title_pos ~= "left" and float.title_pos ~= "center" and float.title_pos ~= "right" then
+		error("gitflow config error: ui.float.title_pos must be 'left', 'center', or 'right'", 3)
+	end
+	if float.footer ~= nil and not utils.is_non_empty_string(float.footer) then
+		error("gitflow config error: ui.float.footer must be nil or a non-empty string", 3)
+	end
+	if float.footer_pos ~= "left" and float.footer_pos ~= "center" and float.footer_pos ~= "right" then
+		error("gitflow config error: ui.float.footer_pos must be 'left', 'center', or 'right'", 3)
+	end
 end
 
 ---@param config GitflowConfig
@@ -168,11 +185,31 @@ local function validate_git(config)
 end
 
 ---@param config GitflowConfig
+local function validate_highlights(config)
+	if type(config.highlights) ~= "table" then
+		error("gitflow config error: highlights must be a table", 3)
+	end
+
+	for group, attrs in pairs(config.highlights) do
+		if not utils.is_non_empty_string(group) then
+			error("gitflow config error: highlight group names must be non-empty strings", 3)
+		end
+		if type(attrs) ~= "table" then
+			error(
+				("gitflow config error: highlight '%s' must be a table of attributes"):format(group),
+				3
+			)
+		end
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
 	validate_git(config)
+	validate_highlights(config)
 end
 
 ---@param opts table|nil

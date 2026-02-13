@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
 
@@ -14,6 +15,45 @@ local git_log = require("gitflow.git.log")
 
 local M = {}
 
+local TITLE = "Gitflow Log"
+local FOOTER_HINTS = {
+	{ key = "<CR>", label = "Open commit diff" },
+	{ key = "r", label = "Refresh" },
+	{ key = "q", label = "Close" },
+}
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "log",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = ui_render.format_key_hints(FOOTER_HINTS),
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "log",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
+
 ---@type GitflowLogPanelState
 M.state = {
 	bufnr = nil,
@@ -28,7 +68,7 @@ local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
 	if not bufnr then
 		bufnr = ui.buffer.create("log", {
-			filetype = "gitflowlog",
+			filetype = "gitflow",
 			lines = { "Loading git log..." },
 		})
 		M.state.bufnr = bufnr
@@ -41,15 +81,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "log",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "<CR>", function()
 		M.open_commit_under_cursor()
@@ -66,22 +98,22 @@ end
 
 ---@param entries GitflowLogEntry[]
 local function render(entries)
-	local lines = {
-		"Gitflow Log",
-		"",
-	}
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.section(spec, "Recent Commits")
 	local line_entries = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = "(no commits found)"
+		ui_render.empty(spec, "no commits found")
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ("%s %s"):format(entry.short_sha, entry.summary)
-			line_entries[#lines] = entry
+			local line = ui_render.entry(spec, ("%s %s"):format(entry.short_sha, entry.summary))
+			line_entries[line] = entry
 		end
 	end
 
-	ui.buffer.update("log", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("log", spec)
 	M.state.line_entries = line_entries
 end
 

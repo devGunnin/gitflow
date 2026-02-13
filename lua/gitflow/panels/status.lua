@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_status = require("gitflow.git.status")
 
@@ -19,6 +20,19 @@ local git_status = require("gitflow.git.status")
 
 local M = {}
 
+local TITLE = "Gitflow Status"
+local FOOTER_HINTS = {
+	{ key = "s", label = "Stage" },
+	{ key = "u", label = "Unstage" },
+	{ key = "a", label = "Stage all" },
+	{ key = "A", label = "Unstage all" },
+	{ key = "dd", label = "Diff" },
+	{ key = "X", label = "Revert" },
+	{ key = "cc", label = "Commit" },
+	{ key = "r", label = "Refresh" },
+	{ key = "q", label = "Close" },
+}
+
 ---@type GitflowStatusPanelState
 M.state = {
 	bufnr = nil,
@@ -30,27 +44,68 @@ M.state = {
 
 ---@param title string
 ---@param entries GitflowStatusEntry[]
----@param lines string[]
+---@param spec GitflowRenderSpec
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param diff_staged boolean
-local function append_section(title, entries, lines, line_entries, diff_staged)
-	lines[#lines + 1] = title
+local function append_section(title, entries, spec, line_entries, diff_staged)
+	ui_render.section(spec, title)
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
-		lines[#lines + 1] = ""
+		ui_render.empty(spec, "none")
+		ui_render.blank(spec)
 		return
 	end
 
 	for _, entry in ipairs(entries) do
 		local status = entry.index_status .. entry.worktree_status
-		local line = ("  %s  %s"):format(status, entry.path)
-		lines[#lines + 1] = line
-		line_entries[#lines] = {
+		local line = ui_render.entry(spec, ("%s  %s"):format(status, entry.path), (function()
+			if entry.untracked then
+				return "GitflowStatusUntracked"
+			end
+			if entry.index_status ~= " " then
+				return "GitflowStatusStaged"
+			end
+			return "GitflowStatusUnstaged"
+		end)())
+		line_entries[line] = {
 			entry = entry,
 			diff_staged = diff_staged,
 		}
 	end
-	lines[#lines + 1] = ""
+	ui_render.blank(spec)
+end
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "status",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = ui_render.format_key_hints(FOOTER_HINTS),
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+				M.state.active = false
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "status",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+			M.state.active = false
+		end,
+	})
 end
 
 ---@param cfg GitflowConfig
@@ -58,7 +113,7 @@ local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
 	if not bufnr then
 		bufnr = ui.buffer.create("status", {
-			filetype = "gitflowstatus",
+			filetype = "gitflow",
 			lines = { "Loading git status..." },
 		})
 		M.state.bufnr = bufnr
@@ -71,16 +126,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "status",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-			M.state.active = false
-		end,
-	})
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "s", function()
 		M.stage_under_cursor()
@@ -139,17 +185,16 @@ end
 
 ---@param grouped GitflowStatusGroups
 local function render(grouped)
-	local lines = {
-		"Gitflow Status",
-		"",
-	}
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
 	local line_entries = {}
 
-	append_section("Staged", grouped.staged, lines, line_entries, true)
-	append_section("Unstaged", grouped.unstaged, lines, line_entries, false)
-	append_section("Untracked", grouped.untracked, lines, line_entries, false)
+	append_section("Staged", grouped.staged, spec, line_entries, true)
+	append_section("Unstaged", grouped.unstaged, spec, line_entries, false)
+	append_section("Untracked", grouped.untracked, spec, line_entries, false)
+	ui_render.footer(spec, FOOTER_HINTS)
 
-	ui.buffer.update("status", lines)
+	ui_render.commit("status", spec)
 	M.state.line_entries = line_entries
 end
 
