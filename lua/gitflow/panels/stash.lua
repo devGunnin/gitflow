@@ -3,6 +3,8 @@ local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_stash = require("gitflow.git.stash")
+local git_branch = require("gitflow.git.branch")
+local status_panel = require("gitflow.panels.status")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -14,8 +16,9 @@ local M = {}
 
 local TITLE = "Gitflow Stash"
 local FOOTER_HINTS = {
-	{ key = "p", label = "Pop" },
-	{ key = "d", label = "Drop" },
+	{ key = "P", label = "Pop" },
+	{ key = "D", label = "Drop" },
+	{ key = "S", label = "Stash" },
 	{ key = "r", label = "Refresh" },
 	{ key = "q", label = "Close" },
 }
@@ -33,7 +36,7 @@ local function open_panel_window(cfg, bufnr)
 			border = cfg.ui.float.border,
 			title = TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = ui_render.format_key_hints(FOOTER_HINTS),
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -60,6 +63,12 @@ M.state = {
 	cfg = nil,
 }
 
+local function refresh_status_panel_if_open()
+	if status_panel.is_open() then
+		status_panel.refresh()
+	end
+end
+
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
@@ -80,12 +89,16 @@ local function ensure_window(cfg)
 
 	M.state.winid = open_panel_window(cfg, bufnr)
 
-	vim.keymap.set("n", "p", function()
+	vim.keymap.set("n", "P", function()
 		M.pop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "d", function()
+	vim.keymap.set("n", "D", function()
 		M.drop_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "S", function()
+		M.push_with_prompt()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -98,7 +111,8 @@ local function ensure_window(cfg)
 end
 
 ---@param entries GitflowStashEntry[]
-local function render(entries)
+---@param current_branch string
+local function render(entries, current_branch)
 	local spec = ui_render.new()
 	ui_render.title(spec, TITLE)
 	ui_render.section(spec, "Entries")
@@ -113,6 +127,8 @@ local function render(entries)
 		end
 	end
 
+	ui_render.blank(spec)
+	ui_render.entry(spec, ("Current branch: %s"):format(current_branch), "GitflowMuted")
 	ui_render.footer(spec, FOOTER_HINTS)
 	ui_render.commit("stash", spec)
 	M.state.line_entries = line_entries
@@ -137,6 +153,16 @@ local function output_or_default(result)
 	return output
 end
 
+---@param result GitflowGitResult
+local function notify_push_result(result)
+	local output = output_or_default(result)
+	if git_stash.output_mentions_no_local_changes(output) then
+		utils.notify(output, vim.log.levels.WARN)
+		return
+	end
+	utils.notify(output, vim.log.levels.INFO)
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
@@ -144,13 +170,40 @@ function M.open(cfg)
 	M.refresh()
 end
 
-function M.refresh()
-	git_stash.list({}, function(err, entries)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
+function M.push_with_prompt()
+	vim.ui.input({
+		prompt = "Stash message (optional): ",
+	}, function(input)
+		if input == nil then
 			return
 		end
-		render(entries)
+
+		local message = vim.trim(input)
+		if message == "" then
+			message = nil
+		end
+
+		git_stash.push({ message = message }, function(err, result)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			notify_push_result(result)
+			M.refresh()
+			refresh_status_panel_if_open()
+		end)
+	end)
+end
+
+function M.refresh()
+	git_branch.current({}, function(_, branch)
+		git_stash.list({}, function(err, entries)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			render(entries, branch or "(unknown)")
+		end)
 	end)
 end
 
@@ -178,11 +231,7 @@ function M.drop_under_cursor()
 		return
 	end
 
-	local confirmed = vim.fn.confirm(
-		("Drop %s?"):format(entry.ref),
-		"&Yes\n&No",
-		2
-	) == 1
+	local confirmed = vim.fn.confirm(("Drop %s?"):format(entry.ref), "&Yes\n&No", 2) == 1
 	if not confirmed then
 		return
 	end
@@ -213,6 +262,11 @@ function M.close()
 	M.state.bufnr = nil
 	M.state.winid = nil
 	M.state.line_entries = {}
+end
+
+---@return boolean
+function M.is_open()
+	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
 end
 
 return M

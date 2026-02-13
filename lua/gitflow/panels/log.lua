@@ -2,6 +2,8 @@ local ui = require("gitflow.ui")
 local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
+local git_branch = require("gitflow.git.branch")
+local icons = require("gitflow.icons")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -35,7 +37,7 @@ local function open_panel_window(cfg, bufnr)
 			border = cfg.ui.float.border,
 			title = TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = ui_render.format_key_hints(FOOTER_HINTS),
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -97,7 +99,8 @@ local function ensure_window(cfg)
 end
 
 ---@param entries GitflowLogEntry[]
-local function render(entries)
+---@param current_branch string
+local function render(entries, current_branch)
 	local spec = ui_render.new()
 	ui_render.title(spec, TITLE)
 	ui_render.section(spec, "Recent Commits")
@@ -107,11 +110,14 @@ local function render(entries)
 		ui_render.empty(spec, "no commits found")
 	else
 		for _, entry in ipairs(entries) do
-			local line = ui_render.entry(spec, ("%s %s"):format(entry.short_sha, entry.summary))
+			local icon = icons.get("git_state", "commit")
+			local line = ui_render.entry(spec, ("%s %s %s"):format(icon, entry.short_sha, entry.summary))
 			line_entries[line] = entry
 		end
 	end
 
+	ui_render.blank(spec)
+	ui_render.entry(spec, ("Current branch: %s"):format(current_branch), "GitflowMuted")
 	ui_render.footer(spec, FOOTER_HINTS)
 	ui_render.commit("log", spec)
 	M.state.line_entries = line_entries
@@ -142,15 +148,17 @@ function M.refresh()
 		return
 	end
 
-	git_log.list({
-		count = cfg.git.log.count,
-		format = cfg.git.log.format,
-	}, function(err, entries)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		render(entries)
+	git_branch.current({}, function(_, branch)
+		git_log.list({
+			count = cfg.git.log.count,
+			format = cfg.git.log.format,
+		}, function(err, entries)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			render(entries, branch or "(unknown)")
+		end)
 	end)
 end
 

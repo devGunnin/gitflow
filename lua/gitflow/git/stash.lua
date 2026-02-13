@@ -122,4 +122,10 @@ function M.drop(index, opts, cb)
 	end)
 end
 
+---@param output string
+---@return boolean
+function M.output_mentions_no_local_changes(output)
+	return output:lower():find("no local changes to save", 1, true) ~= nil
+end
+
 return M

@@ -44,17 +44,29 @@ local function error_from_result(result, action)
 	return ("git %s failed: %s"):format(action, output)
 end
 
----@param opts table|nil
+---@class GitflowLogListOpts: GitflowGitRunOpts
+---@field count? integer
+---@field format? string
+---@field range? string
+---@field reverse? boolean
+
+---@param opts GitflowLogListOpts|nil
 ---@param cb fun(err: string|nil, entries: GitflowLogEntry[]|nil, result: GitflowGitResult)
 function M.list(opts, cb)
 	local options = opts or {}
 	local count = tonumber(options.count) or 50
 	local format = options.format or "%h %s"
-	local args = {
-		"log",
-		("-n%d"):format(count),
-		("--pretty=format:%%H%%x09%s"):format(format),
-	}
+	local args = { "log" }
+	if options.reverse then
+		args[#args + 1] = "--reverse"
+	end
+	if count > 0 then
+		args[#args + 1] = ("-n%d"):format(count)
+	end
+	if options.range and options.range ~= "" then
+		args[#args + 1] = options.range
+	end
+	args[#args + 1] = ("--pretty=format:%%H%%x09%s"):format(format)
 
 	git.git(args, options, function(result)
 		if result.code ~= 0 then

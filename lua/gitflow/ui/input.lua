@@ -1,7 +1,7 @@
 ---@class GitflowPromptOpts
 ---@field prompt string
 ---@field default? string
----@field completion? string
+---@field completion? string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]
 ---@field on_cancel? fun()
 
 ---@class GitflowConfirmOpts
@@ -10,15 +10,156 @@
 ---@field on_choice? fun(confirmed: boolean, index: integer)
 
 local M = {}
+local next_completion_id = 0
+local next_cancel_id = 0
+
+---@param lhs string
+---@return table|nil
+local function get_cmdline_mapping(lhs)
+	local mapping = vim.fn.maparg(lhs, "c", false, true)
+	if type(mapping) ~= "table" or mapping.lhs == nil then
+		return nil
+	end
+	return mapping
+end
+
+---@param lhs string
+---@param mapping table|nil
+local function restore_cmdline_mapping(lhs, mapping)
+	pcall(vim.keymap.del, "c", lhs)
+	if mapping then
+		pcall(vim.fn.mapset, "c", false, mapping)
+	end
+end
+
+---@param completion string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]|nil
+---@return string|nil, fun(), boolean
+local function resolve_completion(completion)
+	if type(completion) ~= "function" then
+		return completion, function() end, false
+	end
+
+	next_completion_id = next_completion_id + 1
+	local completion_name = ("__gitflow_input_completion_%d"):format(next_completion_id)
+
+	_G[completion_name] = function(arglead, cmdline, cursorpos)
+		local ok, candidates = pcall(completion, arglead or "", cmdline or "", cursorpos or 0)
+		if not ok or type(candidates) ~= "table" then
+			return {}
+		end
+
+		local normalized = {}
+		for _, candidate in ipairs(candidates) do
+			local text = vim.trim(tostring(candidate))
+			if text ~= "" then
+				normalized[#normalized + 1] = text
+			end
+		end
+		return normalized
+	end
+
+	local cleanup = function()
+		_G[completion_name] = nil
+	end
+
+	return "customlist,v:lua." .. completion_name, cleanup, true
+end
+
+---@return fun()
+local function force_cmdline_completion_defaults()
+	local previous = {
+		wildchar = vim.o.wildchar,
+		wildcharm = vim.o.wildcharm,
+		wildmenu = vim.o.wildmenu,
+		wildmode = vim.o.wildmode,
+	}
+
+	vim.o.wildchar = 9
+	vim.o.wildcharm = 9
+	vim.o.wildmenu = true
+	vim.o.wildmode = "longest:full,full"
+
+	return function()
+		vim.o.wildchar = previous.wildchar
+		vim.o.wildcharm = previous.wildcharm
+		vim.o.wildmenu = previous.wildmenu
+		vim.o.wildmode = previous.wildmode
+	end
+end
+
+---@return fun()
+local function force_cmdline_tab_completion_key()
+	local original_tab_mapping = get_cmdline_mapping("<Tab>")
+	pcall(vim.keymap.del, "c", "<Tab>")
+
+	return function()
+		restore_cmdline_mapping("<Tab>", original_tab_mapping)
+	end
+end
+
+---@param opts GitflowPromptOpts
+---@param completion string
+---@param force_completion_defaults boolean
+---@return string|nil
+local function prompt_with_builtin_completion(opts, completion, force_completion_defaults)
+	next_cancel_id = next_cancel_id + 1
+	local cancel_token = ("__gitflow_prompt_cancel_%d__"):format(next_cancel_id)
+	local cleanup_cmdline_defaults = function() end
+	local cleanup_cmdline_tab_completion_key = function() end
+	if force_completion_defaults then
+		cleanup_cmdline_defaults = force_cmdline_completion_defaults()
+		cleanup_cmdline_tab_completion_key = force_cmdline_tab_completion_key()
+	end
+
+	vim.fn.inputsave()
+	local ok, value = pcall(vim.fn.input, {
+		prompt = opts.prompt,
+		default = opts.default or "",
+		completion = completion,
+		cancelreturn = cancel_token,
+	})
+	vim.fn.inputrestore()
+	cleanup_cmdline_tab_completion_key()
+	cleanup_cmdline_defaults()
+
+	if not ok then
+		if opts.on_cancel then
+			opts.on_cancel()
+		end
+		return nil
+	end
+
+	local text = tostring(value or "")
+	if text == cancel_token then
+		if opts.on_cancel then
+			opts.on_cancel()
+		end
+		return nil
+	end
+	return text
+end
 
 ---@param opts GitflowPromptOpts
 ---@param on_confirm fun(value: string)
 function M.prompt(opts, on_confirm)
+	local completion, cleanup_completion, force_completion_defaults =
+		resolve_completion(opts.completion)
+	if completion then
+		local value = prompt_with_builtin_completion(opts, completion, force_completion_defaults)
+		cleanup_completion()
+		if value == nil then
+			return
+		end
+		on_confirm(value)
+		return
+	end
+
 	vim.ui.input({
 		prompt = opts.prompt,
 		default = opts.default,
-		completion = opts.completion,
+		completion = completion,
 	}, function(input)
+		cleanup_completion()
 		if input == nil then
 			if opts.on_cancel then
 				opts.on_cancel()
