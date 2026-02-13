@@ -88,6 +88,21 @@ local registry = {
 		git = { nerd = NF.palette_git, ascii = "#" },
 		github = { nerd = NF.palette_github, ascii = "@" },
 		ui = { nerd = NF.palette_ui, ascii = "*" },
+		-- Per-entry command icons
+		status = { nerd = NF.modified, ascii = "~" },
+		branch = { nerd = NF.branch_current, ascii = "*" },
+		diff = { nerd = NF.file_modify, ascii = "~" },
+		log = { nerd = NF.commit, ascii = "*" },
+		stash = { nerd = NF.staged, ascii = "S" },
+		merge = { nerd = NF.pr_merged, ascii = "M" },
+		cherry_pick = { nerd = NF.commit, ascii = "C" },
+		conflicts = { nerd = NF.conflict, ascii = "!" },
+		issue = { nerd = NF.issue_open, ascii = "#" },
+		pr = { nerd = NF.pr_open, ascii = "!" },
+		review = { nerd = NF.review_commented, ascii = "R" },
+		palette = { nerd = NF.palette_ui, ascii = ">" },
+		help = { nerd = NF.palette_ui, ascii = "?" },
+		open = { nerd = NF.palette_ui, ascii = ">" },
 	},
 }
 

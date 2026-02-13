@@ -14,6 +14,8 @@ local icons = require("gitflow.icons")
 ---@field list_bufnr integer|nil
 ---@field prompt_winid integer|nil
 ---@field list_winid integer|nil
+---@field backdrop_winid integer|nil
+---@field backdrop_bufnr integer|nil
 ---@field line_entries table<integer, GitflowPaletteEntry>
 ---@field selected_line integer|nil
 ---@field entries GitflowPaletteEntry[]
@@ -38,6 +40,8 @@ M.state = {
 	list_bufnr = nil,
 	prompt_winid = nil,
 	list_winid = nil,
+	backdrop_winid = nil,
+	backdrop_bufnr = nil,
 	line_entries = {},
 	selected_line = nil,
 	entries = {},
@@ -59,6 +63,21 @@ local CATEGORY_ICON_KEYS = {
 	Git = "git",
 	GitHub = "github",
 	UI = "ui",
+}
+
+-- Explicit priority ordering for numbered quick-access keys.
+-- Maps number keys 1-9 to specific command names in the user's
+-- preferred order, crossing category boundaries.
+local NUMBERED_ORDER = {
+	"issue",
+	"pr",
+	"branch",
+	"conflicts",
+	"log",
+	"cherry_pick",
+	"merge",
+	"diff",
+	"stash",
 }
 
 ---@param text string
@@ -297,13 +316,6 @@ local function execute_numbered(entry)
 	end
 end
 
----@param width integer
----@return string
-local function short_separator(width)
-	local dash_count = math.min(5, math.max(1, width))
-	return "  " .. string.rep("\u{2500}", dash_count)
-end
-
 ---@param bufnr integer
 ---@param ns integer
 ---@param row integer  0-indexed
@@ -311,7 +323,19 @@ end
 ---@param col_end integer  byte offset (-1 for end of line)
 ---@param hl_group string
 local function add_hl(bufnr, ns, row, col_start, col_end, hl_group)
-	vim.api.nvim_buf_add_highlight(bufnr, ns, hl_group, row, col_start, col_end)
+	vim.api.nvim_buf_add_highlight(
+		bufnr, ns, hl_group, row, col_start, col_end
+	)
+end
+
+---@param text string
+---@param width integer
+---@return string
+local function center_text(text, width)
+	local text_width = vim.fn.strdisplaywidth(text)
+	local pad = math.max(0, math.floor((width - text_width) / 2))
+	return string.rep(" ", pad) .. text
+		.. string.rep(" ", math.max(0, width - pad - text_width))
 end
 
 local function render()
@@ -339,35 +363,93 @@ local function render()
 	local highlights = {}
 	local numbered_entries = {}
 	local active_category = nil
-	local entry_number = 0
+
+	-- Build numbered entries from explicit priority ordering
+	local entry_to_number = {}
+	local num_slot = 1
+	for _, cmd_name in ipairs(NUMBERED_ORDER) do
+		if num_slot > 9 then
+			break
+		end
+		for _, entry in ipairs(filtered) do
+			if entry.name == cmd_name then
+				numbered_entries[num_slot] = entry
+				entry_to_number[cmd_name] = num_slot
+				num_slot = num_slot + 1
+				break
+			end
+		end
+	end
+
+	-- Mason-style header bar (centered title on colored background)
+	local header_icon = icons.get("palette", "git")
+	local header_title
+	if header_icon ~= "" then
+		header_title = header_icon .. "  Gitflow"
+	else
+		header_title = "Gitflow"
+	end
+	local header_line = center_text(header_title, width)
+	lines[#lines + 1] = header_line
+	local icon_byte_len = #header_icon
+	if icon_byte_len > 0 then
+		local pad_start = #header_line - #header_line:match("^%s*(.*)$")
+		-- Protect: pad_start is the leading-space byte count
+		pad_start = #header_line - #vim.trim(header_line)
+		highlights[#highlights + 1] = {
+			row = 0,
+			col_start = pad_start,
+			col_end = pad_start + icon_byte_len,
+			group = "GitflowPaletteHeaderIcon",
+		}
+		highlights[#highlights + 1] = {
+			row = 0,
+			col_start = pad_start + icon_byte_len,
+			col_end = -1,
+			group = "GitflowPaletteHeaderBar",
+		}
+		-- Fill leading spaces with bar background
+		if pad_start > 0 then
+			highlights[#highlights + 1] = {
+				row = 0,
+				col_start = 0,
+				col_end = pad_start,
+				group = "GitflowPaletteHeaderBar",
+			}
+		end
+	else
+		highlights[#highlights + 1] = {
+			row = 0,
+			col_start = 0,
+			col_end = -1,
+			group = "GitflowPaletteHeaderBar",
+		}
+	end
+	lines[#lines + 1] = ""
 
 	if #filtered == 0 then
 		lines[#lines + 1] = ""
 		lines[#lines + 1] = ""
 		local no_match_msg = "No commands match the current query."
-		local msg_width = vim.fn.strdisplaywidth(no_match_msg)
-		local pad_left = math.max(
-			0, math.floor((width - msg_width) / 2)
-		)
-		lines[#lines + 1] = string.rep(" ", pad_left) .. no_match_msg
+		lines[#lines + 1] = center_text(no_match_msg, width)
 		lines[#lines + 1] = ""
 	else
-		lines[#lines + 1] = ""
 		for _, entry in ipairs(filtered) do
 			if entry.category ~= active_category then
 				if active_category ~= nil then
 					lines[#lines + 1] = ""
-					lines[#lines + 1] = ""
 				end
 
 				local icon_key = CATEGORY_ICON_KEYS[entry.category]
-				local icon = ""
+				local cat_icon = ""
 				if icon_key then
-					icon = icons.get("palette", icon_key)
+					cat_icon = icons.get("palette", icon_key)
 				end
 				local header_text
-				if icon ~= "" then
-					header_text = ("  %s %s"):format(icon, entry.category)
+				if cat_icon ~= "" then
+					header_text = ("  %s %s"):format(
+						cat_icon, entry.category
+					)
 				else
 					header_text = ("  %s"):format(entry.category)
 				end
@@ -378,24 +460,21 @@ local function render()
 					col_end = -1,
 					group = "GitflowPaletteHeader",
 				}
-
-				local sep = short_separator(5)
-				lines[#lines + 1] = sep
-				highlights[#highlights + 1] = {
-					row = #lines - 1,
-					col_start = 0,
-					col_end = -1,
-					group = "GitflowPaletteHeader",
-				}
 				lines[#lines + 1] = ""
 				active_category = entry.category
 			end
 
-			entry_number = entry_number + 1
+			local entry_num = entry_to_number[entry.name]
 			local num_prefix = ""
-			if entry_number <= 9 then
-				num_prefix = ("[%d] "):format(entry_number)
-				numbered_entries[entry_number] = entry
+			if entry_num then
+				num_prefix = ("[%d] "):format(entry_num)
+			end
+
+			-- Per-entry icon
+			local entry_icon = icons.get("palette", entry.name)
+			local icon_part = ""
+			if entry_icon ~= "" then
+				icon_part = entry_icon .. " "
 			end
 
 			local keybind_hint = ""
@@ -403,10 +482,12 @@ local function render()
 				keybind_hint = ("[%s]"):format(entry.keybinding)
 			end
 
-			local left_part = ("    %s%s"):format(
-				num_prefix, entry.name
+			local left_part = ("    %s%s%s"):format(
+				num_prefix, icon_part, entry.name
 			)
-			local desc_part = (" \u{2014} %s"):format(entry.description)
+			local desc_part = (" \u{2014} %s"):format(
+				entry.description
+			)
 			local content_len = vim.fn.strdisplaywidth(left_part)
 				+ vim.fn.strdisplaywidth(desc_part)
 
@@ -428,7 +509,7 @@ local function render()
 
 			local row = #lines - 1
 			local byte_offset = 4
-			if entry_number <= 9 then
+			if entry_num then
 				local badge_len = #num_prefix
 				highlights[#highlights + 1] = {
 					row = row,
@@ -437,6 +518,18 @@ local function render()
 					group = "GitflowPaletteIndex",
 				}
 				byte_offset = byte_offset + badge_len
+			end
+
+			-- Per-entry icon highlight
+			if icon_part ~= "" then
+				local icon_bytes = #icon_part
+				highlights[#highlights + 1] = {
+					row = row,
+					col_start = byte_offset,
+					col_end = byte_offset + icon_bytes,
+					group = "GitflowPaletteEntryIcon",
+				}
+				byte_offset = byte_offset + icon_bytes
 			end
 
 			local name_len = #entry.name
@@ -605,6 +698,13 @@ local function apply_keymaps()
 				execute_numbered(entry)
 			end
 		end, prompt_normal_opts)
+		vim.keymap.set("i", num_key, function()
+			local entry = M.state.numbered_entries[i]
+			if entry then
+				execute_numbered(entry)
+			end
+			return ""
+		end, prompt_insert_opts)
 		vim.keymap.set("n", num_key, function()
 			local entry = M.state.numbered_entries[i]
 			if entry then
@@ -649,6 +749,11 @@ function M.close()
 	if M.state.list_winid then
 		ui.window.close(M.state.list_winid)
 	end
+	if M.state.backdrop_winid then
+		pcall(
+			vim.api.nvim_win_close, M.state.backdrop_winid, true
+		)
+	end
 
 	if M.state.prompt_bufnr then
 		ui.buffer.teardown(M.state.prompt_bufnr)
@@ -656,12 +761,20 @@ function M.close()
 	if M.state.list_bufnr then
 		ui.buffer.teardown(M.state.list_bufnr)
 	end
+	if M.state.backdrop_bufnr then
+		pcall(
+			vim.api.nvim_buf_delete, M.state.backdrop_bufnr,
+			{ force = true }
+		)
+	end
 
 	M.state.cfg = nil
 	M.state.prompt_bufnr = nil
 	M.state.list_bufnr = nil
 	M.state.prompt_winid = nil
 	M.state.list_winid = nil
+	M.state.backdrop_winid = nil
+	M.state.backdrop_bufnr = nil
 	M.state.line_entries = {}
 	M.state.selected_line = nil
 	M.state.entries = {}
@@ -674,8 +787,55 @@ function M.close()
 end
 
 ---@param cfg GitflowConfig
----@param entries GitflowPaletteEntry[]
----@param on_select fun(entry: GitflowPaletteEntry)|nil
+---@return integer|nil winid, integer|nil bufnr
+local function open_backdrop(cfg)
+	local columns = vim.o.columns
+	local editor_lines = vim.o.lines
+	local backdrop_bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_option_value(
+		"bufhidden", "wipe", { buf = backdrop_bufnr }
+	)
+	local ok, winid = pcall(vim.api.nvim_open_win, backdrop_bufnr, false, {
+		relative = "editor",
+		width = columns,
+		height = editor_lines,
+		row = 0,
+		col = 0,
+		style = "minimal",
+		focusable = false,
+		zindex = 40,
+		border = "none",
+	})
+	if not ok then
+		pcall(
+			vim.api.nvim_buf_delete, backdrop_bufnr,
+			{ force = true }
+		)
+		return nil, nil
+	end
+	vim.api.nvim_set_option_value(
+		"winhighlight",
+		"Normal:GitflowPaletteBackdrop,NormalFloat:GitflowPaletteBackdrop",
+		{ win = winid }
+	)
+	vim.api.nvim_set_option_value(
+		"winblend", 60, { win = winid }
+	)
+	return winid, backdrop_bufnr
+end
+
+---@param winid integer
+local function set_palette_winhighlight(winid)
+	vim.api.nvim_set_option_value(
+		"winhighlight",
+		"FloatBorder:GitflowBorder"
+			.. ",FloatTitle:GitflowTitle"
+			.. ",FloatFooter:GitflowFooter"
+			.. ",NormalFloat:GitflowPaletteNormal",
+		{ win = winid }
+	)
+end
+
 function M.open(cfg, entries, on_select)
 	M.close()
 
@@ -695,6 +855,12 @@ function M.open(cfg, entries, on_select)
 
 	local width, prompt_height, list_height, row, col =
 		compute_layout(cfg)
+
+	-- Backdrop overlay for visual focus
+	local backdrop_winid, backdrop_bufnr = open_backdrop(cfg)
+	M.state.backdrop_winid = backdrop_winid
+	M.state.backdrop_bufnr = backdrop_bufnr
+
 	local prompt_bufnr = ui.buffer.create("palette_prompt", {
 		filetype = "gitflowpaletteprompt",
 		lines = { "" },
@@ -743,6 +909,10 @@ function M.open(cfg, entries, on_select)
 			and PALETTE_LIST_FOOTER or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
+
+	-- Set palette-specific NormalFloat highlight
+	set_palette_winhighlight(M.state.prompt_winid)
+	set_palette_winhighlight(M.state.list_winid)
 
 	vim.api.nvim_set_option_value(
 		"wrap", false, { win = M.state.prompt_winid }

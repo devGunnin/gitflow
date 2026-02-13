@@ -80,6 +80,11 @@ local expected_groups = {
 	"GitflowPaletteDescription",
 	"GitflowPaletteIndex",
 	"GitflowPaletteCommand",
+	"GitflowPaletteNormal",
+	"GitflowPaletteHeaderBar",
+	"GitflowPaletteHeaderIcon",
+	"GitflowPaletteEntryIcon",
+	"GitflowPaletteBackdrop",
 }
 for _, group in ipairs(expected_groups) do
 	assert_true(
@@ -186,6 +191,7 @@ local found_ui_header = false
 for _, line in ipairs(list_lines) do
 	if line:find("Git", 1, true)
 		and not line:find("GitHub", 1, true)
+		and not line:find("Gitflow", 1, true)
 		and not line:find("status", 1, true)
 	then
 		found_git_header = true
@@ -267,8 +273,18 @@ for _, m in ipairs(prompt_maps) do
 		has_esc = true
 	end
 end
+local has_1_insert = false
+for _, m in ipairs(prompt_maps) do
+	if m.lhs == "1" then
+		has_1_insert = true
+	end
+end
 assert_true(has_cr, "11a. prompt should have <CR> insert keymap")
 assert_true(has_esc, "11b. prompt should have <Esc> insert keymap")
+assert_true(
+	has_1_insert,
+	"11c. prompt should have insert-mode 1 quick-access keymap"
+)
 
 -- ─── 12. List keymaps exist ──────────────────────────────────
 local list_maps = vim.api.nvim_buf_get_keymap(
@@ -303,8 +319,8 @@ assert_true(
 	"13a. numbered_entries[1] should exist"
 )
 assert_equals(
-	palette_panel.state.numbered_entries[1].name, "branch",
-	"13b. numbered_entries[1] should be first entry (branch)"
+	palette_panel.state.numbered_entries[1].name, "issue",
+	"13b. numbered_entries[1] should be issue (priority order)"
 )
 
 -- ─── 14. Fuzzy search filters correctly ──────────────────────
@@ -365,6 +381,14 @@ assert_true(
 assert_true(
 	vim.tbl_isempty(palette_panel.state.numbered_entries),
 	"18d. numbered_entries should be empty after close"
+)
+assert_true(
+	palette_panel.state.backdrop_winid == nil,
+	"18e. backdrop_winid should be nil after close"
+)
+assert_true(
+	palette_panel.state.backdrop_bufnr == nil,
+	"18f. backdrop_bufnr should be nil after close"
 )
 
 -- ─── 19. Nerd font icon toggle ───────────────────────────────
