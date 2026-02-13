@@ -9,6 +9,9 @@ local utils = require("gitflow.utils")
 ---@field height number
 ---@field border string|string[]
 ---@field title string
+---@field title_pos "left"|"center"|"right"
+---@field footer boolean
+---@field footer_pos "left"|"center"|"right"
 
 ---@class GitflowUiConfig
 ---@field default_layout "split"|"float"
@@ -92,6 +95,9 @@ function M.defaults()
 				height = 0.7,
 				border = "rounded",
 				title = "Gitflow",
+				title_pos = "center",
+				footer = true,
+				footer_pos = "center",
 			},
 		},
 		behavior = {
@@ -176,11 +182,52 @@ local function validate_ui(config)
 	if type(float.height) ~= "number" or float.height <= 0 then
 		error("gitflow config error: ui.float.height must be a positive number", 3)
 	end
-	if type(float.border) ~= "string" and type(float.border) ~= "table" then
+	local valid_border_styles = {
+		none = true,
+		single = true,
+		double = true,
+		rounded = true,
+		solid = true,
+		shadow = true,
+	}
+	if type(float.border) == "string" then
+		if not valid_border_styles[float.border] then
+			error(
+				"gitflow config error: ui.float.border must be one of "
+					.. "'none', 'single', 'double', 'rounded', 'solid', or 'shadow'",
+				3
+			)
+		end
+	elseif type(float.border) == "table" then
+		for key, value in pairs(float.border) do
+			if type(value) ~= "string" then
+				error(
+					("gitflow config error: ui.float.border[%s] must be a string"):format(
+						vim.inspect(key)
+					),
+					3
+				)
+			end
+		end
+	else
 		error("gitflow config error: ui.float.border must be a string or string[]", 3)
 	end
 	if not utils.is_non_empty_string(float.title) then
 		error("gitflow config error: ui.float.title must be a non-empty string", 3)
+	end
+	local valid_positions = {
+		left = true,
+		center = true,
+		right = true,
+	}
+	if not valid_positions[float.title_pos] then
+		error("gitflow config error: ui.float.title_pos must be 'left', 'center', or 'right'", 3)
+	end
+	if type(float.footer) ~= "boolean" then
+		error("gitflow config error: ui.float.footer must be a boolean", 3)
+	end
+	if not valid_positions[float.footer_pos] then
+		error("gitflow config error: ui.float.footer_pos must be 'left', 'center', or 'right'", 3)
 	end
 end
 

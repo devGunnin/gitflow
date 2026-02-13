@@ -15,6 +15,9 @@ local label_completion = require("gitflow.completion.labels")
 
 local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
+local ISSUES_FLOAT_TITLE = "Gitflow Issues"
+local ISSUES_FLOAT_FOOTER =
+	"<CR> view  c create  C comment  x close  L labels  r refresh  b back  q close"
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -45,15 +48,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "issues",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "issues",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = ISSUES_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and ISSUES_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "issues",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "<CR>", function()
 		M.view_under_cursor()
@@ -181,7 +201,11 @@ local function render_list(issues)
 		"Gitflow Issues",
 		"",
 		("Filters: state=%s label=%s assignee=%s"):
-			format(maybe_text(M.state.filters.state), maybe_text(M.state.filters.label), maybe_text(M.state.filters.assignee)),
+			format(
+				maybe_text(M.state.filters.state),
+				maybe_text(M.state.filters.label),
+				maybe_text(M.state.filters.assignee)
+			),
 		("Issues (%d)"):format(#issues),
 	}
 	local line_entries = {}

@@ -12,6 +12,8 @@ local status_panel = require("gitflow.panels.status")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
+local STASH_FLOAT_TITLE = "Gitflow Stash"
+local STASH_FLOAT_FOOTER = "P pop  D drop  S stash  r refresh  q close"
 
 ---@type GitflowStashPanelState
 M.state = {
@@ -45,15 +47,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "stash",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "stash",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = STASH_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and STASH_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "stash",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "P", function()
 		M.pop_under_cursor()

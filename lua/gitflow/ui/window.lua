@@ -16,6 +16,8 @@
 ---@field border? string|string[]
 ---@field title? string
 ---@field title_pos? "left"|"center"|"right"
+---@field footer? string|string[]
+---@field footer_pos? "left"|"center"|"right"
 ---@field enter? boolean
 ---@field on_close? fun(winid: integer)
 
@@ -137,12 +139,16 @@ function M.open_float(opts)
 		win_opts.title = opts.title
 		win_opts.title_pos = opts.title_pos or "center"
 	end
+	if opts.footer and vim.fn.has("nvim-0.10") == 1 then
+		win_opts.footer = opts.footer
+		win_opts.footer_pos = opts.footer_pos or "center"
+	end
 	local winid = vim.api.nvim_open_win(
 		opts.bufnr, opts.enter ~= false, win_opts
 	)
 	vim.api.nvim_set_option_value(
 		"winhighlight",
-		"FloatBorder:GitflowBorder,FloatTitle:GitflowTitle",
+		"FloatBorder:GitflowBorder,FloatTitle:GitflowTitle,FloatFooter:GitflowFooter",
 		{ win = winid }
 	)
 

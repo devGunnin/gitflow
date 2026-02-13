@@ -23,6 +23,8 @@ local utils = require("gitflow.utils")
 
 local M = {}
 local SELECTION_HIGHLIGHT = "GitflowPaletteSelection"
+local PALETTE_PROMPT_FOOTER = "<CR> select  <Esc> close  <Down>/<Up> navigate"
+local PALETTE_LIST_FOOTER = "<CR> select  j/k move  q close"
 
 ---@type GitflowPalettePanelState
 M.state = {
@@ -497,7 +499,9 @@ function M.open(cfg, entries, on_select)
 		col = col,
 		border = cfg.ui.float.border,
 		title = "Gitflow Palette Query",
-		title_pos = "left",
+		title_pos = cfg.ui.float.title_pos,
+		footer = cfg.ui.float.footer and PALETTE_PROMPT_FOOTER or nil,
+		footer_pos = cfg.ui.float.footer_pos,
 	})
 
 	M.state.list_winid = ui.window.open_float({
@@ -509,7 +513,9 @@ function M.open(cfg, entries, on_select)
 		col = col,
 		border = cfg.ui.float.border,
 		title = "Gitflow Palette",
-		title_pos = "left",
+		title_pos = cfg.ui.float.title_pos,
+		footer = cfg.ui.float.footer and PALETTE_LIST_FOOTER or nil,
+		footer_pos = cfg.ui.float.footer_pos,
 	})
 
 	vim.api.nvim_set_option_value("wrap", false, { win = M.state.prompt_winid })

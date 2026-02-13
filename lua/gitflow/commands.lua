@@ -33,6 +33,7 @@ local label_completion = require("gitflow.completion.labels")
 ---@field panel_window integer|nil
 
 local M = {}
+local MAIN_FLOAT_FOOTER = ":Gitflow status  :Gitflow branch  :Gitflow prs  :Gitflow issues"
 
 ---@type table<string, GitflowSubcommand>
 M.subcommands = {}
@@ -94,6 +95,9 @@ local function open_panel(cfg)
 			height = cfg.ui.float.height,
 			border = cfg.ui.float.border,
 			title = cfg.ui.float.title,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and MAIN_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.panel_window = nil
 			end,
