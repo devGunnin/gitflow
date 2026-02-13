@@ -465,9 +465,11 @@ local function render()
 			end
 
 			local entry_num = entry_to_number[entry.name]
-			local num_prefix = ""
+			local num_prefix
 			if entry_num then
 				num_prefix = ("[%d] "):format(entry_num)
+			else
+				num_prefix = "    "
 			end
 
 			-- Per-entry icon
@@ -509,16 +511,16 @@ local function render()
 
 			local row = #lines - 1
 			local byte_offset = 4
+			local gutter_len = #num_prefix
 			if entry_num then
-				local badge_len = #num_prefix
 				highlights[#highlights + 1] = {
 					row = row,
 					col_start = byte_offset,
-					col_end = byte_offset + badge_len,
+					col_end = byte_offset + gutter_len,
 					group = "GitflowPaletteIndex",
 				}
-				byte_offset = byte_offset + badge_len
 			end
+			byte_offset = byte_offset + gutter_len
 
 			-- Per-entry icon highlight
 			if icon_part ~= "" then
