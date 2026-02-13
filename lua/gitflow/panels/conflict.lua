@@ -177,10 +177,6 @@ local function render(files, operation)
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: open 3-way view  r/R: refresh"
-	lines[#lines + 1] = "C: continue operation  A: abort operation  q: quit"
-
 	ui.buffer.update("conflict", lines)
 	M.state.files = files
 	M.state.line_entries = line_entries
@@ -195,8 +191,6 @@ local function render(files, operation)
 	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
 	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 2, 0, -1)
 	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 3, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowFooter", #lines - 2, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
 
 	for line_no, _ in pairs(line_entries) do
 		vim.api.nvim_buf_add_highlight(
