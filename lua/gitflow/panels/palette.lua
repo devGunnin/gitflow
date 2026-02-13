@@ -701,7 +701,9 @@ local function apply_keymaps()
 		vim.keymap.set("i", num_key, function()
 			local entry = M.state.numbered_entries[i]
 			if entry then
-				execute_numbered(entry)
+				vim.schedule(function()
+					execute_numbered(entry)
+				end)
 			end
 			return ""
 		end, prompt_insert_opts)
