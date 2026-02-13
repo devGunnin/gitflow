@@ -69,27 +69,25 @@ function M.defaults()
 	return {
 		keybindings = {
 			help = "<leader>gh",
-			open = "<leader>go",
-			refresh = "<leader>gr",
+			refresh = "<leader>gg",
 			close = "<leader>gq",
 			status = "gs",
 			commit = "gc",
-			push = "gp",
-			pull = "gP",
+			push = "<leader>gP",
+			pull = "<leader>gp",
 			fetch = "<leader>gf",
 			diff = "gd",
 			log = "gl",
 			stash = "gS",
 			stash_push = "gZ",
 			branch = "<leader>gb",
-			issue = "<leader>gI",
-			pr = "<leader>gR",
-			label = "<leader>gL",
+			issue = "<leader>gi",
+			pr = "<leader>gr",
 			conflict = "<leader>gm",
-			palette = "<leader>gp",
+			palette = "<leader>go",
 		},
 		ui = {
-			default_layout = "split",
+			default_layout = "float",
 			split = {
 				orientation = "vertical",
 				size = 50,
@@ -115,7 +113,7 @@ function M.defaults()
 			},
 		},
 		sync = {
-			pull_strategy = "rebase",
+			pull_strategy = "merge",
 		},
 		quick_actions = {
 			quick_commit = { "commit" },
