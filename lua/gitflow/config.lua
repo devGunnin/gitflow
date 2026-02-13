@@ -130,7 +130,7 @@ function M.defaults()
 			conflict = "!",
 		},
 		icons = {
-			enable = false,
+			enable = true,
 		},
 	}
 end
@@ -149,10 +149,7 @@ local function validate_keybindings(config)
 			error("gitflow config error: keybindings keys must be non-empty strings", 3)
 		end
 		if not utils.is_non_empty_string(mapping) then
-			error(
-				("gitflow config error: keybinding '%s' must be a non-empty string"):format(action),
-				3
-			)
+			error(("gitflow config error: keybinding '%s' must be a non-empty string"):format(action), 3)
 		end
 	end
 end
@@ -208,12 +205,7 @@ local function validate_ui(config)
 	elseif type(float.border) == "table" then
 		for key, value in pairs(float.border) do
 			if type(value) ~= "string" then
-				error(
-					("gitflow config error: ui.float.border[%s] must be a string"):format(
-						vim.inspect(key)
-					),
-					3
-				)
+				error(("gitflow config error: ui.float.border[%s] must be a string"):format(vim.inspect(key)), 3)
 			end
 		end
 	else
@@ -288,20 +280,12 @@ local valid_quick_action_steps = {
 ---@param sequence GitflowQuickActionStep[]|unknown
 local function validate_quick_action_sequence(name, sequence)
 	if type(sequence) ~= "table" or #sequence == 0 then
-		error(
-			("gitflow config error: quick_actions.%s must be a non-empty list"):format(name),
-			3
-		)
+		error(("gitflow config error: quick_actions.%s must be a non-empty list"):format(name), 3)
 	end
 
 	for index, step in ipairs(sequence) do
 		if not valid_quick_action_steps[step] then
-			error(
-				(
-					"gitflow config error: quick_actions.%s[%d] must be 'commit' or 'push'"
-				):format(name, index),
-				3
-			)
+			error(("gitflow config error: quick_actions.%s[%d] must be 'commit' or 'push'"):format(name, index), 3)
 		end
 	end
 end
@@ -349,10 +333,7 @@ local function validate_signs(config)
 
 		local width = vim.fn.strdisplaywidth(value)
 		if width < 1 or width > 2 then
-			error(
-				("gitflow config error: signs.%s must be 1-2 cells wide"):format(name),
-				3
-			)
+			error(("gitflow config error: signs.%s must be 1-2 cells wide"):format(name), 3)
 		end
 	end
 
