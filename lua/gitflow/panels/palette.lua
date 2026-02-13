@@ -1,5 +1,6 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
+local icons = require("gitflow.icons")
 
 ---@class GitflowPaletteEntry
 ---@field name string
@@ -20,11 +21,15 @@ local utils = require("gitflow.utils")
 ---@field on_select fun(entry: GitflowPaletteEntry)|nil
 ---@field augroup integer|nil
 ---@field highlight_ns integer|nil
+---@field render_ns integer|nil
+---@field numbered_entries table<integer, GitflowPaletteEntry>
 
 local M = {}
 local SELECTION_HIGHLIGHT = "GitflowPaletteSelection"
-local PALETTE_PROMPT_FOOTER = "<CR> select  <Esc> close  <Down>/<Up> navigate"
-local PALETTE_LIST_FOOTER = "<CR> select  j/k move  q close"
+local PALETTE_PROMPT_FOOTER =
+	"[1-9] quick select  <CR> confirm  / search  q close"
+local PALETTE_LIST_FOOTER =
+	"[1-9] quick select  <CR> select  j/k move  q close"
 
 ---@type GitflowPalettePanelState
 M.state = {
@@ -40,12 +45,20 @@ M.state = {
 	on_select = nil,
 	augroup = nil,
 	highlight_ns = nil,
+	render_ns = nil,
+	numbered_entries = {},
 }
 
 local CATEGORY_ORDER = {
 	Git = 1,
 	GitHub = 2,
 	UI = 3,
+}
+
+local CATEGORY_ICON_KEYS = {
+	Git = "git",
+	GitHub = "github",
+	UI = "ui",
 }
 
 ---@param text string
@@ -145,7 +158,9 @@ end
 
 ---@return integer|nil
 local function selected_line()
-	if M.state.selected_line and M.state.line_entries[M.state.selected_line] then
+	if M.state.selected_line
+		and M.state.line_entries[M.state.selected_line]
+	then
 		return M.state.selected_line
 	end
 
@@ -185,7 +200,9 @@ local function apply_selection_highlight(line)
 		return
 	end
 
-	vim.api.nvim_buf_add_highlight(bufnr, ns, SELECTION_HIGHLIGHT, line - 1, 0, -1)
+	vim.api.nvim_buf_add_highlight(
+		bufnr, ns, SELECTION_HIGHLIGHT, line - 1, 0, -1
+	)
 end
 
 ---@param line integer
@@ -265,41 +282,200 @@ local function execute_selected()
 	end
 end
 
+---@param entry GitflowPaletteEntry
+---@param number integer
+local function execute_numbered(entry, number)
+	if not entry then
+		return
+	end
+
+	stop_insert_mode_if_active()
+
+	local on_select = M.state.on_select
+	M.close()
+	if on_select then
+		on_select(entry)
+	end
+end
+
+---@param width integer
+---@return string
+local function separator_line(width)
+	local sep = string.rep("\u{2500}", width)
+	return sep
+end
+
+---@param bufnr integer
+---@param ns integer
+---@param row integer  0-indexed
+---@param col_start integer  byte offset
+---@param col_end integer  byte offset (-1 for end of line)
+---@param hl_group string
+local function add_hl(bufnr, ns, row, col_start, col_end, hl_group)
+	vim.api.nvim_buf_add_highlight(bufnr, ns, hl_group, row, col_start, col_end)
+end
+
 local function render()
 	local list_bufnr = M.state.list_bufnr
 	if not list_bufnr or not vim.api.nvim_buf_is_valid(list_bufnr) then
 		return
 	end
 
+	local render_ns = M.state.render_ns
+	if render_ns then
+		vim.api.nvim_buf_clear_namespace(list_bufnr, render_ns, 0, -1)
+	end
+
+	local cfg = M.state.cfg
+	local width = 60
+	if cfg then
+		local columns = vim.o.columns
+		width = math.max(50, math.floor(columns * cfg.ui.float.width))
+	end
+
 	local query = M.state.query or ""
 	local filtered = M.filter_entries(M.state.entries, query)
-	local lines = {
-		"Gitflow Palette",
-		"",
-	}
+	local lines = {}
 	local line_entries = {}
+	local highlights = {}
+	local numbered_entries = {}
 	local active_category = nil
+	local entry_number = 0
 
 	if #filtered == 0 then
-		lines[#lines + 1] = "No commands match the current query."
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "  No commands match the current query."
 	else
 		for _, entry in ipairs(filtered) do
 			if entry.category ~= active_category then
-				lines[#lines + 1] = entry.category
+				if active_category ~= nil then
+					lines[#lines + 1] = ""
+				end
+
+				local icon_key = CATEGORY_ICON_KEYS[entry.category]
+				local icon = ""
+				if icon_key then
+					icon = icons.get("palette", icon_key)
+				end
+				local header_text
+				if icon ~= "" then
+					header_text = ("  %s %s"):format(icon, entry.category)
+				else
+					header_text = ("  %s"):format(entry.category)
+				end
+				lines[#lines + 1] = header_text
+				highlights[#highlights + 1] = {
+					row = #lines - 1,
+					col_start = 0,
+					col_end = -1,
+					group = "GitflowPaletteHeader",
+				}
+
+				local sep = ("  %s"):format(
+					separator_line(math.max(1, width - 4))
+				)
+				lines[#lines + 1] = sep
+				highlights[#highlights + 1] = {
+					row = #lines - 1,
+					col_start = 0,
+					col_end = -1,
+					group = "GitflowPaletteHeader",
+				}
 				active_category = entry.category
 			end
 
-			local keybinding = ""
-			if entry.keybinding and entry.keybinding ~= "" then
-				keybinding = (" [%s]"):format(entry.keybinding)
+			entry_number = entry_number + 1
+			local num_prefix = ""
+			if entry_number <= 9 then
+				num_prefix = ("[%d] "):format(entry_number)
+				numbered_entries[entry_number] = entry
 			end
-			lines[#lines + 1] = ("  %s - %s%s"):format(entry.name, entry.description, keybinding)
+
+			local keybind_hint = ""
+			if entry.keybinding and entry.keybinding ~= "" then
+				keybind_hint = ("[%s]"):format(entry.keybinding)
+			end
+
+			local left_part = ("    %s%s"):format(
+				num_prefix, entry.name
+			)
+			local desc_part = (" \u{2014} %s"):format(entry.description)
+			local content_len = vim.fn.strdisplaywidth(left_part)
+				+ vim.fn.strdisplaywidth(desc_part)
+
+			local line_text
+			if keybind_hint ~= "" then
+				local hint_len = vim.fn.strdisplaywidth(keybind_hint)
+				local pad = math.max(
+					1, width - content_len - hint_len - 2
+				)
+				line_text = left_part
+					.. desc_part
+					.. string.rep(" ", pad)
+					.. keybind_hint
+			else
+				line_text = left_part .. desc_part
+			end
+			lines[#lines + 1] = line_text
 			line_entries[#lines] = entry
+
+			local row = #lines - 1
+			local byte_offset = 4
+			if entry_number <= 9 then
+				local badge_len = #num_prefix
+				highlights[#highlights + 1] = {
+					row = row,
+					col_start = byte_offset,
+					col_end = byte_offset + badge_len,
+					group = "GitflowPaletteIndex",
+				}
+				byte_offset = byte_offset + badge_len
+			end
+
+			local name_len = #entry.name
+			highlights[#highlights + 1] = {
+				row = row,
+				col_start = byte_offset,
+				col_end = byte_offset + name_len,
+				group = "GitflowPaletteCommand",
+			}
+
+			local dash_str = " \u{2014} "
+			local dash_byte_start = byte_offset + name_len
+			local dash_byte_len = #dash_str
+			local desc_byte_start = dash_byte_start + dash_byte_len
+			local desc_byte_len = #entry.description
+			highlights[#highlights + 1] = {
+				row = row,
+				col_start = desc_byte_start,
+				col_end = desc_byte_start + desc_byte_len,
+				group = "GitflowPaletteDescription",
+			}
+
+			if keybind_hint ~= "" then
+				local hint_byte_start = #line_text - #keybind_hint
+				highlights[#highlights + 1] = {
+					row = row,
+					col_start = hint_byte_start,
+					col_end = #line_text,
+					group = "GitflowPaletteKeybind",
+				}
+			end
 		end
 	end
 
 	ui.buffer.update(list_bufnr, lines)
 	M.state.line_entries = line_entries
+	M.state.numbered_entries = numbered_entries
+
+	if render_ns then
+		for _, hl in ipairs(highlights) do
+			add_hl(
+				list_bufnr, render_ns,
+				hl.row, hl.col_start, hl.col_end, hl.group
+			)
+		end
+	end
 
 	local selection = selectable_lines()
 	if #selection == 0 then
@@ -321,7 +497,9 @@ local function refresh_query()
 		return
 	end
 
-	local line = vim.api.nvim_buf_get_lines(prompt_bufnr, 0, 1, false)[1] or ""
+	local line = vim.api.nvim_buf_get_lines(
+		prompt_bufnr, 0, 1, false
+	)[1] or ""
 	M.state.query = line
 	render()
 end
@@ -334,7 +512,9 @@ local function compute_layout(cfg)
 
 	local width = math.max(50, math.floor(columns * cfg.ui.float.width))
 	local prompt_height = 3
-	local list_height = math.max(10, math.floor(editor_lines * cfg.ui.float.height))
+	local list_height = math.max(
+		10, math.floor(editor_lines * cfg.ui.float.height)
+	)
 	local combined_height = prompt_height + 1 + list_height
 
 	if combined_height > editor_lines - 2 then
@@ -342,13 +522,17 @@ local function compute_layout(cfg)
 		combined_height = prompt_height + 1 + list_height
 	end
 
-	local row = math.max(0, math.floor((editor_lines - combined_height) / 2))
+	local row = math.max(
+		0, math.floor((editor_lines - combined_height) / 2)
+	)
 	local col = math.max(0, math.floor((columns - width) / 2))
 	return width, prompt_height, list_height, row, col
 end
 
 local function setup_prompt_autocmd()
-	local group = vim.api.nvim_create_augroup("GitflowPalettePrompt", { clear = true })
+	local group = vim.api.nvim_create_augroup(
+		"GitflowPalettePrompt", { clear = true }
+	)
 	M.state.augroup = group
 
 	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
@@ -367,14 +551,18 @@ local function apply_keymaps()
 		return
 	end
 
-	local prompt_normal_opts = { buffer = prompt_bufnr, silent = true, nowait = true }
+	local prompt_normal_opts = {
+		buffer = prompt_bufnr, silent = true, nowait = true,
+	}
 	local prompt_insert_opts = {
 		buffer = prompt_bufnr,
 		silent = true,
 		nowait = true,
 		expr = true,
 	}
-	local list_opts = { buffer = list_bufnr, silent = true, nowait = true }
+	local list_opts = {
+		buffer = list_bufnr, silent = true, nowait = true,
+	}
 	local prompt_navigation_keys = {
 		{ key = "<Down>", delta = 1 },
 		{ key = "<Up>", delta = -1 },
@@ -400,6 +588,22 @@ local function apply_keymaps()
 			move_selection(mapping.delta)
 			return ""
 		end, prompt_insert_opts)
+	end
+
+	for i = 1, 9 do
+		local num_key = tostring(i)
+		vim.keymap.set("n", num_key, function()
+			local entry = M.state.numbered_entries[i]
+			if entry then
+				execute_numbered(entry, i)
+			end
+		end, prompt_normal_opts)
+		vim.keymap.set("n", num_key, function()
+			local entry = M.state.numbered_entries[i]
+			if entry then
+				execute_numbered(entry, i)
+			end
+		end, list_opts)
 	end
 
 	vim.keymap.set("n", "<CR>", function()
@@ -458,6 +662,8 @@ function M.close()
 	M.state.on_select = nil
 	M.state.augroup = nil
 	M.state.highlight_ns = nil
+	M.state.render_ns = nil
+	M.state.numbered_entries = {}
 end
 
 ---@param cfg GitflowConfig
@@ -472,9 +678,16 @@ function M.open(cfg, entries, on_select)
 	M.state.query = ""
 	M.state.line_entries = {}
 	M.state.selected_line = nil
-	M.state.highlight_ns = vim.api.nvim_create_namespace("GitflowPaletteSelection")
+	M.state.numbered_entries = {}
+	M.state.highlight_ns = vim.api.nvim_create_namespace(
+		"GitflowPaletteSelection"
+	)
+	M.state.render_ns = vim.api.nvim_create_namespace(
+		"GitflowPaletteRender"
+	)
 
-	local width, prompt_height, list_height, row, col = compute_layout(cfg)
+	local width, prompt_height, list_height, row, col =
+		compute_layout(cfg)
 	local prompt_bufnr = ui.buffer.create("palette_prompt", {
 		filetype = "gitflowpaletteprompt",
 		lines = { "" },
@@ -487,8 +700,12 @@ function M.open(cfg, entries, on_select)
 	M.state.prompt_bufnr = prompt_bufnr
 	M.state.list_bufnr = list_bufnr
 
-	vim.api.nvim_set_option_value("modifiable", true, { buf = prompt_bufnr })
-	vim.api.nvim_set_option_value("modifiable", false, { buf = list_bufnr })
+	vim.api.nvim_set_option_value(
+		"modifiable", true, { buf = prompt_bufnr }
+	)
+	vim.api.nvim_set_option_value(
+		"modifiable", false, { buf = list_bufnr }
+	)
 
 	M.state.prompt_winid = ui.window.open_float({
 		name = "palette_prompt",
@@ -498,9 +715,10 @@ function M.open(cfg, entries, on_select)
 		row = row,
 		col = col,
 		border = cfg.ui.float.border,
-		title = "Gitflow Palette Query",
+		title = " Gitflow ",
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer and PALETTE_PROMPT_FOOTER or nil,
+		footer = cfg.ui.float.footer
+			and PALETTE_PROMPT_FOOTER or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
@@ -512,15 +730,22 @@ function M.open(cfg, entries, on_select)
 		row = row + prompt_height + 1,
 		col = col,
 		border = cfg.ui.float.border,
-		title = "Gitflow Palette",
+		title = " Commands ",
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer and PALETTE_LIST_FOOTER or nil,
+		footer = cfg.ui.float.footer
+			and PALETTE_LIST_FOOTER or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
-	vim.api.nvim_set_option_value("wrap", false, { win = M.state.prompt_winid })
-	vim.api.nvim_set_option_value("wrap", false, { win = M.state.list_winid })
-	vim.api.nvim_set_option_value("cursorline", true, { win = M.state.list_winid })
+	vim.api.nvim_set_option_value(
+		"wrap", false, { win = M.state.prompt_winid }
+	)
+	vim.api.nvim_set_option_value(
+		"wrap", false, { win = M.state.list_winid }
+	)
+	vim.api.nvim_set_option_value(
+		"cursorline", true, { win = M.state.list_winid }
+	)
 
 	setup_prompt_autocmd()
 	apply_keymaps()
@@ -530,7 +755,8 @@ end
 
 ---@return boolean
 function M.is_open()
-	return M.state.list_bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.list_bufnr)
+	return M.state.list_bufnr ~= nil
+		and vim.api.nvim_buf_is_valid(M.state.list_bufnr)
 end
 
 return M

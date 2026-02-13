@@ -27,6 +27,11 @@ M.DEFAULT_GROUPS = {
 	GitflowHeader = { link = "TabLineSel" },
 	GitflowFooter = { link = "Comment" },
 	GitflowPaletteSelection = { link = "Visual" },
+	GitflowPaletteHeader = { link = "Title" },
+	GitflowPaletteKeybind = { link = "Special" },
+	GitflowPaletteDescription = { link = "Comment" },
+	GitflowPaletteIndex = { link = "DiagnosticInfo" },
+	GitflowPaletteCommand = { link = "Identifier" },
 }
 
 ---@param user_overrides table<string, table>|nil
