@@ -108,6 +108,25 @@ end
 
 ---@param arglead string|nil
 ---@return string[]
+function M.complete_create_labels(arglead)
+	local raw = arglead or ""
+	local prefix_csv = raw:match("^(.*,)") or ""
+	local current = raw:match("([^,]*)$") or raw
+
+	local selected = selected_labels(prefix_csv, false)
+	local candidates = {}
+	for _, label in ipairs(M.list_repo_label_candidates()) do
+		if not selected[label]
+			and (current == "" or vim.startswith(label, current))
+		then
+			candidates[#candidates + 1] = ("%s%s"):format(prefix_csv, label)
+		end
+	end
+	return candidates
+end
+
+---@param arglead string|nil
+---@return string[]
 function M.complete_issue_patch(arglead)
 	local raw = arglead or ""
 	local prefix_csv = raw:match("^(.*,)") or ""

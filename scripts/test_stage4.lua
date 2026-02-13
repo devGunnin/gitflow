@@ -535,6 +535,89 @@ vim.o.wildcharm = original_wildcharm
 vim.o.wildmenu = original_wildmenu
 vim.o.wildmode = original_wildmode
 
+-- Test: create_interactive labels prompt wires completion
+local create_prompt_count = 0
+local create_label_completion = nil
+local create_completion_fn_name = nil
+
+vim.ui.input = function(_, _)
+	error(
+		"create label prompt should not use vim.ui.input when completion is configured",
+		2
+	)
+end
+
+vim.fn.inputsave = function()
+	return 1
+end
+vim.fn.inputrestore = function()
+	return 1
+end
+
+vim.fn.input = function(opts)
+	create_prompt_count = create_prompt_count + 1
+	if create_prompt_count == 3 then
+		-- This is the labels prompt (title=1, body=2, labels=3)
+		create_label_completion = opts.completion
+		assert_true(
+			type(create_label_completion) == "string",
+			"create labels prompt should configure completion"
+		)
+
+		create_completion_fn_name =
+			create_label_completion:match("^customlist,v:lua%.([%w_]+)$")
+		assert_true(
+			create_completion_fn_name ~= nil,
+			"create labels prompt should use custom completion"
+		)
+		assert_true(
+			type(_G[create_completion_fn_name]) == "function",
+			"create labels custom completion function should exist"
+		)
+
+		local candidates = _G[create_completion_fn_name]("b", "", 0)
+		assert_true(
+			contains(candidates, "bug"),
+			"create labels completion should suggest matching label"
+		)
+
+		local no_sign = _G[create_completion_fn_name]("+b", "", 0)
+		assert_true(
+			not contains(no_sign, "+bug"),
+			"create labels completion should not handle +/- sign prefixes"
+		)
+
+		local multi = _G[create_completion_fn_name]("bug,d", "", 0)
+		assert_true(
+			contains(multi, "bug,docs"),
+			"create labels completion should support comma-separated values"
+		)
+		assert_true(
+			not contains(multi, "bug,bug"),
+			"create labels completion should exclude already-selected labels"
+		)
+
+		return "bug,docs"
+	end
+	return "test value"
+end
+
+issues_panel.create_interactive()
+wait_until(function()
+	local lines = read_lines(gh_log)
+	return find_line(lines, "issue create") ~= nil
+end, "create_interactive should invoke gh issue create")
+
+assert_true(
+	create_completion_fn_name ~= nil and _G[create_completion_fn_name] == nil,
+	"create labels completion function should be cleaned up after input"
+)
+
+vim.ui.input = original_ui_input
+vim.fn.input = original_fn_input
+vim.fn.inputsave = original_inputsave
+vim.fn.inputrestore = original_inputrestore
+
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
 	local bufnr = buffer.get("prs")

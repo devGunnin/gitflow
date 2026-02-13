@@ -417,7 +417,12 @@ function M.create_interactive()
 		end
 
 		input.prompt({ prompt = "Issue body: " }, function(body)
-			input.prompt({ prompt = "Labels (comma-separated): " }, function(labels_raw)
+			input.prompt({
+				prompt = "Labels (comma-separated): ",
+				completion = function(arglead, _, _)
+					return label_completion.complete_create_labels(arglead)
+				end,
+			}, function(labels_raw)
 				input.prompt({ prompt = "Assignees (comma-separated): " }, function(assignees_raw)
 					gh_issues.create({
 						title = normalized_title,
