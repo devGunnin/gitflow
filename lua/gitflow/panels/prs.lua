@@ -311,9 +311,32 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Review requests: %d"):
 		format(type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0)
 	lines[#lines + 1] = ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0)
-	lines[#lines + 1] = ("Comments: %d"):format(type(pr.comments) == "table" and #pr.comments or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
+
 	lines[#lines + 1] = ""
+	lines[#lines + 1] = "Comments"
+	lines[#lines + 1] = "--------"
+
+	local comments = pr.comments or {}
+	if type(comments) ~= "table" or #comments == 0 then
+		lines[#lines + 1] = "(none)"
+	else
+		for _, comment in ipairs(comments) do
+			local author = comment.author
+				and maybe_text(comment.author.login) or "unknown"
+			lines[#lines + 1] = ("%s:"):format(author)
+			local comment_lines = split_lines(tostring(comment.body or ""))
+			if #comment_lines == 0 then
+				lines[#lines + 1] = "  (empty)"
+			else
+				for _, comment_line in ipairs(comment_lines) do
+					lines[#lines + 1] = ("  %s"):format(comment_line)
+				end
+			end
+			lines[#lines + 1] = ""
+		end
+	end
+
 	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
 		.. "  m: merge  o: checkout  v: review  r: refresh"
 
