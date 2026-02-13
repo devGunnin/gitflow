@@ -1,5 +1,7 @@
 local config = require("gitflow.config")
 local commands = require("gitflow.commands")
+local highlights = require("gitflow.highlights")
+local icon_mod = require("gitflow.icons")
 
 local M = {}
 
@@ -10,6 +12,8 @@ M.initialized = false
 ---@return GitflowConfig
 function M.setup(opts)
 	local cfg = config.setup(opts or {})
+	highlights.setup(cfg.highlights)
+	icon_mod.setup(cfg.icons)
 	commands.setup(cfg)
 	M.initialized = true
 	return cfg

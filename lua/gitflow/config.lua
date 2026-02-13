@@ -49,6 +49,7 @@ function M.defaults()
 			diff = "gd",
 			log = "gl",
 			stash = "gS",
+			palette = "<leader>go",
 		},
 		ui = {
 			default_layout = "split",
@@ -72,6 +73,10 @@ function M.defaults()
 				count = 50,
 				format = "%h %s",
 			},
+		},
+		highlights = {},
+		icons = {
+			enable = false,
 		},
 	}
 end
@@ -168,11 +173,30 @@ local function validate_git(config)
 end
 
 ---@param config GitflowConfig
+local function validate_highlights(config)
+	if type(config.highlights) ~= "table" then
+		error("gitflow config error: highlights must be a table", 3)
+	end
+end
+
+---@param config GitflowConfig
+local function validate_icons(config)
+	if type(config.icons) ~= "table" then
+		error("gitflow config error: icons must be a table", 3)
+	end
+	if type(config.icons.enable) ~= "boolean" then
+		error("gitflow config error: icons.enable must be a boolean", 3)
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
 	validate_git(config)
+	validate_highlights(config)
+	validate_icons(config)
 end
 
 ---@param opts table|nil

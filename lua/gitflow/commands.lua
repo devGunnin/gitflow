@@ -8,6 +8,7 @@ local status_panel = require("gitflow.panels.status")
 local diff_panel = require("gitflow.panels.diff")
 local log_panel = require("gitflow.panels.log")
 local stash_panel = require("gitflow.panels.stash")
+local palette_panel = require("gitflow.panels.palette")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -308,6 +309,7 @@ local function register_builtin_subcommands(cfg)
 			diff_panel.close()
 			log_panel.close()
 			stash_panel.close()
+			palette_panel.close()
 			return "Gitflow panels closed"
 		end,
 	}
@@ -443,6 +445,18 @@ local function register_builtin_subcommands(cfg)
 			return ("Unknown stash action: %s"):format(action)
 		end,
 	}
+
+	M.subcommands.palette = {
+		description = "Open command palette",
+		run = function()
+			palette_panel.open(cfg, {
+				on_select = function(entry)
+					M.dispatch({ entry.command }, cfg)
+				end,
+			})
+			return nil
+		end,
+	}
 end
 
 ---@param commandline string
@@ -539,6 +553,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowDiff)", "<Cmd>Gitflow diff<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPalette)", "<Cmd>Gitflow palette<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -552,6 +567,7 @@ function M.setup(cfg)
 		diff = "<Plug>(GitflowDiff)",
 		log = "<Plug>(GitflowLog)",
 		stash = "<Plug>(GitflowStash)",
+		palette = "<Plug>(GitflowPalette)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]
