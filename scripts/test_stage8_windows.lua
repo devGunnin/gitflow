@@ -26,6 +26,40 @@ local function assert_contains(text, needle, message)
 	assert_true(text:find(needle, 1, true) ~= nil, message)
 end
 
+local function find_line(lines, needle)
+	for i, line in ipairs(lines) do
+		if line:find(needle, 1, true) then
+			return i
+		end
+	end
+	return nil
+end
+
+local function namespace_id(name)
+	return vim.api.nvim_get_namespaces()[name]
+end
+
+local function has_highlight_at_line(bufnr, ns, line, group)
+	local marks = vim.api.nvim_buf_get_extmarks(
+		bufnr,
+		ns,
+		0,
+		-1,
+		{ details = true }
+	)
+	local target_row = line - 1
+	local target_id = vim.api.nvim_get_hl_id_by_name(group)
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		if mark[2] == target_row then
+			if details.hl_group == group or details.hl_id == target_id then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 local config = require("gitflow.config")
 local window = require("gitflow.ui.window")
 local ui = require("gitflow.ui")
@@ -314,5 +348,97 @@ assert_float_panel_capture(start, "palette_list")
 palette_panel.close()
 
 ui.window.open_float = original_open_float
+
+local split_cfg = config.setup({
+	ui = {
+		default_layout = "split",
+		split = {
+			orientation = "vertical",
+			size = 40,
+		},
+	},
+})
+
+local git_log = require("gitflow.git.log")
+local git_stash = require("gitflow.git.stash")
+local original_git_log_list = git_log.list
+local original_git_stash_list = git_stash.list
+local split_original_branch_current = git_branch.current
+
+git_branch.current = function(_, cb)
+	cb(nil, "main")
+end
+git_log.list = function(_, cb)
+	cb(nil, {
+		{ sha = "abc1234", short_sha = "abc1234", summary = "Initial commit" },
+	})
+end
+git_stash.list = function(_, cb)
+	cb(nil, {
+		{ index = 0, ref = "stash@{0}", description = "WIP on main" },
+	})
+end
+
+log_panel.open(split_cfg, {})
+local log_bufnr = log_panel.state.bufnr
+local log_lines = vim.api.nvim_buf_get_lines(log_bufnr, 0, -1, false)
+local expected_log_footer = ui.render.format_key_hints({
+	{ key = "<CR>", label = "open commit diff" },
+	{ key = "r", label = "refresh" },
+	{ key = "q", label = "close" },
+})
+local log_branch_line = find_line(log_lines, "Current branch: main")
+assert_true(log_branch_line ~= nil, "log split panel should include branch line")
+assert_equals(log_branch_line, #log_lines - 2, "log branch line should remain above inline footer")
+assert_equals(log_lines[#log_lines], expected_log_footer, "log split footer should use key hints")
+local log_ns = namespace_id("gitflow_log_hl")
+assert_true(log_ns ~= nil, "log split panel should create highlight namespace")
+assert_true(
+	has_highlight_at_line(log_bufnr, log_ns, #log_lines, "GitflowFooter"),
+	"log split panel should highlight inline footer line"
+)
+assert_true(
+	not has_highlight_at_line(log_bufnr, log_ns, log_branch_line, "GitflowFooter"),
+	"log split panel should not highlight branch line as footer"
+)
+log_panel.close()
+
+stash_panel.open(split_cfg)
+local stash_bufnr = stash_panel.state.bufnr
+local stash_lines = vim.api.nvim_buf_get_lines(stash_bufnr, 0, -1, false)
+local expected_stash_footer = ui.render.format_key_hints({
+	{ key = "P", label = "pop" },
+	{ key = "D", label = "drop" },
+	{ key = "S", label = "stash" },
+	{ key = "r", label = "refresh" },
+	{ key = "q", label = "close" },
+})
+local stash_branch_line = find_line(stash_lines, "Current branch: main")
+assert_true(stash_branch_line ~= nil, "stash split panel should include branch line")
+assert_equals(
+	stash_branch_line,
+	#stash_lines - 2,
+	"stash branch line should remain above inline footer"
+)
+assert_equals(
+	stash_lines[#stash_lines],
+	expected_stash_footer,
+	"stash split footer should use key hints"
+)
+local stash_ns = namespace_id("gitflow_stash_hl")
+assert_true(stash_ns ~= nil, "stash split panel should create highlight namespace")
+assert_true(
+	has_highlight_at_line(stash_bufnr, stash_ns, #stash_lines, "GitflowFooter"),
+	"stash split panel should highlight inline footer line"
+)
+assert_true(
+	not has_highlight_at_line(stash_bufnr, stash_ns, stash_branch_line, "GitflowFooter"),
+	"stash split panel should not highlight branch line as footer"
+)
+stash_panel.close()
+
+git_log.list = original_git_log_list
+git_stash.list = original_git_stash_list
+git_branch.current = split_original_branch_current
 
 print("Stage 8 windows tests passed")

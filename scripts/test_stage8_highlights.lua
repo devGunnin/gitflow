@@ -66,6 +66,29 @@ for group, attrs in pairs(highlights.DEFAULT_GROUPS) do
 	assert_equals(hl.link, attrs.link, ("%s should link to default group"):format(group))
 end
 
+local palette_header_bar = get_highlight("GitflowPaletteHeaderBar", { link = false })
+assert_equals(
+	palette_header_bar.bg,
+	tonumber("DCA561", 16),
+	"palette header bar should preserve orange/gold background"
+)
+assert_equals(
+	palette_header_bar.fg,
+	tonumber("222222", 16),
+	"palette header bar should preserve dark foreground"
+)
+assert_true(
+	palette_header_bar.bold == true,
+	"palette header bar should preserve bold styling"
+)
+
+local palette_backdrop = get_highlight("GitflowPaletteBackdrop", { link = false })
+assert_equals(
+	palette_backdrop.bg,
+	tonumber("000000", 16),
+	"palette backdrop should preserve explicit dark background"
+)
+
 vim.o.background = "light"
 highlights.setup({})
 assert_equals(
