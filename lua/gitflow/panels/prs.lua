@@ -4,6 +4,7 @@ local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
 local label_completion = require("gitflow.completion.labels")
 local review_panel = require("gitflow.panels.review")
+local icons = require("gitflow.icons")
 
 ---@class GitflowPrPanelState
 ---@field bufnr integer|nil
@@ -218,7 +219,8 @@ local function render_list(prs)
 			local state = pr_state(pr)
 			local title = maybe_text(pr.title)
 			local refs = ("%s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
-			lines[#lines + 1] = ("  #%s [%s] %s"):format(number, state, title)
+			local state_icon = icons.get("github", "pr_" .. state)
+			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
 			lines[#lines + 1] = ("      refs: %s"):format(refs)
 			line_entries[#lines - 1] = pr
 			line_entries[#lines] = pr
@@ -251,9 +253,11 @@ end
 
 ---@param pr table
 local function render_view(pr)
+	local view_state = pr_state(pr)
+	local view_icon = icons.get("github", "pr_" .. view_state)
 	local lines = {
 		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
-		("State: %s"):format(pr_state(pr)),
+		("State: %s %s"):format(view_icon, view_state),
 		("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-"),
 		("Refs: %s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName)),
 		"",

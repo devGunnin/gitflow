@@ -3,6 +3,7 @@ local commands = require("gitflow.commands")
 local gh = require("gitflow.gh")
 local highlights = require("gitflow.highlights")
 local signs = require("gitflow.signs")
+local icons = require("gitflow.icons")
 
 local M = {}
 local statusline_module = nil
@@ -41,6 +42,7 @@ function M.setup(opts)
 	highlights.setup(cfg.highlights)
 	commands.setup(cfg)
 	signs.setup(cfg)
+	icons.setup(cfg)
 	local statusline = load_statusline_module()
 	if statusline ~= nil and type(statusline.setup) == "function" then
 		statusline.setup()

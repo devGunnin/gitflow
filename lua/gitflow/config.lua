@@ -48,6 +48,9 @@ local utils = require("gitflow.utils")
 ---@field deleted string
 ---@field conflict string
 
+---@class GitflowIconsConfig
+---@field enable boolean
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
@@ -57,6 +60,7 @@ local utils = require("gitflow.utils")
 ---@field quick_actions GitflowQuickActionsConfig
 ---@field highlights GitflowHighlightConfig
 ---@field signs GitflowSignsConfig
+---@field icons GitflowIconsConfig
 
 local M = {}
 
@@ -125,6 +129,9 @@ function M.defaults()
 			deleted = "−",
 			conflict = "!",
 		},
+		icons = {
+			enable = true,
+		},
 	}
 end
 
@@ -142,10 +149,7 @@ local function validate_keybindings(config)
 			error("gitflow config error: keybindings keys must be non-empty strings", 3)
 		end
 		if not utils.is_non_empty_string(mapping) then
-			error(
-				("gitflow config error: keybinding '%s' must be a non-empty string"):format(action),
-				3
-			)
+			error(("gitflow config error: keybinding '%s' must be a non-empty string"):format(action), 3)
 		end
 	end
 end
@@ -201,12 +205,7 @@ local function validate_ui(config)
 	elseif type(float.border) == "table" then
 		for key, value in pairs(float.border) do
 			if type(value) ~= "string" then
-				error(
-					("gitflow config error: ui.float.border[%s] must be a string"):format(
-						vim.inspect(key)
-					),
-					3
-				)
+				error(("gitflow config error: ui.float.border[%s] must be a string"):format(vim.inspect(key)), 3)
 			end
 		end
 	else
@@ -281,20 +280,12 @@ local valid_quick_action_steps = {
 ---@param sequence GitflowQuickActionStep[]|unknown
 local function validate_quick_action_sequence(name, sequence)
 	if type(sequence) ~= "table" or #sequence == 0 then
-		error(
-			("gitflow config error: quick_actions.%s must be a non-empty list"):format(name),
-			3
-		)
+		error(("gitflow config error: quick_actions.%s must be a non-empty list"):format(name), 3)
 	end
 
 	for index, step in ipairs(sequence) do
 		if not valid_quick_action_steps[step] then
-			error(
-				(
-					"gitflow config error: quick_actions.%s[%d] must be 'commit' or 'push'"
-				):format(name, index),
-				3
-			)
+			error(("gitflow config error: quick_actions.%s[%d] must be 'commit' or 'push'"):format(name, index), 3)
 		end
 	end
 end
@@ -342,10 +333,7 @@ local function validate_signs(config)
 
 		local width = vim.fn.strdisplaywidth(value)
 		if width < 1 or width > 2 then
-			error(
-				("gitflow config error: signs.%s must be 1-2 cells wide"):format(name),
-				3
-			)
+			error(("gitflow config error: signs.%s must be 1-2 cells wide"):format(name), 3)
 		end
 	end
 
@@ -353,6 +341,17 @@ local function validate_signs(config)
 	validate_sign_text("modified", config.signs.modified)
 	validate_sign_text("deleted", config.signs.deleted)
 	validate_sign_text("conflict", config.signs.conflict)
+end
+
+---@param config GitflowConfig
+local function validate_icons(config)
+	if type(config.icons) ~= "table" then
+		error("gitflow config error: icons must be a table", 3)
+	end
+
+	if type(config.icons.enable) ~= "boolean" then
+		error("gitflow config error: icons.enable must be a boolean", 3)
+	end
 end
 
 ---@param config GitflowConfig
@@ -365,6 +364,7 @@ function M.validate(config)
 	validate_quick_actions(config)
 	validate_highlights(config)
 	validate_signs(config)
+	validate_icons(config)
 end
 
 ---@param opts table|nil
