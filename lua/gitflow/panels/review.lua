@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
@@ -64,10 +65,21 @@ local icons = require("gitflow.icons")
 
 local M = {}
 local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
-local REVIEW_FLOAT_FOOTER =
-	"]f/[f files  ]c/[c hunks  c comment  S submit"
-	.. "  a approve  x changes  R reply"
-	.. "  <leader>t toggle  <leader>b back  r refresh  q close"
+local FOOTER_HINTS = {
+	{ key = "]f", label = "Next file" },
+	{ key = "[f", label = "Prev file" },
+	{ key = "]c", label = "Next hunk" },
+	{ key = "[c", label = "Prev hunk" },
+	{ key = "c", label = "Comment" },
+	{ key = "S", label = "Submit review" },
+	{ key = "a", label = "Approve" },
+	{ key = "x", label = "Request changes" },
+	{ key = "R", label = "Reply" },
+	{ key = "<leader>t", label = "Toggle thread" },
+	{ key = "<leader>b", label = "Back" },
+	{ key = "r", label = "Refresh" },
+	{ key = "q", label = "Close" },
+}
 
 ---@type GitflowPrReviewPanelState
 M.state = {
@@ -83,6 +95,39 @@ M.state = {
 	thread_line_map = {},
 	pending_comments = {},
 }
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@param title string
+---@return integer
+local function open_panel_window(cfg, bufnr, title)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "review",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = title,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "review",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -113,23 +158,7 @@ local function ensure_window(cfg)
 		title = ("Gitflow PR Review #%d"):format(M.state.pr_number)
 	end
 
-	-- B3: fullscreen floating window that overlays the editor
-	M.state.winid = ui.window.open_float({
-		name = "review",
-		bufnr = bufnr,
-		width = 1.0,
-		height = 1.0,
-		row = 0,
-		col = 0,
-		border = cfg.ui.float.border,
-		title = title,
-		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer and REVIEW_FLOAT_FOOTER or nil,
-		footer_pos = cfg.ui.float.footer_pos,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	M.state.winid = open_panel_window(cfg, bufnr, title)
 
 	-- ]c/[c for hunk nav per spec
 	vim.keymap.set("n", "]f", function()

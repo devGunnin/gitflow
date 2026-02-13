@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
@@ -22,10 +23,14 @@ local conflict_view = require("gitflow.ui.conflict")
 ---@field prompt_when_resolved boolean
 
 local M = {}
-local CONFLICT_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_conflict_hl")
-local CONFLICT_FLOAT_TITLE = "Gitflow Conflicts"
-local CONFLICT_FLOAT_FOOTER =
-	"<CR> open 3-way  r refresh  C continue  A abort  q close"
+local TITLE = "Gitflow Conflicts"
+local FOOTER_HINTS = {
+	{ key = "<CR>", label = "Open 3-way" },
+	{ key = "r", label = "Refresh" },
+	{ key = "C", label = "Continue" },
+	{ key = "A", label = "Abort" },
+	{ key = "q", label = "Close" },
+}
 
 ---@type GitflowConflictPanelState
 M.state = {
@@ -82,6 +87,38 @@ local function reset_auto_continue_prompt()
 end
 
 ---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "conflict",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "conflict",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
+
+---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
 	if not bufnr then
@@ -99,32 +136,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "conflict",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = CONFLICT_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and CONFLICT_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "conflict",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "<CR>", function()
 		M.open_under_cursor()
@@ -154,67 +166,37 @@ end
 ---@param files GitflowConflictFileEntry[]
 ---@param operation GitflowConflictOperation|nil
 local function render(files, operation)
-	local lines = {
-		"Gitflow Conflicts",
-		"",
-		("Active operation: %s"):format(operation_label(operation)),
-		("Unresolved files: %d"):format(#files),
-		"",
-	}
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.section(spec, "Conflict Summary")
+	ui_render.entry(spec, ("Active operation: %s"):format(operation_label(operation)))
+	ui_render.entry(spec, ("Unresolved files: %d"):format(#files))
+	ui_render.blank(spec)
+	ui_render.section(spec, "Files")
 	local line_entries = {}
 
 	if #files == 0 then
-		lines[#lines + 1] = "  (none)"
+		ui_render.empty(spec, "none")
 	else
 		for _, item in ipairs(files) do
-			local suffix = (" (%d hunks)"):format(item.hunk_count)
-			lines[#lines + 1] = ("  %s%s"):format(item.path, suffix)
-			line_entries[#lines] = item
+			local line = ui_render.entry(
+				spec,
+				("%s (%d hunks)"):format(item.path, item.hunk_count),
+				"GitflowConflictBase"
+			)
+			line_entries[line] = item
 
 			if item.marker_error then
-				lines[#lines + 1] = ("    ! %s"):format(item.marker_error)
+				ui_render.entry(spec, ("! %s"):format(item.marker_error), "GitflowConflictRemote")
 			end
 		end
 	end
 
-	ui.buffer.update("conflict", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("conflict", spec)
 	M.state.files = files
 	M.state.line_entries = line_entries
 	M.state.active_operation = operation
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, CONFLICT_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 2, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 3, 0, -1)
-
-	for line_no, _ in pairs(line_entries) do
-		vim.api.nvim_buf_add_highlight(
-			bufnr,
-			CONFLICT_HIGHLIGHT_NS,
-			"GitflowConflictBase",
-			line_no - 1,
-			0,
-			-1
-		)
-	end
-
-	for line_no, line in ipairs(lines) do
-		if vim.startswith(line, "    ! ") then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				CONFLICT_HIGHLIGHT_NS,
-				"GitflowConflictRemote",
-				line_no - 1,
-				0,
-				-1
-			)
-		end
-	end
 end
 
 ---@return GitflowConflictFileEntry|nil

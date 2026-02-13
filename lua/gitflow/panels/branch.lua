@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
@@ -11,11 +12,17 @@ local icons = require("gitflow.icons")
 ---@field line_entries table<integer, GitflowBranchEntry>
 
 local M = {}
-local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
-local BRANCH_FLOAT_TITLE = "Gitflow Branches"
-local BRANCH_FLOAT_FOOTER =
-	"<CR> switch  c create  d delete  D force delete  r rename"
-	.. "  R refresh  f fetch  q close"
+local TITLE = "Gitflow Branches"
+local FOOTER_HINTS = {
+	{ key = "<CR>", label = "Switch" },
+	{ key = "c", label = "Create" },
+	{ key = "d", label = "Delete" },
+	{ key = "D", label = "Force delete" },
+	{ key = "r", label = "Rename" },
+	{ key = "R", label = "Refresh" },
+	{ key = "f", label = "Fetch" },
+	{ key = "q", label = "Close" },
+}
 
 ---@type GitflowBranchPanelState
 M.state = {
@@ -37,6 +44,38 @@ local function result_message(result, fallback)
 end
 
 ---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "branch",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "branch",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
+
+---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
 	if not bufnr then
@@ -54,32 +93,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "branch",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = BRANCH_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and BRANCH_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "branch",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "<CR>", function()
 		M.switch_under_cursor()
@@ -116,13 +130,13 @@ end
 
 ---@param title string
 ---@param entries GitflowBranchEntry[]
----@param lines string[]
+---@param spec GitflowRenderSpec
 ---@param line_entries table<integer, GitflowBranchEntry>
-local function append_section(title, entries, lines, line_entries)
-	lines[#lines + 1] = title
+local function append_section(title, entries, spec, line_entries)
+	ui_render.section(spec, title)
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
-		lines[#lines + 1] = ""
+		ui_render.empty(spec, "none")
+		ui_render.blank(spec)
 		return
 	end
 
@@ -135,51 +149,8 @@ local function append_section(title, entries, lines, line_entries)
 		else
 			marker = icons.get("branch", "local_branch")
 		end
+
 		local current_text = entry.is_current and " (current)" or ""
-		local line = (" %s %s%s"):format(marker, entry.name, current_text)
-		lines[#lines + 1] = line
-		line_entries[#lines] = entry
-	end
-	lines[#lines + 1] = ""
-end
-
----@param entries GitflowBranchEntry[]
-local function render(entries)
-	local local_entries, remote_entries = git_branch.partition(entries)
-	local lines = {
-		"Gitflow Branches",
-		"",
-	}
-	local line_entries = {}
-
-	append_section("Local", local_entries, lines, line_entries)
-	append_section("Remote", remote_entries, lines, line_entries)
-
-	ui.buffer.update("branch", lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, BRANCH_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, BRANCH_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-
-	for line_no, line in ipairs(lines) do
-		if line == "Local" or line == "Remote" then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				BRANCH_HIGHLIGHT_NS,
-				"GitflowHeader",
-				line_no - 1,
-				0,
-				-1
-			)
-		end
-	end
-
-	for line_no, entry in pairs(line_entries) do
 		local group = nil
 		if entry.is_current then
 			group = "GitflowBranchCurrent"
@@ -187,10 +158,24 @@ local function render(entries)
 			group = "GitflowBranchRemote"
 		end
 
-		if group then
-			vim.api.nvim_buf_add_highlight(bufnr, BRANCH_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
-		end
+		local line = ui_render.entry(spec, ("%s %s%s"):format(marker, entry.name, current_text), group)
+		line_entries[line] = entry
 	end
+	ui_render.blank(spec)
+end
+
+---@param entries GitflowBranchEntry[]
+local function render(entries)
+	local local_entries, remote_entries = git_branch.partition(entries)
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	local line_entries = {}
+
+	append_section("Local", local_entries, spec, line_entries)
+	append_section("Remote", remote_entries, spec, line_entries)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("branch", spec)
+	M.state.line_entries = line_entries
 end
 
 ---@return GitflowBranchEntry|nil

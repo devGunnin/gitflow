@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_issues = require("gitflow.gh.issues")
@@ -16,11 +17,18 @@ local icons = require("gitflow.icons")
 ---@field active_issue_number integer|nil
 
 local M = {}
-local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
-local ISSUES_FLOAT_TITLE = "Gitflow Issues"
-local ISSUES_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  x close  L labels  A assign"
-	.. "  r refresh  b back  q close"
+local TITLE = "Gitflow Issues"
+local FOOTER_HINTS = {
+	{ key = "<CR>", label = "View" },
+	{ key = "c", label = "Create" },
+	{ key = "C", label = "Comment" },
+	{ key = "x", label = "Close issue" },
+	{ key = "L", label = "Labels" },
+	{ key = "A", label = "Assign" },
+	{ key = "r", label = "Refresh" },
+	{ key = "b", label = "Back" },
+	{ key = "q", label = "Close panel" },
+}
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -32,6 +40,38 @@ M.state = {
 	mode = "list",
 	active_issue_number = nil,
 }
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "issues",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "issues",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -51,32 +91,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "issues",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = ISSUES_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and ISSUES_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "issues",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "<CR>", function()
 		M.view_under_cursor()
@@ -208,39 +223,29 @@ local function split_lines(text)
 end
 
 local function render_loading(message)
-	ui.buffer.update("issues", {
-		"Gitflow Issues",
-		"",
-		message,
-	})
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.entry(spec, message, "GitflowMuted")
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("issues", spec)
 	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
 end
 
 ---@param issues table[]
 local function render_list(issues)
-	local lines = {
-		"Gitflow Issues",
-		"",
-		("Filters: state=%s label=%s assignee=%s"):
-			format(
-				maybe_text(M.state.filters.state),
-				maybe_text(M.state.filters.label),
-				maybe_text(M.state.filters.assignee)
-			),
-		("Issues (%d)"):format(#issues),
-	}
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.entry(spec, ("Filters: state=%s label=%s assignee=%s"):format(
+		maybe_text(M.state.filters.state),
+		maybe_text(M.state.filters.label),
+		maybe_text(M.state.filters.assignee)
+	), "GitflowMuted")
+	ui_render.blank(spec)
+	ui_render.section(spec, ("Issues (%d)"):format(#issues))
 	local line_entries = {}
 
 	if #issues == 0 then
-		lines[#lines + 1] = "  (none)"
+		ui_render.empty(spec, "none")
 	else
 		for _, issue in ipairs(issues) do
 			local number = tostring(issue.number or "?")
@@ -249,101 +254,89 @@ local function render_list(issues)
 			local labels = join_label_names(issue)
 			local state_icon = icons.get("github", "issue_" .. state)
 			local assignees = join_assignee_names(issue)
-			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
-			lines[#lines + 1] = ("      labels: %s  assignees: %s"):format(
-				labels, assignees
+			local item_line = ui_render.entry(
+				spec,
+				("#%s %s %s"):format(number, state_icon, title),
+				issue_highlight_group(state)
 			)
-			line_entries[#lines - 1] = issue
-			line_entries[#lines] = issue
+			local details_line = ui_render.entry(
+				spec,
+				("labels: %s  assignees: %s"):format(labels, assignees),
+				"GitflowMuted"
+			)
+			line_entries[item_line] = issue
+			line_entries[details_line] = issue
 		end
 	end
 
-	ui.buffer.update("issues", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("issues", spec)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-
-	for line_no, issue in pairs(line_entries) do
-		local group = issue_highlight_group(issue_state(issue))
-		vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
-	end
 end
 
 ---@param issue table
 local function render_view(issue)
 	local view_state = issue_state(issue)
 	local view_icon = icons.get("github", "issue_" .. view_state)
-	local lines = {
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.entry(
+		spec,
 		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
+		issue_highlight_group(view_state)
+	)
+	ui_render.entry(
+		spec,
 		("State: %s %s"):format(view_icon, view_state),
-		("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-"),
-		("Labels: %s"):format(join_label_names(issue)),
-		("Assignees: %s"):format(join_assignee_names(issue)),
-		"",
-		"Body",
-		"----",
-	}
+		issue_highlight_group(view_state)
+	)
+	ui_render.entry(
+		spec,
+		("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-")
+	)
+	ui_render.entry(spec, ("Labels: %s"):format(join_label_names(issue)))
+	ui_render.entry(spec, ("Assignees: %s"):format(join_assignee_names(issue)))
+	ui_render.blank(spec)
+	ui_render.section(spec, "Body")
 
 	local body_lines = split_lines(tostring(issue.body or ""))
 	if #body_lines == 0 then
-		lines[#lines + 1] = "(empty)"
+		ui_render.empty(spec, "empty")
 	else
 		for _, body_line in ipairs(body_lines) do
-			lines[#lines + 1] = body_line
+			ui_render.entry(spec, body_line)
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Comments"
-	lines[#lines + 1] = "--------"
+	ui_render.blank(spec)
+	ui_render.section(spec, "Comments")
 
 	local comments = issue.comments or {}
 	if type(comments) ~= "table" or #comments == 0 then
-		lines[#lines + 1] = "(none)"
+		ui_render.empty(spec, "none")
 	else
 		for _, comment in ipairs(comments) do
 			local author = comment.author and maybe_text(comment.author.login) or "unknown"
-			lines[#lines + 1] = ("%s:"):format(author)
+			ui_render.entry(spec, ("%s:"):format(author))
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
-				lines[#lines + 1] = "  (empty)"
+				ui_render.empty(spec, "empty")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					lines[#lines + 1] = ("  %s"):format(comment_line)
+					ui_render.entry(spec, comment_line)
 				end
 			end
-			lines[#lines + 1] = ""
+			ui_render.blank(spec)
 		end
 	end
 
-	ui.buffer.update("issues", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("issues", spec)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(
-		bufnr,
-		ISSUES_HIGHLIGHT_NS,
-		issue_highlight_group(issue_state(issue)),
-		1,
-		0,
-		-1
-	)
 end
 
 ---@return table|nil

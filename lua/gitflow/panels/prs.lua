@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
@@ -17,11 +18,20 @@ local icons = require("gitflow.icons")
 ---@field active_pr_number integer|nil
 
 local M = {}
-local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
-local PRS_FLOAT_TITLE = "Gitflow Pull Requests"
-local PRS_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  L labels  A assign  m merge"
-	.. "  o checkout  v review  r refresh  b back  q close"
+local TITLE = "Gitflow Pull Requests"
+local FOOTER_HINTS = {
+	{ key = "<CR>", label = "View" },
+	{ key = "c", label = "Create" },
+	{ key = "C", label = "Comment" },
+	{ key = "L", label = "Labels" },
+	{ key = "A", label = "Assign" },
+	{ key = "m", label = "Merge" },
+	{ key = "o", label = "Checkout" },
+	{ key = "v", label = "Review" },
+	{ key = "r", label = "Refresh" },
+	{ key = "b", label = "Back" },
+	{ key = "q", label = "Close" },
+}
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -33,6 +43,38 @@ M.state = {
 	mode = "list",
 	active_pr_number = nil,
 }
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+---@return integer
+local function open_panel_window(cfg, bufnr)
+	if cfg.ui.default_layout == "float" then
+		return ui.window.open_float({
+			name = "prs",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and ui_render.format_key_hints(FOOTER_HINTS) or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
+
+	return ui.window.open_split({
+		name = "prs",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			M.state.winid = nil
+		end,
+	})
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -52,32 +94,7 @@ local function ensure_window(cfg)
 		return
 	end
 
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "prs",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = PRS_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and PRS_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "prs",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
+	M.state.winid = open_panel_window(cfg, bufnr)
 
 	vim.keymap.set("n", "<CR>", function()
 		M.view_under_cursor()
@@ -207,39 +224,29 @@ local function join_assignee_names(pr)
 end
 
 local function render_loading(message)
-	ui.buffer.update("prs", {
-		"Gitflow Pull Requests",
-		"",
-		message,
-	})
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.entry(spec, message, "GitflowMuted")
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("prs", spec)
 	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
 end
 
 ---@param prs table[]
 local function render_list(prs)
-	local lines = {
-		"Gitflow Pull Requests",
-		"",
-		("Filters: state=%s base=%s head=%s"):
-			format(
-				maybe_text(M.state.filters.state),
-				maybe_text(M.state.filters.base),
-				maybe_text(M.state.filters.head)
-			),
-		("PRs (%d)"):format(#prs),
-	}
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.entry(spec, ("Filters: state=%s base=%s head=%s"):format(
+		maybe_text(M.state.filters.state),
+		maybe_text(M.state.filters.base),
+		maybe_text(M.state.filters.head)
+	), "GitflowMuted")
+	ui_render.blank(spec)
+	ui_render.section(spec, ("PRs (%d)"):format(#prs))
 	local line_entries = {}
 
 	if #prs == 0 then
-		lines[#lines + 1] = "  (none)"
+		ui_render.empty(spec, "none")
 	else
 		for _, pr in ipairs(prs) do
 			local number = tostring(pr.number or "?")
@@ -250,111 +257,98 @@ local function render_list(prs)
 			)
 			local assignees = join_assignee_names(pr)
 			local state_icon = icons.get("github", "pr_" .. state)
-			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
-			lines[#lines + 1] = ("      refs: %s  assignees: %s"):format(
-				refs, assignees
+			local item_line = ui_render.entry(
+				spec,
+				("#%s %s %s"):format(number, state_icon, title),
+				pr_highlight_group(state)
 			)
-			line_entries[#lines - 1] = pr
-			line_entries[#lines] = pr
+			local details_line = ui_render.entry(
+				spec,
+				("refs: %s  assignees: %s"):format(refs, assignees),
+				"GitflowMuted"
+			)
+			line_entries[item_line] = pr
+			line_entries[details_line] = pr
 		end
 	end
 
-	ui.buffer.update("prs", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("prs", spec)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-
-	for line_no, pr in pairs(line_entries) do
-		local group = pr_highlight_group(pr_state(pr))
-		vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
-	end
 end
 
 ---@param pr table
 local function render_view(pr)
 	local view_state = pr_state(pr)
 	local view_icon = icons.get("github", "pr_" .. view_state)
-	local lines = {
+	local spec = ui_render.new()
+	ui_render.title(spec, TITLE)
+	ui_render.entry(
+		spec,
 		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
+		pr_highlight_group(view_state)
+	)
+	ui_render.entry(
+		spec,
 		("State: %s %s"):format(view_icon, view_state),
-		("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-"),
-		("Refs: %s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName)),
-		("Assignees: %s"):format(join_assignee_names(pr)),
-		"",
-		"Body",
-		"----",
-	}
+		pr_highlight_group(view_state)
+	)
+	ui_render.entry(spec, ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-"))
+	ui_render.entry(
+		spec,
+		("Refs: %s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
+	)
+	ui_render.entry(spec, ("Assignees: %s"):format(join_assignee_names(pr)))
+	ui_render.blank(spec)
+	ui_render.section(spec, "Body")
 
 	local body_lines = split_lines(tostring(pr.body or ""))
 	if #body_lines == 0 then
-		lines[#lines + 1] = "(empty)"
+		ui_render.empty(spec, "empty")
 	else
 		for _, body_line in ipairs(body_lines) do
-			lines[#lines + 1] = body_line
+			ui_render.entry(spec, body_line)
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Review requests: %d"):
-		format(type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0)
-	lines[#lines + 1] = ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0)
-	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
-
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Comments"
-	lines[#lines + 1] = "--------"
+	ui_render.blank(spec)
+	ui_render.section(spec, "Review Summary")
+	ui_render.entry(spec, ("Review requests: %d"):format(type(pr.reviewRequests) == "table"
+		and #pr.reviewRequests or 0))
+	ui_render.entry(spec, ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0))
+	ui_render.entry(spec, ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0))
+	ui_render.blank(spec)
+	ui_render.section(spec, "Comments")
+	-- Keep this for compatibility with existing tests that look for the historical divider text.
+	ui_render.entry(spec, "--------", "GitflowSeparator")
 
 	local comments = pr.comments or {}
 	if type(comments) ~= "table" or #comments == 0 then
-		lines[#lines + 1] = "(none)"
+		ui_render.empty(spec, "none")
 	else
 		for _, comment in ipairs(comments) do
 			local author = comment.author
 				and maybe_text(comment.author.login) or "unknown"
-			lines[#lines + 1] = ("%s:"):format(author)
+			ui_render.entry(spec, ("%s:"):format(author))
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
-				lines[#lines + 1] = "  (empty)"
+				ui_render.empty(spec, "empty")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					lines[#lines + 1] = ("  %s"):format(comment_line)
+					ui_render.entry(spec, comment_line)
 				end
 			end
-			lines[#lines + 1] = ""
+			ui_render.blank(spec)
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
-		.. "  m: merge  o: checkout  v: review  r: refresh"
-
-	ui.buffer.update("prs", lines)
+	ui_render.footer(spec, FOOTER_HINTS)
+	ui_render.commit("prs", spec)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(
-		bufnr,
-		PRS_HIGHLIGHT_NS,
-		pr_highlight_group(pr_state(pr)),
-		1,
-		0,
-		-1
-	)
 end
 
 ---@return table|nil
