@@ -22,6 +22,7 @@ local conflict_panel = require("gitflow.panels.conflict")
 local palette_panel = require("gitflow.panels.palette")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
+local assignee_completion = require("gitflow.completion.assignees")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -1212,7 +1213,10 @@ local function register_builtin_subcommands(cfg)
 			if action == "edit" then
 				local number = first_positional_from(ctx.args, 3)
 				if not number then
-					return "Usage: :Gitflow issue edit <number> [title=...] [body=...] [add=...] [remove=...]"
+					return "Usage: :Gitflow issue edit <number>"
+						.. " [title=...] [body=...]"
+						.. " [add=...] [remove=...]"
+						.. " [add_assignees=...] [remove_assignees=...]"
 				end
 
 				local edit_opts = {}
@@ -1233,6 +1237,14 @@ local function register_builtin_subcommands(cfg)
 					local remove = token:match("^remove=(.+)$")
 					if remove then
 						edit_opts.remove_labels = parse_csv(remove)
+					end
+					local add_a = token:match("^add_assignees=(.+)$")
+					if add_a then
+						edit_opts.add_assignees = parse_csv(add_a)
+					end
+					local remove_a = token:match("^remove_assignees=(.+)$")
+					if remove_a then
+						edit_opts.remove_assignees = parse_csv(remove_a)
 					end
 				end
 
@@ -1504,7 +1516,10 @@ local function register_builtin_subcommands(cfg)
 			if action == "edit" then
 				local number = first_positional_from(ctx.args, 3)
 				if not number then
-					return "Usage: :Gitflow pr edit <number> [add=...] [remove=...] [reviewers=...]"
+					return "Usage: :Gitflow pr edit <number>"
+						.. " [add=...] [remove=...]"
+						.. " [add_assignees=...] [remove_assignees=...]"
+						.. " [reviewers=...]"
 				end
 
 				local edit_opts = {}
@@ -1517,6 +1532,14 @@ local function register_builtin_subcommands(cfg)
 					local remove = token:match("^remove=(.+)$")
 					if remove then
 						edit_opts.remove_labels = parse_csv(remove)
+					end
+					local add_a = token:match("^add_assignees=(.+)$")
+					if add_a then
+						edit_opts.add_assignees = parse_csv(add_a)
+					end
+					local remove_a = token:match("^remove_assignees=(.+)$")
+					if remove_a then
+						edit_opts.remove_assignees = parse_csv(remove_a)
 					end
 					local reviewers = token:match("^reviewers=(.+)$")
 					if reviewers then
@@ -1809,7 +1832,10 @@ local function complete_issue(subaction, arglead)
 	end
 
 	if subaction == "edit" then
-		return filter_candidates(arglead, { "title=", "body=", "add=", "remove=" })
+		return filter_candidates(arglead, {
+			"title=", "body=", "add=", "remove=",
+			"add_assignees=", "remove_assignees=",
+		})
 	end
 
 	return {}
@@ -1850,7 +1876,10 @@ local function complete_pr(subaction, arglead)
 	end
 
 	if subaction == "edit" then
-		return filter_candidates(arglead, { "add=", "remove=", "reviewers=" })
+		return filter_candidates(arglead, {
+			"add=", "remove=", "add_assignees=",
+			"remove_assignees=", "reviewers=",
+		})
 	end
 
 	if subaction == "review" or subaction == "submit-review" then
@@ -1982,6 +2011,16 @@ function M.complete(arglead, cmdline, _cursorpos)
 		if args[3] == "edit" and vim.startswith(arglead, "remove=") then
 			return label_completion.complete_token(arglead, "remove")
 		end
+		if args[3] == "edit" and vim.startswith(arglead, "add_assignees=") then
+			return assignee_completion.complete_token(arglead, "add_assignees")
+		end
+		if args[3] == "edit"
+			and vim.startswith(arglead, "remove_assignees=")
+		then
+			return assignee_completion.complete_token(
+				arglead, "remove_assignees"
+			)
+		end
 		return complete_issue(args[3], arglead)
 	end
 	if subcommand == "pr" then
@@ -1993,6 +2032,16 @@ function M.complete(arglead, cmdline, _cursorpos)
 		end
 		if args[3] == "edit" and vim.startswith(arglead, "remove=") then
 			return label_completion.complete_token(arglead, "remove")
+		end
+		if args[3] == "edit" and vim.startswith(arglead, "add_assignees=") then
+			return assignee_completion.complete_token(arglead, "add_assignees")
+		end
+		if args[3] == "edit"
+			and vim.startswith(arglead, "remove_assignees=")
+		then
+			return assignee_completion.complete_token(
+				arglead, "remove_assignees"
+			)
 		end
 		return complete_pr(args[3], arglead)
 	end

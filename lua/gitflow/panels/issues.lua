@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_issues = require("gitflow.gh.issues")
 local label_completion = require("gitflow.completion.labels")
+local assignee_completion = require("gitflow.completion.assignees")
 local icons = require("gitflow.icons")
 
 ---@class GitflowIssuePanelState
@@ -18,7 +19,8 @@ local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "Gitflow Issues"
 local ISSUES_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  x close  L labels  r refresh  b back  q close"
+	"<CR> view  c create  C comment  x close  L labels  A assign"
+	.. "  r refresh  b back  q close"
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -96,6 +98,10 @@ local function ensure_window(cfg)
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "A", function()
+		M.edit_assignees_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "r", function()
 		if M.state.mode == "view" and M.state.active_issue_number then
 			M.open_view(M.state.active_issue_number)
@@ -170,6 +176,28 @@ local function join_label_names(issue)
 	return table.concat(names, ", ")
 end
 
+---@param issue table
+---@return string
+local function join_assignee_names(issue)
+	local assignees = issue.assignees or {}
+	if type(assignees) ~= "table" or #assignees == 0 then
+		return "-"
+	end
+
+	local names = {}
+	for _, assignee in ipairs(assignees) do
+		if type(assignee) == "table" and assignee.login then
+			names[#names + 1] = assignee.login
+		elseif type(assignee) == "string" then
+			names[#names + 1] = assignee
+		end
+	end
+	if #names == 0 then
+		return "-"
+	end
+	return table.concat(names, ", ")
+end
+
 ---@param text string
 ---@return string[]
 local function split_lines(text)
@@ -220,15 +248,19 @@ local function render_list(issues)
 			local title = maybe_text(issue.title)
 			local labels = join_label_names(issue)
 			local state_icon = icons.get("github", "issue_" .. state)
+			local assignees = join_assignee_names(issue)
 			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
-			lines[#lines + 1] = ("      labels: %s"):format(labels)
+			lines[#lines + 1] = ("      labels: %s  assignees: %s"):format(
+				labels, assignees
+			)
 			line_entries[#lines - 1] = issue
 			line_entries[#lines] = issue
 		end
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: view  c: create  C: comment  x: close  L: labels  r: refresh  q: quit"
+	lines[#lines + 1] = "<CR>: view  c: create  C: comment  x: close"
+		.. "  L: labels  A: assign  r: refresh  q: quit"
 
 	ui.buffer.update("issues", lines)
 	M.state.line_entries = line_entries
@@ -259,6 +291,7 @@ local function render_view(issue)
 		("State: %s %s"):format(view_icon, view_state),
 		("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-"),
 		("Labels: %s"):format(join_label_names(issue)),
+		("Assignees: %s"):format(join_assignee_names(issue)),
 		"",
 		"Body",
 		"----",
@@ -296,7 +329,8 @@ local function render_view(issue)
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  x: close  L: labels  r: refresh"
+	lines[#lines + 1] =
+		"b: back to list  C: comment  x: close  L: labels  A: assign  r: refresh"
 
 	ui.buffer.update("issues", lines)
 	M.state.line_entries = {}
@@ -584,6 +618,77 @@ function M.edit_labels_under_cursor()
 				return
 			end
 			utils.notify(("Updated labels for issue #%s"):format(tostring(number)), vim.log.levels.INFO)
+			if M.state.mode == "view" then
+				M.open_view(number)
+			else
+				M.refresh()
+			end
+		end)
+	end)
+end
+
+---@param value string
+---@return string[], string[]
+local function parse_assignee_patch(value)
+	local add = {}
+	local remove = {}
+	for _, token in ipairs(vim.split(value or "", ",", { trimempty = true })) do
+		local trimmed = vim.trim(token)
+		if trimmed == "" then
+			goto continue
+		end
+		if vim.startswith(trimmed, "+") then
+			add[#add + 1] = vim.trim(trimmed:sub(2))
+		elseif vim.startswith(trimmed, "-") then
+			remove[#remove + 1] = vim.trim(trimmed:sub(2))
+		else
+			add[#add + 1] = trimmed
+		end
+		::continue::
+	end
+	return add, remove
+end
+
+function M.edit_assignees_under_cursor()
+	local number = M.state.active_issue_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No issue selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+
+	input.prompt({
+		prompt = "Assignees (+user,-user,user): ",
+		completion = function(arglead, _, _)
+			return assignee_completion.complete_assignee_patch(arglead)
+		end,
+	}, function(value)
+		local add_assignees, remove_assignees = parse_assignee_patch(value)
+		if #add_assignees == 0 and #remove_assignees == 0 then
+			utils.notify("No assignee edits provided", vim.log.levels.WARN)
+			return
+		end
+
+		gh_issues.edit(number, {
+			add_assignees = add_assignees,
+			remove_assignees = remove_assignees,
+		}, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Updated assignees for issue #%s"):format(tostring(number)),
+				vim.log.levels.INFO
+			)
 			if M.state.mode == "view" then
 				M.open_view(number)
 			else
