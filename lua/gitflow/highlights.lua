@@ -33,14 +33,10 @@ M.DEFAULT_GROUPS = {
 	GitflowPaletteIndex = { link = "Number" },
 	GitflowPaletteCommand = { link = "Function" },
 	GitflowPaletteNormal = { link = "NormalFloat" },
-	GitflowPaletteHeaderBar = {
-		fg = "#222222", bg = "#DCA561", bold = true,
-	},
-	GitflowPaletteHeaderIcon = {
-		fg = "#56B6C2", bg = "#DCA561", bold = true,
-	},
-	GitflowPaletteEntryIcon = { fg = "#56B6C2" },
-	GitflowPaletteBackdrop = { bg = "#000000" },
+	GitflowPaletteHeaderBar = { link = "GitflowHeader" },
+	GitflowPaletteHeaderIcon = { link = "GitflowPaletteHeader" },
+	GitflowPaletteEntryIcon = { link = "GitflowPaletteCommand" },
+	GitflowPaletteBackdrop = { link = "Normal" },
 }
 
 ---@param user_overrides table<string, table>|nil

@@ -211,6 +211,7 @@ local stash_panel = require("gitflow.panels.stash")
 local conflict_panel = require("gitflow.panels.conflict")
 local issues_panel = require("gitflow.panels.issues")
 local prs_panel = require("gitflow.panels.prs")
+local labels_panel = require("gitflow.panels.labels")
 local review_panel = require("gitflow.panels.review")
 local diff_panel = require("gitflow.panels.diff")
 local palette_panel = require("gitflow.panels.palette")
@@ -270,6 +271,14 @@ prs_panel.open(float_cfg, {})
 assert_float_panel_capture(start, "prs")
 prs_panel.close()
 prs_panel.refresh = original_prs_refresh
+
+local original_labels_refresh = labels_panel.refresh
+labels_panel.refresh = function() end
+start = #captured
+labels_panel.open(float_cfg)
+assert_float_panel_capture(start, "labels")
+labels_panel.close()
+labels_panel.refresh = original_labels_refresh
 
 local original_review_refresh = review_panel.refresh
 review_panel.refresh = function() end

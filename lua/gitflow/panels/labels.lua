@@ -10,6 +10,15 @@ local gh_labels = require("gitflow.gh.labels")
 ---@field line_entries table<integer, table>
 
 local M = {}
+local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
+local LABELS_FLOAT_TITLE = "Gitflow Labels"
+local LABELS_KEY_HINTS = {
+	{ key = "c", label = "create" },
+	{ key = "d", label = "delete" },
+	{ key = "r", label = "refresh" },
+	{ key = "q", label = "close" },
+}
+local LABELS_FLOAT_FOOTER = ui.render.format_key_hints(LABELS_KEY_HINTS)
 
 ---@type GitflowLabelPanelState
 M.state = {
@@ -37,15 +46,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "labels",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "labels",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = LABELS_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and LABELS_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "labels",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "c", function()
 		M.create_interactive()
@@ -75,12 +101,32 @@ local function maybe_text(value)
 end
 
 local function render_loading(message)
-	ui.buffer.update("labels", {
+	local lines = {
 		"Gitflow Labels",
 		"",
 		message,
-	})
+	}
+	local show_window_footer = M.state.cfg
+		and M.state.cfg.ui.default_layout == "float"
+		and M.state.cfg.ui.float.footer
+	local inline_footer = show_window_footer and "" or ui.render.format_key_hints(LABELS_KEY_HINTS)
+	if inline_footer ~= "" then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = inline_footer
+	end
+
+	ui.buffer.update("labels", lines)
 	M.state.line_entries = {}
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	ui.render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, {
+		title_line = 1,
+		footer_line = inline_footer ~= "" and #lines or nil,
+	})
 end
 
 ---@param labels table[]
@@ -106,11 +152,28 @@ local function render_list(labels)
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "c: create  d: delete  r: refresh  q: quit"
+	local show_window_footer = M.state.cfg
+		and M.state.cfg.ui.default_layout == "float"
+		and M.state.cfg.ui.float.footer
+	local inline_footer = show_window_footer and "" or ui.render.format_key_hints(LABELS_KEY_HINTS)
+	if inline_footer ~= "" then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = inline_footer
+	end
 
 	ui.buffer.update("labels", lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	ui.render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, {
+		title_line = 1,
+		header_lines = { 3 },
+		footer_line = inline_footer ~= "" and #lines or nil,
+	})
 end
 
 ---@return table|nil

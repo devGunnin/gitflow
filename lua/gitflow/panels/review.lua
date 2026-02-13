@@ -113,23 +113,32 @@ local function ensure_window(cfg)
 		title = ("Gitflow PR Review #%d"):format(M.state.pr_number)
 	end
 
-	-- B3: fullscreen floating window that overlays the editor
-	M.state.winid = ui.window.open_float({
-		name = "review",
-		bufnr = bufnr,
-		width = 1.0,
-		height = 1.0,
-		row = 0,
-		col = 0,
-		border = cfg.ui.float.border,
-		title = title,
-		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer and REVIEW_FLOAT_FOOTER or nil,
-		footer_pos = cfg.ui.float.footer_pos,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "review",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = title,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and REVIEW_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "review",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	-- ]c/[c for hunk nav per spec
 	vim.keymap.set("n", "]f", function()

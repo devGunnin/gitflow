@@ -38,6 +38,7 @@ local usage = commands.dispatch({}, config)
 assert_true(usage:find("Gitflow usage", 1, true) ~= nil, ":Gitflow with no args should show usage")
 
 local buffer = require("gitflow.ui.buffer")
+local render = require("gitflow.ui.render")
 local bufnr = buffer.create("test-panel", {
 	lines = { "first", "second", "third" },
 })
@@ -117,7 +118,32 @@ local split_win = window.open_split({
 assert_equals(vim.api.nvim_win_get_width(split_win), 40, "split width should honor configured size")
 window.close(split_win)
 
+local hints = render.format_key_hints({
+	{ key = "r", label = "refresh" },
+	{ key = "q", label = "close" },
+})
+assert_equals(hints, "r refresh  q close", "render helper should normalize key hints")
+
+local render_buf = buffer.create("render-panel", {
+	lines = { "Title", "Header", "Footer" },
+})
+local render_ns = vim.api.nvim_create_namespace("gitflow_render_test")
+render.apply_panel_highlights(render_buf, render_ns, {
+	title_line = 1,
+	header_lines = { 2 },
+	footer_line = 3,
+})
+local render_marks = vim.api.nvim_buf_get_extmarks(
+	render_buf,
+	render_ns,
+	0,
+	-1,
+	{ details = true }
+)
+assert_true(#render_marks >= 3, "render helper should place title/header/footer highlights")
+
 buffer.teardown("float-panel")
 buffer.teardown("split-panel")
+buffer.teardown("render-panel")
 
 print("Stage 1 smoke tests passed")

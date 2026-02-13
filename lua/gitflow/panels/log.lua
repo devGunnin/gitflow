@@ -15,8 +15,14 @@ local icons = require("gitflow.icons")
 ---@field opts GitflowLogPanelOpts
 
 local M = {}
+local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 local LOG_FLOAT_TITLE = "Gitflow Log"
-local LOG_FLOAT_FOOTER = "<CR> open commit diff  r refresh  q close"
+local LOG_KEY_HINTS = {
+	{ key = "<CR>", label = "open commit diff" },
+	{ key = "r", label = "refresh" },
+	{ key = "q", label = "close" },
+}
+local LOG_FLOAT_FOOTER = ui.render.format_key_hints(LOG_KEY_HINTS)
 
 ---@type GitflowLogPanelState
 M.state = {
@@ -105,9 +111,33 @@ local function render(entries, current_branch)
 	end
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local show_window_footer = M.state.cfg
+		and M.state.cfg.ui.default_layout == "float"
+		and M.state.cfg.ui.float.footer
+	local inline_footer = show_window_footer and "" or ui.render.format_key_hints(LOG_KEY_HINTS)
+	if inline_footer ~= "" then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = inline_footer
+	end
 
 	ui.buffer.update("log", lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	local line_groups = {}
+	for line_no, _ in pairs(line_entries) do
+		line_groups[line_no] = "GitflowModified"
+	end
+
+	ui.render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, {
+		title_line = 1,
+		footer_line = #lines - (inline_footer ~= "" and 2 or 0),
+		line_groups = line_groups,
+	})
 end
 
 ---@return GitflowLogEntry|nil
