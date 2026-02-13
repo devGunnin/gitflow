@@ -8,6 +8,7 @@ local PR_LIST_FIELDS = table.concat({
 	"state",
 	"isDraft",
 	"author",
+	"assignees",
 	"headRefName",
 	"baseRefName",
 	"updatedAt",
@@ -21,6 +22,7 @@ local PR_VIEW_FIELDS = table.concat({
 	"state",
 	"isDraft",
 	"author",
+	"assignees",
 	"headRefName",
 	"baseRefName",
 	"reviews",
@@ -485,6 +487,20 @@ function M.edit(number, input, opts, cb)
 	if remove_labels then
 		args[#args + 1] = "--remove-label"
 		args[#args + 1] = remove_labels
+		changed = true
+	end
+
+	local add_assignees = to_csv(options.add_assignees)
+	if add_assignees then
+		args[#args + 1] = "--add-assignee"
+		args[#args + 1] = add_assignees
+		changed = true
+	end
+
+	local remove_assignees = to_csv(options.remove_assignees)
+	if remove_assignees then
+		args[#args + 1] = "--remove-assignee"
+		args[#args + 1] = remove_assignees
 		changed = true
 	end
 

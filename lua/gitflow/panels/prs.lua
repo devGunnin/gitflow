@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
 local label_completion = require("gitflow.completion.labels")
+local assignee_completion = require("gitflow.completion.assignees")
 local review_panel = require("gitflow.panels.review")
 local icons = require("gitflow.icons")
 
@@ -19,8 +20,8 @@ local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
 local PRS_FLOAT_TITLE = "Gitflow Pull Requests"
 local PRS_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  L labels  m merge  o checkout"
-	.. "  v review  r refresh  b back  q close"
+	"<CR> view  c create  C comment  L labels  A assign  m merge"
+	.. "  o checkout  v review  r refresh  b back  q close"
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -92,6 +93,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "L", function()
 		M.edit_labels_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "A", function()
+		M.edit_assignees_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "m", function()
@@ -179,6 +184,28 @@ local function split_lines(text)
 	return vim.split(text, "\n", { plain = true, trimempty = false })
 end
 
+---@param pr table
+---@return string
+local function join_assignee_names(pr)
+	local assignees = pr.assignees or {}
+	if type(assignees) ~= "table" or #assignees == 0 then
+		return "-"
+	end
+
+	local names = {}
+	for _, assignee in ipairs(assignees) do
+		if type(assignee) == "table" and assignee.login then
+			names[#names + 1] = assignee.login
+		elseif type(assignee) == "string" then
+			names[#names + 1] = assignee
+		end
+	end
+	if #names == 0 then
+		return "-"
+	end
+	return table.concat(names, ", ")
+end
+
 local function render_loading(message)
 	ui.buffer.update("prs", {
 		"Gitflow Pull Requests",
@@ -218,18 +245,23 @@ local function render_list(prs)
 			local number = tostring(pr.number or "?")
 			local state = pr_state(pr)
 			local title = maybe_text(pr.title)
-			local refs = ("%s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
+			local refs = ("%s -> %s"):format(
+				maybe_text(pr.headRefName), maybe_text(pr.baseRefName)
+			)
+			local assignees = join_assignee_names(pr)
 			local state_icon = icons.get("github", "pr_" .. state)
 			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
-			lines[#lines + 1] = ("      refs: %s"):format(refs)
+			lines[#lines + 1] = ("      refs: %s  assignees: %s"):format(
+				refs, assignees
+			)
 			line_entries[#lines - 1] = pr
 			line_entries[#lines] = pr
 		end
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: view  c: create  C: comment  L: labels  m: merge"
-		.. "  o: checkout  v: review  r: refresh  q: quit"
+	lines[#lines + 1] = "<CR>: view  c: create  C: comment  L: labels"
+		.. "  A: assign  m: merge  o: checkout  v: review  r: refresh  q: quit"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = line_entries
@@ -260,6 +292,7 @@ local function render_view(pr)
 		("State: %s %s"):format(view_icon, view_state),
 		("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-"),
 		("Refs: %s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName)),
+		("Assignees: %s"):format(join_assignee_names(pr)),
 		"",
 		"Body",
 		"----",
@@ -281,8 +314,8 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Comments: %d"):format(type(pr.comments) == "table" and #pr.comments or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
 	lines[#lines + 1] = ""
-	lines[#lines + 1] =
-		"b: back to list  C: comment  L: labels  m: merge  o: checkout  v: review  r: refresh"
+	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
+		.. "  m: merge  o: checkout  v: review  r: refresh"
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}
@@ -530,6 +563,77 @@ function M.edit_labels_under_cursor()
 				return
 			end
 			utils.notify(("Updated labels for PR #%s"):format(tostring(number)), vim.log.levels.INFO)
+			if M.state.mode == "view" then
+				M.open_view(number)
+			else
+				M.refresh()
+			end
+		end)
+	end)
+end
+
+---@param value string
+---@return string[], string[]
+local function parse_assignee_patch(value)
+	local add = {}
+	local remove = {}
+	for _, token in ipairs(vim.split(value or "", ",", { trimempty = true })) do
+		local trimmed = vim.trim(token)
+		if trimmed == "" then
+			goto continue
+		end
+		if vim.startswith(trimmed, "+") then
+			add[#add + 1] = vim.trim(trimmed:sub(2))
+		elseif vim.startswith(trimmed, "-") then
+			remove[#remove + 1] = vim.trim(trimmed:sub(2))
+		else
+			add[#add + 1] = trimmed
+		end
+		::continue::
+	end
+	return add, remove
+end
+
+function M.edit_assignees_under_cursor()
+	local number = M.state.active_pr_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No pull request selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+
+	input.prompt({
+		prompt = "Assignees (+user,-user,user): ",
+		completion = function(arglead, _, _)
+			return assignee_completion.complete_assignee_patch(arglead)
+		end,
+	}, function(value)
+		local add_assignees, remove_assignees = parse_assignee_patch(value)
+		if #add_assignees == 0 and #remove_assignees == 0 then
+			utils.notify("No assignee edits provided", vim.log.levels.WARN)
+			return
+		end
+
+		gh_prs.edit(number, {
+			add_assignees = add_assignees,
+			remove_assignees = remove_assignees,
+		}, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Updated assignees for PR #%s"):format(tostring(number)),
+				vim.log.levels.INFO
+			)
 			if M.state.mode == "view" then
 				M.open_view(number)
 			else
