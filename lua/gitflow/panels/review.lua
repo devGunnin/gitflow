@@ -469,16 +469,6 @@ local function render_review(
 				:format(#M.state.pending_comments)
 	end
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Navigation: ]f/[f file  ]c/[c hunk"
-	lines[#lines + 1] =
-		"Actions: a approve  x request changes"
-	lines[#lines + 1] =
-		"         c inline note  R reply"
-	lines[#lines + 1] =
-		"         S submit review  <leader>t toggle thread"
-	lines[#lines + 1] =
-		"         r refresh  <leader>b back  q quit"
-	lines[#lines + 1] = ""
 
 	-- B1: render existing review comment threads above the diff
 	local thread_line_map = {}
@@ -542,19 +532,7 @@ local function render_review(
 		end
 
 		for line_no, line in ipairs(lines) do
-			if vim.startswith(line, "Navigation:")
-				or vim.startswith(line, "Actions:")
-				or vim.startswith(line, "         ")
-			then
-				vim.api.nvim_buf_add_highlight(
-					M.state.bufnr,
-					REVIEW_HIGHLIGHT_NS,
-					"GitflowFooter",
-					line_no - 1,
-					0,
-					-1
-				)
-			elseif vim.startswith(line, "Review Comments") then
+			if vim.startswith(line, "Review Comments") then
 				vim.api.nvim_buf_add_highlight(
 					M.state.bufnr,
 					REVIEW_HIGHLIGHT_NS,
