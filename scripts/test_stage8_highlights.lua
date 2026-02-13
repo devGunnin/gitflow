@@ -72,7 +72,7 @@ assert_equals(
 )
 assert_equals(
 	get_highlight("GitflowPaletteSelection").link,
-	"Visual",
+	"PmenuSel",
 	"palette selection highlight should remain defined"
 )
 

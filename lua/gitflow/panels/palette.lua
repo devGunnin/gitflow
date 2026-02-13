@@ -27,9 +27,9 @@ local icons = require("gitflow.icons")
 local M = {}
 local SELECTION_HIGHLIGHT = "GitflowPaletteSelection"
 local PALETTE_PROMPT_FOOTER =
-	"[1-9] quick select  <CR> confirm  / search  q close"
+	"[1-9] quick select \u{2502} <CR> confirm \u{2502} / search \u{2502} q close"
 local PALETTE_LIST_FOOTER =
-	"[1-9] quick select  <CR> select  j/k move  q close"
+	"[1-9] quick select \u{2502} <CR> select \u{2502} j/k move \u{2502} q close"
 
 ---@type GitflowPalettePanelState
 M.state = {
@@ -283,8 +283,7 @@ local function execute_selected()
 end
 
 ---@param entry GitflowPaletteEntry
----@param number integer
-local function execute_numbered(entry, number)
+local function execute_numbered(entry)
 	if not entry then
 		return
 	end
@@ -300,9 +299,9 @@ end
 
 ---@param width integer
 ---@return string
-local function separator_line(width)
-	local sep = string.rep("\u{2500}", width)
-	return sep
+local function short_separator(width)
+	local dash_count = math.min(5, math.max(1, width))
+	return "  " .. string.rep("\u{2500}", dash_count)
 end
 
 ---@param bufnr integer
@@ -344,11 +343,20 @@ local function render()
 
 	if #filtered == 0 then
 		lines[#lines + 1] = ""
-		lines[#lines + 1] = "  No commands match the current query."
+		lines[#lines + 1] = ""
+		local no_match_msg = "No commands match the current query."
+		local msg_width = vim.fn.strdisplaywidth(no_match_msg)
+		local pad_left = math.max(
+			0, math.floor((width - msg_width) / 2)
+		)
+		lines[#lines + 1] = string.rep(" ", pad_left) .. no_match_msg
+		lines[#lines + 1] = ""
 	else
+		lines[#lines + 1] = ""
 		for _, entry in ipairs(filtered) do
 			if entry.category ~= active_category then
 				if active_category ~= nil then
+					lines[#lines + 1] = ""
 					lines[#lines + 1] = ""
 				end
 
@@ -371,9 +379,7 @@ local function render()
 					group = "GitflowPaletteHeader",
 				}
 
-				local sep = ("  %s"):format(
-					separator_line(math.max(1, width - 4))
-				)
+				local sep = short_separator(5)
 				lines[#lines + 1] = sep
 				highlights[#highlights + 1] = {
 					row = #lines - 1,
@@ -381,6 +387,7 @@ local function render()
 					col_end = -1,
 					group = "GitflowPaletteHeader",
 				}
+				lines[#lines + 1] = ""
 				active_category = entry.category
 			end
 
@@ -595,13 +602,13 @@ local function apply_keymaps()
 		vim.keymap.set("n", num_key, function()
 			local entry = M.state.numbered_entries[i]
 			if entry then
-				execute_numbered(entry, i)
+				execute_numbered(entry)
 			end
 		end, prompt_normal_opts)
 		vim.keymap.set("n", num_key, function()
 			local entry = M.state.numbered_entries[i]
 			if entry then
-				execute_numbered(entry, i)
+				execute_numbered(entry)
 			end
 		end, list_opts)
 	end
@@ -715,7 +722,7 @@ function M.open(cfg, entries, on_select)
 		row = row,
 		col = col,
 		border = cfg.ui.float.border,
-		title = " Gitflow ",
+		title = "  Gitflow  ",
 		title_pos = cfg.ui.float.title_pos,
 		footer = cfg.ui.float.footer
 			and PALETTE_PROMPT_FOOTER or nil,
@@ -730,7 +737,7 @@ function M.open(cfg, entries, on_select)
 		row = row + prompt_height + 1,
 		col = col,
 		border = cfg.ui.float.border,
-		title = " Commands ",
+		title = "  Command Palette  ",
 		title_pos = cfg.ui.float.title_pos,
 		footer = cfg.ui.float.footer
 			and PALETTE_LIST_FOOTER or nil,
