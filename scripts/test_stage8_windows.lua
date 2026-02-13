@@ -60,6 +60,24 @@ local function has_highlight_at_line(bufnr, ns, line, group)
 	return false
 end
 
+local function has_highlight_in_buffer(bufnr, ns, group)
+	local marks = vim.api.nvim_buf_get_extmarks(
+		bufnr,
+		ns,
+		0,
+		-1,
+		{ details = true }
+	)
+	local target_id = vim.api.nvim_get_hl_id_by_name(group)
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		if details.hl_group == group or details.hl_id == target_id then
+			return true
+		end
+	end
+	return false
+end
+
 local config = require("gitflow.config")
 local window = require("gitflow.ui.window")
 local ui = require("gitflow.ui")
@@ -434,6 +452,46 @@ assert_true(
 assert_true(
 	not has_highlight_at_line(stash_bufnr, stash_ns, stash_branch_line, "GitflowFooter"),
 	"stash split panel should not highlight branch line as footer"
+)
+stash_panel.close()
+
+log_panel.open(float_cfg, {})
+local float_log_bufnr = log_panel.state.bufnr
+local float_log_lines = vim.api.nvim_buf_get_lines(float_log_bufnr, 0, -1, false)
+local float_log_branch_line = find_line(float_log_lines, "Current branch: main")
+assert_true(float_log_branch_line ~= nil, "log float panel should include branch line")
+assert_equals(
+	float_log_branch_line,
+	#float_log_lines,
+	"log float panel should not render inline footer when window footer is enabled"
+)
+assert_true(
+	not has_highlight_at_line(float_log_bufnr, log_ns, float_log_branch_line, "GitflowFooter"),
+	"log float panel should not highlight branch metadata as footer"
+)
+assert_true(
+	not has_highlight_in_buffer(float_log_bufnr, log_ns, "GitflowFooter"),
+	"log float panel should not apply inline footer highlights"
+)
+log_panel.close()
+
+stash_panel.open(float_cfg)
+local float_stash_bufnr = stash_panel.state.bufnr
+local float_stash_lines = vim.api.nvim_buf_get_lines(float_stash_bufnr, 0, -1, false)
+local float_stash_branch_line = find_line(float_stash_lines, "Current branch: main")
+assert_true(float_stash_branch_line ~= nil, "stash float panel should include branch line")
+assert_equals(
+	float_stash_branch_line,
+	#float_stash_lines,
+	"stash float panel should not render inline footer when window footer is enabled"
+)
+assert_true(
+	not has_highlight_at_line(float_stash_bufnr, stash_ns, float_stash_branch_line, "GitflowFooter"),
+	"stash float panel should not highlight branch metadata as footer"
+)
+assert_true(
+	not has_highlight_in_buffer(float_stash_bufnr, stash_ns, "GitflowFooter"),
+	"stash float panel should not apply inline footer highlights"
 )
 stash_panel.close()
 

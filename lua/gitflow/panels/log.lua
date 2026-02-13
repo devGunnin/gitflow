@@ -135,7 +135,7 @@ local function render(entries, current_branch)
 
 	ui.render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, {
 		title_line = 1,
-		footer_line = #lines,
+		footer_line = inline_footer ~= "" and #lines or nil,
 		line_groups = line_groups,
 	})
 end

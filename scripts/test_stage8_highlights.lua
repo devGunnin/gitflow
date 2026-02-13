@@ -89,6 +89,42 @@ assert_equals(
 	"palette backdrop should preserve explicit dark background"
 )
 
+local chrome_border = get_highlight("GitflowBorder", { link = false })
+assert_equals(
+	chrome_border.fg,
+	tonumber("DCA561", 16),
+	"global border should use palette accent foreground"
+)
+assert_equals(
+	chrome_border.bg,
+	tonumber("111318", 16),
+	"global border should use dark panel background"
+)
+
+local chrome_title = get_highlight("GitflowTitle", { link = false })
+assert_equals(
+	chrome_title.bg,
+	tonumber("4A3514", 16),
+	"global title should use warm palette background"
+)
+assert_true(chrome_title.bold == true, "global title should be bold")
+
+local chrome_header = get_highlight("GitflowHeader", { link = false })
+assert_equals(
+	chrome_header.bg,
+	tonumber("6B4B16", 16),
+	"global header should use accent header background"
+)
+assert_true(chrome_header.bold == true, "global header should be bold")
+
+local chrome_footer = get_highlight("GitflowFooter", { link = false })
+assert_equals(
+	chrome_footer.bg,
+	tonumber("1A1D24", 16),
+	"global footer should use low-contrast background"
+)
+assert_true(chrome_footer.italic == true, "global footer should be italic")
+
 vim.o.background = "light"
 highlights.setup({})
 assert_equals(
