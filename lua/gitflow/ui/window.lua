@@ -148,7 +148,8 @@ function M.open_float(opts)
 	)
 	vim.api.nvim_set_option_value(
 		"winhighlight",
-		"FloatBorder:GitflowBorder,FloatTitle:GitflowTitle,FloatFooter:GitflowFooter",
+		"FloatBorder:GitflowBorder,FloatTitle:GitflowTitle"
+			.. ",FloatFooter:GitflowFooter,NormalFloat:GitflowNormal",
 		{ win = winid }
 	)
 

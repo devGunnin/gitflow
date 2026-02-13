@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
 local git_branch = require("gitflow.git.branch")
@@ -111,7 +112,7 @@ local function render(title, text, current_branch)
 	local diff_lines = to_lines(text)
 	local lines = {
 		title,
-		"",
+		ui_render.separator(),
 	}
 	for _, line in ipairs(diff_lines) do
 		lines[#lines + 1] = line
@@ -125,9 +126,7 @@ local function render(title, text, current_branch)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, DIFF_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, DIFF_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, DIFF_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+	local entry_highlights = {}
 
 	for idx, line in ipairs(diff_lines) do
 		local group = nil
@@ -144,11 +143,15 @@ local function render(title, text, current_branch)
 		elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
 			group = "GitflowRemoved"
 		end
-
 		if group then
-			vim.api.nvim_buf_add_highlight(bufnr, DIFF_HIGHLIGHT_NS, group, idx + 1, 0, -1)
+			entry_highlights[idx + 2] = group
 		end
 	end
+
+	ui_render.apply_panel_highlights(bufnr, DIFF_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@param cfg GitflowConfig

@@ -1,7 +1,12 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_labels = require("gitflow.gh.labels")
+
+local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
+local LABELS_FLOAT_TITLE = "Gitflow Labels"
+local LABELS_FLOAT_FOOTER = "c create  d delete  r refresh  q close"
 
 ---@class GitflowLabelPanelState
 ---@field bufnr integer|nil
@@ -37,15 +42,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "labels",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "labels",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = LABELS_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and LABELS_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "labels",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "c", function()
 		M.create_interactive()
@@ -87,7 +109,7 @@ end
 local function render_list(labels)
 	local lines = {
 		"Gitflow Labels",
-		"",
+		ui_render.separator(),
 		("Labels (%d)"):format(#labels),
 	}
 	local line_entries = {}
@@ -110,6 +132,14 @@ local function render_list(labels)
 	lines[#lines + 1] = "c: create  d: delete  r: refresh  q: quit"
 
 	ui.buffer.update("labels", lines)
+
+	local bufnr = M.state.bufnr
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {
+			footer_line = #lines,
+		})
+	end
+
 	M.state.line_entries = line_entries
 end
 

@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
+local ui_render = require("gitflow.ui.render")
 
 ---@class GitflowBranchPanelState
 ---@field bufnr integer|nil
@@ -120,6 +121,7 @@ end
 ---@param line_entries table<integer, GitflowBranchEntry>
 local function append_section(title, entries, lines, line_entries)
 	lines[#lines + 1] = title
+	lines[#lines + 1] = ui_render.separator()
 	if #entries == 0 then
 		lines[#lines + 1] = "  (none)"
 		lines[#lines + 1] = ""
@@ -163,34 +165,25 @@ local function render(entries)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, BRANCH_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, BRANCH_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	local entry_highlights = {}
 
 	for line_no, line in ipairs(lines) do
 		if line == "Local" or line == "Remote" then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				BRANCH_HIGHLIGHT_NS,
-				"GitflowHeader",
-				line_no - 1,
-				0,
-				-1
-			)
+			entry_highlights[line_no] = "GitflowHeader"
 		end
 	end
 
 	for line_no, entry in pairs(line_entries) do
-		local group = nil
 		if entry.is_current then
-			group = "GitflowBranchCurrent"
+			entry_highlights[line_no] = "GitflowBranchCurrent"
 		elseif entry.is_remote then
-			group = "GitflowBranchRemote"
-		end
-
-		if group then
-			vim.api.nvim_buf_add_highlight(bufnr, BRANCH_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
+			entry_highlights[line_no] = "GitflowBranchRemote"
 		end
 	end
+
+	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@return GitflowBranchEntry|nil

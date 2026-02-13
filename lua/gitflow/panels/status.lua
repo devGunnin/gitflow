@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_log = require("gitflow.git.log")
@@ -60,6 +61,7 @@ M.state = {
 ---@param diff_staged boolean
 local function append_file_section(title, entries, lines, line_entries, diff_staged)
 	lines[#lines + 1] = title
+	lines[#lines + 1] = ui_render.separator()
 	if #entries == 0 then
 		lines[#lines + 1] = "  (none)"
 		lines[#lines + 1] = ""
@@ -90,6 +92,7 @@ end
 ---@param pushable boolean|table<string, boolean>
 local function append_commit_section(title, entries, lines, line_entries, pushable)
 	lines[#lines + 1] = title
+	lines[#lines + 1] = ui_render.separator()
 	if #entries == 0 then
 		lines[#lines + 1] = "  (none)"
 		lines[#lines + 1] = ""
@@ -371,10 +374,9 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, STATUS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+	local entry_highlights = {}
 
+	-- Mark section headers
 	for line_no, line in ipairs(lines) do
 		if vim.startswith(line, "Staged")
 			or vim.startswith(line, "Unstaged")
@@ -383,33 +385,27 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 			or vim.startswith(line, "Incoming")
 			or vim.startswith(line, "Commit History")
 		then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				STATUS_HIGHLIGHT_NS,
-				"GitflowHeader",
-				line_no - 1,
-				0,
-				-1
-			)
+			entry_highlights[line_no] = "GitflowHeader"
 		end
 	end
 
+	-- Mark file entry highlights
 	for line_no, entry in pairs(line_entries) do
-		if entry.kind ~= "file" then
-			goto continue
+		if entry.kind == "file" then
+			local group = "GitflowUnstaged"
+			if entry.entry.untracked then
+				group = "GitflowUntracked"
+			elseif entry.diff_staged then
+				group = "GitflowStaged"
+			end
+			entry_highlights[line_no] = group
 		end
-
-		local group = "GitflowUnstaged"
-		if entry.entry.untracked then
-			group = "GitflowUntracked"
-		elseif entry.diff_staged then
-			group = "GitflowStaged"
-		end
-
-		vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
-
-		::continue::
 	end
+
+	ui_render.apply_panel_highlights(bufnr, STATUS_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@param err string|nil

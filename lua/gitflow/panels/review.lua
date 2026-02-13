@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local ui_render = require("gitflow.ui.render")
 local gh_prs = require("gitflow.gh.prs")
 local icons = require("gitflow.icons")
 
@@ -454,7 +455,7 @@ local function render_review(
 )
 	local lines = {
 		title,
-		"",
+		ui_render.separator(),
 		("Files: %d  Hunks: %d"):format(#files, #hunks),
 	}
 	for _, f in ipairs(files) do
