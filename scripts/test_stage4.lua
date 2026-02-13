@@ -164,7 +164,13 @@ fi
 
 if [ "$#" -ge 3 ] && [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "7" ]; then
   sleep 0.15
-  echo '{"number":7,"title":"Stage4 PR","body":"PR body","state":"OPEN","isDraft":false,"author":{"login":"octocat"},"headRefName":"feature/stage4","baseRefName":"main","reviewRequests":[],"reviews":[],"comments":[],"files":[{"path":"lua/gitflow/commands.lua"}]}'
+  echo '{"number":7,"title":"Stage4 PR","body":"PR body","state":"OPEN","isDraft":false,"author":{"login":"octocat"},"headRefName":"feature/stage4","baseRefName":"main","reviewRequests":[],"reviews":[],"comments":[{"body":"Looks good!","author":{"login":"reviewer1"}},{"body":"Line one\nLine two","author":{"login":"reviewer2"}}],"files":[{"path":"lua/gitflow/commands.lua"}]}'
+  exit 0
+fi
+
+if [ "$#" -ge 3 ] && [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "9" ]; then
+  sleep 0.15
+  echo '{"number":9,"title":"No comments PR","body":"Empty","state":"OPEN","isDraft":false,"author":{"login":"octocat"},"headRefName":"feature/empty","baseRefName":"main","reviewRequests":[],"reviews":[],"comments":[],"files":[]}'
   exit 0
 fi
 
@@ -800,6 +806,55 @@ wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "PR #7: Stage4 PR") ~= nil
 end, "pr view should render details")
+
+-- Test: PR view should display comments
+local pr_view_buf = buffer.get("prs")
+local pr_view_lines = vim.api.nvim_buf_get_lines(pr_view_buf, 0, -1, false)
+
+local comments_header = find_line(pr_view_lines, "Comments")
+assert_true(comments_header ~= nil, "pr view should have Comments section header")
+local comments_divider = find_line(pr_view_lines, "--------", comments_header)
+assert_true(comments_divider ~= nil, "pr view should have Comments divider")
+
+local reviewer1_line = find_line(pr_view_lines, "reviewer1:", comments_header)
+assert_true(reviewer1_line ~= nil, "pr view should show first comment author")
+local comment1_body = find_line(pr_view_lines, "  Looks good!", reviewer1_line)
+assert_true(comment1_body ~= nil, "pr view should show first comment body indented")
+
+local reviewer2_line = find_line(pr_view_lines, "reviewer2:", reviewer1_line)
+assert_true(reviewer2_line ~= nil, "pr view should show second comment author")
+local comment2_line1 = find_line(pr_view_lines, "  Line one", reviewer2_line)
+assert_true(comment2_line1 ~= nil, "pr view should show multiline comment line 1")
+local comment2_line2 = find_line(pr_view_lines, "  Line two", comment2_line1)
+assert_true(comment2_line2 ~= nil, "pr view should show multiline comment line 2")
+
+-- Test: PR view with zero comments should show (none)
+commands.dispatch({ "pr", "view", "9" }, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "PR #9: No comments PR") ~= nil
+end, "pr view should render PR #9 details")
+
+local no_comment_lines = vim.api.nvim_buf_get_lines(buffer.get("prs"), 0, -1, false)
+local no_comments_header = find_line(no_comment_lines, "Comments")
+assert_true(no_comments_header ~= nil, "pr view with no comments should have Comments header")
+local no_comments_none = find_line(no_comment_lines, "(none)", no_comments_header)
+assert_true(no_comments_none ~= nil, "pr view with no comments should show (none)")
+
+-- Switch back to PR #7 view for remaining tests
+commands.dispatch({ "pr", "view", "7" }, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "PR #7: Stage4 PR") ~= nil
+end, "pr view should re-render PR #7 for remaining tests")
 
 prompt_values = { "-bug,triage" }
 pr_panel.edit_labels_under_cursor()
