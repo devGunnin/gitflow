@@ -259,10 +259,6 @@ local function render_list(prs)
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "<CR>: view  c: create  C: comment  L: labels"
-		.. "  A: assign  m: merge  o: checkout  v: review  r: refresh  q: quit"
-
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
@@ -275,7 +271,6 @@ local function render_list(prs)
 
 	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
 	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
 
 	for line_no, pr in pairs(line_entries) do
 		local group = pr_highlight_group(pr_state(pr))
@@ -352,7 +347,6 @@ local function render_view(pr)
 
 	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
 	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
 	vim.api.nvim_buf_add_highlight(
 		bufnr,
 		PRS_HIGHLIGHT_NS,

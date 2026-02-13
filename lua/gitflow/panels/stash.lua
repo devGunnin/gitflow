@@ -100,7 +100,6 @@ end
 local function render(entries, current_branch)
 	local lines = {
 		"Gitflow Stash",
-		"P=Pop  D=Drop  S=Stash  r=Refresh  q=Close",
 		"",
 	}
 	local line_entries = {}
