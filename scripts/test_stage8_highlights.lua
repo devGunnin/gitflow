@@ -47,10 +47,13 @@ assert_true(
 )
 
 for group, attrs in pairs(highlights.DEFAULT_GROUPS) do
-	assert_true(type(attrs.link) == "string", ("%s should define a default link"):format(group))
+	local has_link = type(attrs.link) == "string"
+	local has_explicit = attrs.fg ~= nil or attrs.bg ~= nil
 	assert_true(
-		attrs.fg == nil and attrs.bg == nil,
-		("%s defaults should stay link-based"):format(group)
+		has_link or has_explicit,
+		("%s should define a default link or explicit colors"):format(
+			group
+		)
 	)
 end
 
@@ -72,7 +75,7 @@ assert_equals(
 )
 assert_equals(
 	get_highlight("GitflowPaletteSelection").link,
-	"Visual",
+	"PmenuSel",
 	"palette selection highlight should remain defined"
 )
 

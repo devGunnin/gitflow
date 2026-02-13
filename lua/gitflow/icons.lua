@@ -35,6 +35,10 @@ local NF = {
 	file_delete = "\u{f458}",      -- nf-oct-diff_removed
 	file_rename = "\u{f45a}",      -- nf-oct-diff_renamed
 	file_modify = "\u{f459}",      -- nf-oct-diff_modified
+	-- palette categories
+	palette_git = "\u{f418}",      -- nf-oct-git_branch
+	palette_github = "\u{f408}",   -- nf-oct-mark_github
+	palette_ui = "\u{f013}",       -- nf-fa-gear
 }
 
 ---@type table<string, table<string, {nerd: string, ascii: string}>>
@@ -79,6 +83,26 @@ local registry = {
 		D = { nerd = NF.file_delete, ascii = "[-]" },
 		R = { nerd = NF.file_rename, ascii = "[R]" },
 		M = { nerd = NF.file_modify, ascii = "[~]" },
+	},
+	palette = {
+		git = { nerd = NF.palette_git, ascii = "#" },
+		github = { nerd = NF.palette_github, ascii = "@" },
+		ui = { nerd = NF.palette_ui, ascii = "*" },
+		-- Per-entry command icons
+		status = { nerd = NF.modified, ascii = "~" },
+		branch = { nerd = NF.branch_current, ascii = "*" },
+		diff = { nerd = NF.file_modify, ascii = "~" },
+		log = { nerd = NF.commit, ascii = "*" },
+		stash = { nerd = NF.staged, ascii = "S" },
+		merge = { nerd = NF.pr_merged, ascii = "M" },
+		cherry_pick = { nerd = NF.commit, ascii = "C" },
+		conflicts = { nerd = NF.conflict, ascii = "!" },
+		issue = { nerd = NF.issue_open, ascii = "#" },
+		pr = { nerd = NF.pr_open, ascii = "!" },
+		review = { nerd = NF.review_commented, ascii = "R" },
+		palette = { nerd = NF.palette_ui, ascii = ">" },
+		help = { nerd = NF.palette_ui, ascii = "?" },
+		open = { nerd = NF.palette_ui, ascii = ">" },
 	},
 }
 
