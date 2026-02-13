@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_issues = require("gitflow.gh.issues")
 local label_completion = require("gitflow.completion.labels")
+local icons = require("gitflow.icons")
 
 ---@class GitflowIssuePanelState
 ---@field bufnr integer|nil
@@ -218,7 +219,8 @@ local function render_list(issues)
 			local state = issue_state(issue)
 			local title = maybe_text(issue.title)
 			local labels = join_label_names(issue)
-			lines[#lines + 1] = ("  #%s [%s] %s"):format(number, state, title)
+			local state_icon = icons.get("github", "issue_" .. state)
+			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
 			lines[#lines + 1] = ("      labels: %s"):format(labels)
 			line_entries[#lines - 1] = issue
 			line_entries[#lines] = issue
@@ -250,9 +252,11 @@ end
 
 ---@param issue table
 local function render_view(issue)
+	local view_state = issue_state(issue)
+	local view_icon = icons.get("github", "issue_" .. view_state)
 	local lines = {
 		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
-		("State: %s"):format(issue_state(issue)),
+		("State: %s %s"):format(view_icon, view_state),
 		("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-"),
 		("Labels: %s"):format(join_label_names(issue)),
 		"",

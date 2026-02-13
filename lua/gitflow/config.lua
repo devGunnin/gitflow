@@ -48,6 +48,9 @@ local utils = require("gitflow.utils")
 ---@field deleted string
 ---@field conflict string
 
+---@class GitflowIconsConfig
+---@field enable boolean
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
@@ -57,6 +60,7 @@ local utils = require("gitflow.utils")
 ---@field quick_actions GitflowQuickActionsConfig
 ---@field highlights GitflowHighlightConfig
 ---@field signs GitflowSignsConfig
+---@field icons GitflowIconsConfig
 
 local M = {}
 
@@ -124,6 +128,9 @@ function M.defaults()
 			modified = "~",
 			deleted = "−",
 			conflict = "!",
+		},
+		icons = {
+			enable = false,
 		},
 	}
 end
@@ -356,6 +363,17 @@ local function validate_signs(config)
 end
 
 ---@param config GitflowConfig
+local function validate_icons(config)
+	if type(config.icons) ~= "table" then
+		error("gitflow config error: icons must be a table", 3)
+	end
+
+	if type(config.icons.enable) ~= "boolean" then
+		error("gitflow config error: icons.enable must be a boolean", 3)
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
@@ -365,6 +383,7 @@ function M.validate(config)
 	validate_quick_actions(config)
 	validate_highlights(config)
 	validate_signs(config)
+	validate_icons(config)
 end
 
 ---@param opts table|nil

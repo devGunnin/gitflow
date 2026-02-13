@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
 local git_branch = require("gitflow.git.branch")
+local icons = require("gitflow.icons")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -97,7 +98,8 @@ local function render(entries, current_branch)
 		lines[#lines + 1] = "(no commits found)"
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ("%s %s"):format(entry.short_sha, entry.summary)
+			local commit_icon = icons.get("git_state", "commit")
+			lines[#lines + 1] = ("%s %s %s"):format(commit_icon, entry.short_sha, entry.summary)
 			line_entries[#lines] = entry
 		end
 	end

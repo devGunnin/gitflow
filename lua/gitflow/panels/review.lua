@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local gh_prs = require("gitflow.gh.prs")
+local icons = require("gitflow.icons")
 
 ---@class GitflowPrReviewFileMarker
 ---@field line integer
@@ -338,14 +339,7 @@ end
 ---@param status string|nil
 ---@return string
 local function status_indicator(status)
-	if status == "A" then
-		return "[+]"
-	elseif status == "D" then
-		return "[-]"
-	elseif status == "R" then
-		return "[R]"
-	end
-	return "[~]"
+	return icons.get("file_status", status or "M")
 end
 
 ---@param status string|nil

@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
+local icons = require("gitflow.icons")
 
 ---@class GitflowBranchPanelState
 ---@field bufnr integer|nil
@@ -126,7 +127,14 @@ local function append_section(title, entries, lines, line_entries)
 	end
 
 	for _, entry in ipairs(entries) do
-		local marker = entry.is_current and "*" or " "
+		local marker
+		if entry.is_current then
+			marker = icons.get("branch", "current")
+		elseif entry.is_remote then
+			marker = icons.get("branch", "remote")
+		else
+			marker = icons.get("branch", "local_branch")
+		end
 		local current_text = entry.is_current and " (current)" or ""
 		local line = (" %s %s%s"):format(marker, entry.name, current_text)
 		lines[#lines + 1] = line

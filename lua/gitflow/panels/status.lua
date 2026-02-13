@@ -5,6 +5,7 @@ local git_log = require("gitflow.git.log")
 local git_status = require("gitflow.git.status")
 local git_branch = require("gitflow.git.branch")
 local conflict_panel = require("gitflow.panels.conflict")
+local icons = require("gitflow.icons")
 
 ---@class GitflowStatusPanelOpts
 ---@field on_commit fun()|nil
@@ -67,7 +68,11 @@ local function append_file_section(title, entries, lines, line_entries, diff_sta
 
 	for _, entry in ipairs(entries) do
 		local status = entry.index_status .. entry.worktree_status
-		local line = ("  %s  %s"):format(status, entry.path)
+		local icon = icons.get("git_state", diff_staged and "staged" or "unstaged")
+		if entry.untracked then
+			icon = icons.get("git_state", "untracked")
+		end
+		local line = ("  %s %s  %s"):format(icon, status, entry.path)
 		lines[#lines + 1] = line
 		line_entries[#lines] = {
 			kind = "file",
