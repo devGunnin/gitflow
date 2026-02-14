@@ -172,6 +172,18 @@ assert_mapping(
 	"default stash push keymap should be registered"
 )
 
+assert_equals(cfg.keybindings.stash_pop, "gX", "default stash pop keybinding should exist")
+assert_mapping(
+	"<Plug>(GitflowStashPop)",
+	"<Cmd>Gitflow stash pop<CR>",
+	"stash pop plug keymap should be registered"
+)
+assert_mapping(
+	cfg.keybindings.stash_pop,
+	"<Plug>(GitflowStashPop)",
+	"default stash pop keymap should be registered"
+)
+
 local commands = require("gitflow.commands")
 local all_subcommands = commands.complete("")
 for _, expected in ipairs({

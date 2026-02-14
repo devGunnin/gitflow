@@ -2129,6 +2129,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStashPush)", "<Cmd>Gitflow stash push<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowStashPop)", "<Cmd>Gitflow stash pop<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowIssue)", "<Cmd>Gitflow issue list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPr)", "<Cmd>Gitflow pr list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
@@ -2151,6 +2152,7 @@ function M.setup(cfg)
 		log = "<Plug>(GitflowLog)",
 		stash = "<Plug>(GitflowStash)",
 		stash_push = "<Plug>(GitflowStashPush)",
+		stash_pop = "<Plug>(GitflowStashPop)",
 		issue = "<Plug>(GitflowIssue)",
 		pr = "<Plug>(GitflowPr)",
 		label = "<Plug>(GitflowLabel)",

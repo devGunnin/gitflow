@@ -80,6 +80,7 @@ function M.defaults()
 			log = "gl",
 			stash = "gS",
 			stash_push = "gZ",
+			stash_pop = "gX",
 			branch = "<leader>gb",
 			issue = "<leader>gi",
 			pr = "<leader>gr",
