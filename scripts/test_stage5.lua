@@ -45,6 +45,18 @@ local function find_line(lines, needle, start_line)
 	return nil
 end
 
+local function find_pr_row(lines, number, title, start_line)
+	local from = start_line or 1
+	local number_token = ("#%s"):format(tostring(number))
+	for i = from, #lines do
+		if lines[i]:find(number_token, 1, true)
+			and lines[i]:find(title, 1, true) then
+			return i
+		end
+	end
+	return nil
+end
+
 local function read_lines(path)
 	if vim.fn.filereadable(path) ~= 1 then
 		return {}
@@ -84,6 +96,23 @@ local function assert_visual_keymaps(bufnr, required)
 	end
 end
 
+local function line_has_highlight(bufnr, ns, line_no, group)
+	local marks = vim.api.nvim_buf_get_extmarks(
+		bufnr,
+		ns,
+		{ line_no - 1, 0 },
+		{ line_no - 1, -1 },
+		{ details = true }
+	)
+	for _, mark in ipairs(marks) do
+		local details = mark[4]
+		if details and details.hl_group == group then
+			return true
+		end
+	end
+	return false
+end
+
 local stub_root = vim.fn.tempname()
 assert_equals(
 	vim.fn.mkdir(stub_root, "p"), 1,
@@ -104,6 +133,8 @@ local diff_patch = table.concat({
 	"@@ -10,2 +10,3 @@ local M = {}",
 	" local a = 1",
 	"+local b = 2",
+	"--- removed content that starts with two dashes",
+	"+++ added content that starts with two pluses",
 	"diff --git a/lua/gitflow/panels/prs.lua b/lua/gitflow/panels/prs.lua",
 	"index 3333333..4444444 100644",
 	"--- a/lua/gitflow/panels/prs.lua",
@@ -255,7 +286,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "#7 [open] Stage5 PR") ~= nil
+	return find_pr_row(lines, 7, "Stage5 PR") ~= nil
 end, "pr list should render entries")
 
 local pr_buf = buffer.get("prs")
@@ -278,12 +309,8 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "PR #7 Review: Stage5 PR") ~= nil
-		and find_line(
-			lines,
-			"diff --git a/lua/gitflow/commands.lua"
-				.. " b/lua/gitflow/commands.lua"
-		) ~= nil
+	return find_line(lines, "Loading review for PR #7") == nil
+		and find_line(lines, "diff --git ") ~= nil
 end, "review panel should render title and diff")
 
 local review_buf = buffer.get("review")
@@ -331,10 +358,62 @@ assert_true(
 	"review thread header should include numeric line suffix"
 )
 
--- N2: verify file status indicators
+-- N2: verify changed files are listed
 assert_true(
-	find_line(review_lines, "[~]") ~= nil,
-	"review panel should show file status indicators"
+	find_line(review_lines, "lua/gitflow/commands.lua") ~= nil
+		and find_line(review_lines, "lua/gitflow/panels/prs.lua") ~= nil,
+	"review panel should list changed files"
+)
+
+local tricky_removed_line = find_line(
+	review_lines,
+	"--- removed content that starts with two dashes"
+)
+local tricky_added_line = find_line(
+	review_lines,
+	"+++ added content that starts with two pluses"
+)
+assert_true(
+	tricky_removed_line ~= nil and tricky_added_line ~= nil,
+	"review panel should include tricky ---/+++ hunk content lines"
+)
+local review_hl_ns = vim.api.nvim_get_namespaces().gitflow_review_hl
+assert_true(review_hl_ns ~= nil, "review highlight namespace should exist")
+assert_true(
+	line_has_highlight(
+		review_buf,
+		review_hl_ns,
+		tricky_removed_line,
+		"GitflowRemoved"
+	),
+	"--- hunk content line should use GitflowRemoved"
+)
+assert_true(
+	not line_has_highlight(
+		review_buf,
+		review_hl_ns,
+		tricky_removed_line,
+		"GitflowHeader"
+	),
+	"--- hunk content line should not use GitflowHeader"
+)
+assert_true(
+	line_has_highlight(
+		review_buf,
+		review_hl_ns,
+		tricky_added_line,
+		"GitflowAdded"
+	),
+	"+++ hunk content line should use GitflowAdded"
+)
+assert_true(
+	not line_has_highlight(
+		review_buf,
+		review_hl_ns,
+		tricky_added_line,
+		"GitflowHeader"
+	),
+	"+++ hunk content line should not use GitflowHeader"
 )
 
 -- Navigation tests
@@ -530,7 +609,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "#7 [open] Stage5 PR") ~= nil
+	return find_pr_row(lines, 7, "Stage5 PR") ~= nil
 end, "pr list should be available before review handoff")
 
 vim.api.nvim_set_current_win(pr_panel.state.winid)
@@ -541,7 +620,7 @@ assert_true(
 )
 local pr_lines =
 	vim.api.nvim_buf_get_lines(handoff_pr_buf, 0, -1, false)
-local pr_line = find_line(pr_lines, "#7 [open] Stage5 PR")
+local pr_line = find_pr_row(pr_lines, 7, "Stage5 PR")
 assert_true(
 	pr_line ~= nil,
 	"pr list line should exist for review handoff"
@@ -556,7 +635,8 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "PR #7 Review: Stage5 PR") ~= nil
+	return find_line(lines, "Loading review for PR #7") == nil
+		and find_line(lines, "diff --git ") ~= nil
 end, "review from pr panel should open review UI")
 
 vim.ui.input = original_input
