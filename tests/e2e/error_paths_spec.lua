@@ -105,8 +105,8 @@ local function cleanup_panels()
 	end
 end
 
---- Count all non-default windows (splits + floats beyond the initial one).
----@return { total: integer, floats: integer }
+--- Count current window/layout and gitflow UI registry state.
+---@return { total: integer, floats: integer, panel_windows: integer, panel_buffers: integer }
 local function window_snapshot()
 	local wins = vim.api.nvim_list_wins()
 	local floats = 0
@@ -115,7 +115,25 @@ local function window_snapshot()
 			floats = floats + 1
 		end
 	end
-	return { total = #wins, floats = floats }
+
+	local panel_windows = 0
+	for _, record in pairs(ui.window.registry) do
+		if record and vim.api.nvim_win_is_valid(record.winid) then
+			panel_windows = panel_windows + 1
+		end
+	end
+
+	local panel_buffers = 0
+	for _ in pairs(ui.buffer.list()) do
+		panel_buffers = panel_buffers + 1
+	end
+
+	return {
+		total = #wins,
+		floats = floats,
+		panel_windows = panel_windows,
+		panel_buffers = panel_buffers,
+	}
 end
 
 --- Run a command dispatch with GITFLOW_GH_FAIL set.
@@ -464,9 +482,19 @@ T.run_suite("E2E: Error Paths", {
 
 		local after = window_snapshot()
 		T.assert_equals(
-			after.floats,
-			before.floats,
-			"no orphaned float windows after gh failure + cleanup"
+			after.total,
+			before.total,
+			"no orphaned windows after gh failure + cleanup"
+		)
+		T.assert_equals(
+			after.panel_windows,
+			before.panel_windows,
+			"panel window registry should return to baseline after gh failure"
+		)
+		T.assert_equals(
+			after.panel_buffers,
+			before.panel_buffers,
+			"panel buffer registry should return to baseline after gh failure"
 		)
 	end,
 
@@ -481,9 +509,19 @@ T.run_suite("E2E: Error Paths", {
 
 		local after = window_snapshot()
 		T.assert_equals(
-			after.floats,
-			before.floats,
-			"no orphaned float windows after git failure + cleanup"
+			after.total,
+			before.total,
+			"no orphaned windows after git failure + cleanup"
+		)
+		T.assert_equals(
+			after.panel_windows,
+			before.panel_windows,
+			"panel window registry should return to baseline after git failure"
+		)
+		T.assert_equals(
+			after.panel_buffers,
+			before.panel_buffers,
+			"panel buffer registry should return to baseline after git failure"
 		)
 	end,
 
