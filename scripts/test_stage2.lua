@@ -587,6 +587,115 @@ assert_equals(stash_drop_err, nil, "stash drop should succeed")
 
 commands.dispatch({ "close" }, cfg)
 assert_true(not stash_panel.is_open(), "stash panel should report closed after :Gitflow close")
+
+-- Non-origin remote push test
+local non_origin_repo = vim.fn.tempname()
+assert_equals(vim.fn.mkdir(non_origin_repo, "p"), 1, "non-origin repo directory should be created")
+run_git(non_origin_repo, { "init" })
+run_git(non_origin_repo, { "config", "user.email", "nonorigin@example.com" })
+run_git(non_origin_repo, { "config", "user.name", "NonOrigin Tester" })
+write_file(non_origin_repo .. "/init.txt", { "init" })
+run_git(non_origin_repo, { "add", "init.txt" })
+run_git(non_origin_repo, { "commit", "-m", "initial" })
+
+local non_origin_bare = vim.fn.tempname()
+run_git(non_origin_repo, { "init", "--bare", non_origin_bare })
+run_git(non_origin_repo, { "remote", "add", "upstream", non_origin_bare })
+run_git(non_origin_repo, { "push", "-u", "upstream", "main" }, false)
+local no_branch = current_branch(non_origin_repo)
+run_git(non_origin_repo, { "push", "-u", "upstream", no_branch })
+
+vim.fn.chdir(non_origin_repo)
+
+-- Verify resolve_push_remote finds non-origin remote
+local git_mod = require("gitflow.git")
+local resolved_remote = wait_async(function(done)
+	git_mod.git({ "remote" }, {}, function(result)
+		local output = vim.trim(result.stdout or "")
+		done(output)
+	end)
+end)
+assert_equals(resolved_remote, "upstream", "only remote should be upstream (not origin)")
+
+-- Status panel should resolve upstream with non-origin remote
+local status_mod = require("gitflow.panels.status")
+write_file(non_origin_repo .. "/init.txt", { "init", "change" })
+run_git(non_origin_repo, { "add", "init.txt" })
+run_git(non_origin_repo, { "commit", "-m", "non-origin outgoing" })
+
+status_mod.open(cfg, {})
+local non_origin_panel_ready = vim.wait(5000, function()
+	if not status_mod.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(status_mod.state.bufnr, 0, -1, false)
+	local outgoing = find_line(lines, "Outgoing")
+	if not outgoing then
+		return false
+	end
+	return find_line(lines, "non-origin outgoing", outgoing + 1) ~= nil
+end, 25)
+assert_true(
+	non_origin_panel_ready,
+	"status panel should show outgoing commits with non-origin upstream"
+)
+
+local non_origin_lines = vim.api.nvim_buf_get_lines(status_mod.state.bufnr, 0, -1, false)
+local outgoing_line = find_line(non_origin_lines, "Outgoing")
+assert_true(
+	non_origin_lines[outgoing_line]:find("upstream/", 1, true) ~= nil,
+	"outgoing header should reference the non-origin remote name"
+)
+status_mod.close()
+
+-- Push via command dispatch should use non-origin remote
+local push_confirm_save = vim.fn.confirm
+vim.fn.confirm = function()
+	return 1
+end
+commands.dispatch({ "push" }, cfg)
+local non_origin_push_done = vim.wait(5000, function()
+	local remote_head = vim.trim(run_git(non_origin_repo, {
+		("--git-dir=%s"):format(non_origin_bare),
+		"rev-parse",
+		("refs/heads/%s"):format(no_branch),
+	}))
+	local local_head = vim.trim(run_git(non_origin_repo, { "rev-parse", "HEAD" }))
+	return remote_head == local_head
+end, 25)
+vim.fn.confirm = push_confirm_save
+assert_true(non_origin_push_done, "push should succeed with non-origin upstream remote")
+
+-- Test push_with_upstream fallback for new branch on non-origin remote
+run_git(non_origin_repo, { "checkout", "-b", "feature-nonorigin" })
+write_file(non_origin_repo .. "/feature.txt", { "feature" })
+run_git(non_origin_repo, { "add", "feature.txt" })
+run_git(non_origin_repo, { "commit", "-m", "feature commit" })
+
+local push_fallback_confirm = vim.fn.confirm
+vim.fn.confirm = function()
+	return 1
+end
+commands.dispatch({ "push" }, cfg)
+local fallback_push_done = vim.wait(5000, function()
+	local output, code = run_git(non_origin_repo, {
+		("--git-dir=%s"):format(non_origin_bare),
+		"rev-parse",
+		"refs/heads/feature-nonorigin",
+	}, false)
+	if code ~= 0 then
+		return false
+	end
+	local remote_head = vim.trim(output)
+	local local_head = vim.trim(run_git(non_origin_repo, { "rev-parse", "HEAD" }))
+	return remote_head == local_head
+end, 25)
+vim.fn.confirm = push_fallback_confirm
+assert_true(
+	fallback_push_done,
+	"push_with_upstream fallback should use detected remote instead of hardcoded origin"
+)
+
 vim.fn.chdir(original_cwd)
 
 print("Stage 2 smoke tests passed")
