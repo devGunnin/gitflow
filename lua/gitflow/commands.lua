@@ -208,7 +208,7 @@ local function open_commit_prompt(amend)
 
 			local confirmed = ui.input.confirm(
 				("Commit %d staged file(s)?"):format(staged_count),
-				{ choices = { "&Commit", "&Cancel" }, default_choice = 1 }
+				{ choices = { "&Yes", "&No" }, default_choice = 1 }
 			)
 			if not confirmed then
 				return

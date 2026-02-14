@@ -613,7 +613,7 @@ function M.close_under_cursor()
 	end
 
 	local confirmed = input.confirm(("Close issue #%s?"):format(tostring(number)), {
-		choices = { "&Close", "&Cancel" },
+		choices = { "&Yes", "&No" },
 		default_choice = 2,
 	})
 	if not confirmed then

@@ -366,7 +366,7 @@ function M.continue_operation(opts)
 	if not options.skip_confirm then
 		local confirmed = ui.input.confirm(
 			("Run %s --continue?"):format(operation_label(M.state.active_operation)),
-			{ choices = { "&Continue", "&Cancel" }, default_choice = 1 }
+			{ choices = { "&Yes", "&No" }, default_choice = 1 }
 		)
 		if not confirmed then
 			return

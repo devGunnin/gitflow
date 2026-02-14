@@ -698,4 +698,89 @@ assert_true(
 
 vim.fn.chdir(original_cwd)
 
+-- Test: confirm dialogs must not have conflicting accelerator keys
+-- (regression guard for issue #191)
+local function extract_accelerators(choices_str)
+	local accels = {}
+	for choice in choices_str:gmatch("[^\n]+") do
+		local accel = choice:match("&(.)")
+		if accel then
+			table.insert(accels, accel:lower())
+		end
+	end
+	return accels
+end
+
+local function has_duplicate(list)
+	local seen = {}
+	for _, v in ipairs(list) do
+		if seen[v] then
+			return true, v
+		end
+		seen[v] = true
+	end
+	return false
+end
+
+-- Read source files and extract confirm() choice strings
+local source_files = {
+	project_root .. "/lua/gitflow/commands.lua",
+	project_root .. "/lua/gitflow/panels/status.lua",
+	project_root .. "/lua/gitflow/panels/conflict.lua",
+	project_root .. "/lua/gitflow/panels/branch.lua",
+	project_root .. "/lua/gitflow/panels/issues.lua",
+	project_root .. "/lua/gitflow/panels/labels.lua",
+	project_root .. "/lua/gitflow/panels/prs.lua",
+	project_root .. "/lua/gitflow/panels/stash.lua",
+	project_root .. "/lua/gitflow/ui/conflict.lua",
+}
+
+for _, filepath in ipairs(source_files) do
+	local f = io.open(filepath, "r")
+	if f then
+		local content = f:read("*a")
+		f:close()
+		-- Match confirm() calls with inline choices: { "&Foo", "&Bar" }
+		for choices_block in content:gmatch("choices%s*=%s*{([^}]+)}") do
+			local accels = {}
+			for choice in choices_block:gmatch('"&(.)"') do
+				table.insert(accels, choice:lower())
+			end
+			local dup, key = has_duplicate(accels)
+			assert_true(
+				not dup,
+				("Conflicting accelerator key '%s' in choices {%s} in %s"):format(
+					key or "?",
+					choices_block:gsub("%s+", " "),
+					filepath
+				)
+			)
+		end
+		-- Match vim.fn.confirm() calls with inline choices string: "&Foo\n&Bar"
+		for choices_str in content:gmatch('vim%.fn%.confirm%([^,]+,%s*"([^"]+)"') do
+			local accels = extract_accelerators(choices_str)
+			local dup, key = has_duplicate(accels)
+			assert_true(
+				not dup,
+				("Conflicting accelerator key '%s' in choices \"%s\" in %s"):format(
+					key or "?",
+					choices_str,
+					filepath
+				)
+			)
+		end
+	end
+end
+
+-- Also verify commit confirm specifically uses non-conflicting keys
+local cmd_src = io.open(project_root .. "/lua/gitflow/commands.lua", "r")
+assert_true(cmd_src ~= nil, "commands.lua should be readable")
+local cmd_content = cmd_src:read("*a")
+cmd_src:close()
+assert_true(
+	cmd_content:find('"&Yes",%s*"&No"', 1) ~= nil
+		or not cmd_content:find('"&Commit",%s*"&Cancel"', 1),
+	"commit confirm should not use &Commit/&Cancel (conflicting [C] accelerator)"
+)
+
 print("Stage 2 smoke tests passed")
