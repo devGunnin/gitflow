@@ -119,11 +119,13 @@ end
 ---@param entries GitflowBranchEntry[]
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowBranchEntry>
-local function append_section(title, entries, lines, line_entries)
-	lines[#lines + 1] = title
-	lines[#lines + 1] = ui_render.separator()
+---@param render_opts table
+local function append_section(title, entries, lines, line_entries, render_opts)
+	local section_title, section_separator = ui_render.section(title, nil, render_opts)
+	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_separator
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 		lines[#lines + 1] = ""
 		return
 	end
@@ -138,7 +140,7 @@ local function append_section(title, entries, lines, line_entries)
 			marker = icons.get("branch", "local_branch")
 		end
 		local current_text = entry.is_current and " (current)" or ""
-		local line = (" %s %s%s"):format(marker, entry.name, current_text)
+		local line = ui_render.entry(("%s %s%s"):format(marker, entry.name, current_text))
 		lines[#lines + 1] = line
 		line_entries[#lines] = entry
 	end
@@ -148,14 +150,15 @@ end
 ---@param entries GitflowBranchEntry[]
 local function render(entries)
 	local local_entries, remote_entries = git_branch.partition(entries)
-	local lines = {
-		"Gitflow Branches",
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Branches", render_opts)
 	local line_entries = {}
 
-	append_section("Local", local_entries, lines, line_entries)
-	append_section("Remote", remote_entries, lines, line_entries)
+	append_section("Local", local_entries, lines, line_entries, render_opts)
+	append_section("Remote", remote_entries, lines, line_entries, render_opts)
 
 	ui.buffer.update("branch", lines)
 	M.state.line_entries = line_entries

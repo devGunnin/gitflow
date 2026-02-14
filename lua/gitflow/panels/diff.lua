@@ -110,15 +110,18 @@ end
 ---@param current_branch string
 local function render(title, text, current_branch)
 	local diff_lines = to_lines(text)
-	local lines = {
-		title,
-		ui_render.separator(),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(title, render_opts)
 	for _, line in ipairs(diff_lines) do
 		lines[#lines + 1] = line
 	end
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 	ui.buffer.update("diff", lines)
 
 	local bufnr = M.state.bufnr

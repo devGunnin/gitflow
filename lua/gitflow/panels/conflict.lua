@@ -155,21 +155,22 @@ end
 ---@param files GitflowConflictFileEntry[]
 ---@param operation GitflowConflictOperation|nil
 local function render(files, operation)
-	local lines = {
-		"Gitflow Conflicts",
-		ui_render.separator(),
-		("Active operation: %s"):format(operation_label(operation)),
-		("Unresolved files: %d"):format(#files),
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Conflicts", render_opts)
+	lines[#lines + 1] = ("Active operation: %s"):format(operation_label(operation))
+	lines[#lines + 1] = ("Unresolved files: %d"):format(#files)
+	lines[#lines + 1] = ""
 	local line_entries = {}
 
 	if #files == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 	else
 		for _, item in ipairs(files) do
 			local suffix = (" (%d hunks)"):format(item.hunk_count)
-			lines[#lines + 1] = ("  %s%s"):format(item.path, suffix)
+			lines[#lines + 1] = ui_render.entry(("%s%s"):format(item.path, suffix))
 			line_entries[#lines] = item
 
 			if item.marker_error then

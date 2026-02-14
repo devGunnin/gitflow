@@ -1,12 +1,63 @@
 local M = {}
 
 local SEPARATOR_CHAR = "\u{2500}" -- ─ box drawing horizontal
+local DEFAULT_SEPARATOR_WIDTH = 50
+local MIN_SEPARATOR_WIDTH = 24
+
+---@param opts table|nil
+---@return integer|nil
+local function resolve_window_id(opts)
+	local options = opts or {}
+	local winid = options.winid
+	if winid and vim.api.nvim_win_is_valid(winid) then
+		return winid
+	end
+
+	local bufnr = options.bufnr
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		local buf_winid = vim.fn.bufwinid(bufnr)
+		if buf_winid ~= -1 and vim.api.nvim_win_is_valid(buf_winid) then
+			return buf_winid
+		end
+	end
+
+	return nil
+end
+
+---Resolve content width for a panel buffer/window.
+---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
+---@return integer
+function M.content_width(opts)
+	local options = opts or {}
+	local fallback = tonumber(options.fallback) or DEFAULT_SEPARATOR_WIDTH
+	local min_width = tonumber(options.min_width) or MIN_SEPARATOR_WIDTH
+	local winid = resolve_window_id(options)
+	if not winid then
+		return fallback
+	end
+
+	local width = vim.api.nvim_win_get_width(winid)
+	local ok, info = pcall(vim.fn.getwininfo, winid)
+	if ok and type(info) == "table" and info[1] then
+		local textoff = tonumber(info[1].textoff) or 0
+		width = width - textoff
+	end
+
+	return math.max(min_width, math.floor(width))
+end
 
 ---Build a separator line of the given width.
----@param width integer|nil  fill width (defaults to 50)
+---@param width integer|table|nil  fill width or context opts (defaults to 50)
 ---@return string
 function M.separator(width)
-	return string.rep(SEPARATOR_CHAR, width or 50)
+	local resolved = width
+	if type(width) == "table" then
+		resolved = M.content_width(width)
+	end
+
+	local sep_width = tonumber(resolved) or DEFAULT_SEPARATOR_WIDTH
+	sep_width = math.max(1, math.floor(sep_width))
+	return string.rep(SEPARATOR_CHAR, sep_width)
 end
 
 ---Format a title bar line with optional icon.
@@ -19,15 +70,16 @@ end
 ---Format a section header with count and separator.
 ---@param text string  section name
 ---@param count integer|nil  optional item count
+---@param opts table|nil  separator width context
 ---@return string header, string separator  two lines
-function M.section(text, count)
+function M.section(text, count, opts)
 	local header
 	if count then
 		header = ("%s (%d)"):format(text, count)
 	else
 		header = text
 	end
-	return header, M.separator()
+	return header, M.separator(opts)
 end
 
 ---Format an empty-state placeholder.
@@ -58,7 +110,11 @@ end
 function M.format_key_hints(pairs)
 	local parts = {}
 	for _, pair in ipairs(pairs) do
-		parts[#parts + 1] = ("%s %s"):format(pair[1], pair[2])
+		local key = pair.key or pair[1]
+		local action = pair.action or pair[2]
+		if key and action then
+			parts[#parts + 1] = ("%s %s"):format(key, action)
+		end
 	end
 	return table.concat(parts, "  ")
 end
@@ -108,29 +164,32 @@ function M.apply_panel_highlights(bufnr, ns, lines, opts)
 	end
 end
 
----Build a standard panel header block: title + blank line.
+---Build a standard panel header block: title + separator.
 ---@param title_text string
+---@param opts table|nil  separator width context
 ---@return string[]
-function M.panel_header(title_text)
+function M.panel_header(title_text, opts)
 	return {
 		M.title(title_text),
-		"",
+		M.separator(opts),
 	}
 end
 
----Build a standard panel footer block: blank line + branch info + key hints.
+---Build a standard panel footer block with separator and optional metadata.
 ---@param current_branch string|nil
 ---@param key_hints string|nil  inline key hint text
+---@param opts table|nil  separator width context
 ---@return string[]
-function M.panel_footer(current_branch, key_hints)
+function M.panel_footer(current_branch, key_hints, opts)
 	local lines = {}
-	if current_branch then
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
-	end
-	if key_hints then
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = M.footer(key_hints)
+	if current_branch or key_hints then
+		lines[#lines + 1] = M.separator(opts)
+		if current_branch then
+			lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+		end
+		if key_hints then
+			lines[#lines + 1] = M.footer(key_hints)
+		end
 	end
 	return lines
 end

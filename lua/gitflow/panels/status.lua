@@ -59,11 +59,13 @@ M.state = {
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param diff_staged boolean
-local function append_file_section(title, entries, lines, line_entries, diff_staged)
-	lines[#lines + 1] = title
-	lines[#lines + 1] = ui_render.separator()
+---@param render_opts table
+local function append_file_section(title, entries, lines, line_entries, diff_staged, render_opts)
+	local section_title, section_separator = ui_render.section(title, nil, render_opts)
+	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_separator
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 		lines[#lines + 1] = ""
 		return
 	end
@@ -74,7 +76,7 @@ local function append_file_section(title, entries, lines, line_entries, diff_sta
 		if entry.untracked then
 			icon = icons.get("git_state", "untracked")
 		end
-		local line = ("  %s %s  %s"):format(icon, status, entry.path)
+		local line = ui_render.entry(("%s %s  %s"):format(icon, status, entry.path))
 		lines[#lines + 1] = line
 		line_entries[#lines] = {
 			kind = "file",
@@ -90,11 +92,13 @@ end
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param pushable boolean|table<string, boolean>
-local function append_commit_section(title, entries, lines, line_entries, pushable)
-	lines[#lines + 1] = title
-	lines[#lines + 1] = ui_render.separator()
+---@param render_opts table
+local function append_commit_section(title, entries, lines, line_entries, pushable, render_opts)
+	local section_title, section_separator = ui_render.section(title, nil, render_opts)
+	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_separator
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 		lines[#lines + 1] = ""
 		return
 	end
@@ -107,7 +111,7 @@ local function append_commit_section(title, entries, lines, line_entries, pushab
 			entry_pushable = pushable[entry.sha] == true
 		end
 
-		lines[#lines + 1] = ("  %s"):format(entry.summary)
+		lines[#lines + 1] = ui_render.entry(entry.summary)
 		line_entries[#lines] = {
 			kind = "commit",
 			entry = entry,
@@ -316,10 +320,11 @@ end
 ---@param upstream_name string|nil
 ---@param current_branch string
 local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
-	local lines = {
-		"Gitflow Status",
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Status", render_opts)
 	local line_entries = {}
 
 	append_file_section(
@@ -327,21 +332,24 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		grouped.staged,
 		lines,
 		line_entries,
-		true
+		true,
+		render_opts
 	)
 	append_file_section(
 		("Unstaged (%d)"):format(#grouped.unstaged),
 		grouped.unstaged,
 		lines,
 		line_entries,
-		false
+		false,
+		render_opts
 	)
 	append_file_section(
 		("Untracked (%d)"):format(#grouped.untracked),
 		grouped.untracked,
 		lines,
 		line_entries,
-		false
+		false,
+		render_opts
 	)
 
 	if upstream_name then
@@ -351,20 +359,26 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 				outgoing_entries,
 				lines,
 				line_entries,
-				true
+				true,
+				render_opts
 			)
 		end
 		local outgoing_title = ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name)
-		append_commit_section(outgoing_title, outgoing_entries, lines, line_entries, true)
+		append_commit_section(outgoing_title, outgoing_entries, lines, line_entries, true, render_opts)
 		local incoming_title = ("Incoming (oldest -> newest, only on %s)"):format(upstream_name)
-		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false)
+		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false, render_opts)
 	else
-		lines[#lines + 1] = "Outgoing / Incoming"
-		lines[#lines + 1] = "  (upstream branch is not configured)"
+		local upstream_title, upstream_sep = ui_render.section("Outgoing / Incoming", nil, render_opts)
+		lines[#lines + 1] = upstream_title
+		lines[#lines + 1] = upstream_sep
+		lines[#lines + 1] = ui_render.entry("(upstream branch is not configured)")
 		lines[#lines + 1] = ""
 	end
 
-	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 
 	ui.buffer.update("status", lines)
 	M.state.line_entries = line_entries

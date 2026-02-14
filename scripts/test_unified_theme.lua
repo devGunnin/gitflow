@@ -42,6 +42,10 @@ local sep10 = ui_render.separator(10)
 local char_len = #"\u{2500}"
 assert_equals(#sep10, 10 * char_len, "separator(10) should repeat 10 times")
 
+-- separator(opts) uses fallback width when no window context is available
+local sep_opts = ui_render.separator({ fallback = 37 })
+assert_equals(#sep_opts, 37 * char_len, "separator(opts) should use fallback width")
+
 -- title() returns text as-is
 assert_equals(ui_render.title("Gitflow Status"), "Gitflow Status", "title should return text as-is")
 
@@ -64,20 +68,28 @@ assert_equals(ui_render.empty("no items"), "  no items", "empty() should indent 
 assert_equals(ui_render.entry("file.txt"), "  file.txt", "entry should indent with 2 spaces")
 
 -- footer() returns text as-is
-assert_equals(ui_render.footer("q quit  r refresh"), "q quit  r refresh", "footer should return hints")
+assert_equals(
+	ui_render.footer("q quit  r refresh"),
+	"q quit  r refresh",
+	"footer should return hints"
+)
 
 -- format_key_hints()
 local hints = ui_render.format_key_hints({
 	{ "q", "quit" },
 	{ "r", "refresh" },
 })
-assert_equals(hints, "q quit  r refresh", "format_key_hints should join pairs with double space")
+assert_equals(
+	hints,
+	"q quit  r refresh",
+	"format_key_hints should join pairs with double space"
+)
 
 -- panel_header()
 local ph = ui_render.panel_header("Gitflow Test")
 assert_equals(#ph, 2, "panel_header should return 2 lines")
 assert_equals(ph[1], "Gitflow Test", "panel_header first line should be title")
-assert_equals(ph[2], "", "panel_header second line should be blank")
+assert_true(ph[2]:find("─") ~= nil, "panel_header second line should be a separator")
 
 -- panel_footer() with branch and hints
 local pf = ui_render.panel_footer("main", "q quit")
@@ -133,28 +145,45 @@ ui_render.apply_panel_highlights(bufnr, ns, test_lines, {
 })
 
 -- Check title highlight (line 0)
-local title_hl = vim.api.nvim_buf_get_extmarks(bufnr, ns, { 0, 0 }, { 0, -1 }, { details = true })
+local title_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 0, 0 }, { 0, -1 }, { details = true })
 assert_true(#title_hl > 0, "title line should have highlights")
 assert_equals(title_hl[1][4].hl_group, "GitflowTitle", "title should use GitflowTitle highlight")
 
 -- Check separator highlight (line 1)
-local sep_hl = vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
+local sep_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
 assert_true(#sep_hl > 0, "separator line should have highlights")
-assert_equals(sep_hl[1][4].hl_group, "GitflowSeparator", "separator should use GitflowSeparator highlight")
+assert_equals(
+	sep_hl[1][4].hl_group,
+	"GitflowSeparator",
+	"separator should use GitflowSeparator highlight"
+)
 
 -- Check footer highlight (line 6)
-local footer_hl = vim.api.nvim_buf_get_extmarks(bufnr, ns, { 6, 0 }, { 6, -1 }, { details = true })
+local footer_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 6, 0 }, { 6, -1 }, { details = true })
 assert_true(#footer_hl > 0, "footer line should have highlights")
-assert_equals(footer_hl[1][4].hl_group, "GitflowFooter", "footer should use GitflowFooter highlight")
+assert_equals(
+	footer_hl[1][4].hl_group,
+	"GitflowFooter",
+	"footer should use GitflowFooter highlight"
+)
 
 -- Check entry highlight (line 2)
-local entry_hl = vim.api.nvim_buf_get_extmarks(bufnr, ns, { 2, 0 }, { 2, -1 }, { details = true })
+local entry_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 2, 0 }, { 2, -1 }, { details = true })
 assert_true(#entry_hl > 0, "entry_highlights line should have highlights")
-assert_equals(entry_hl[1][4].hl_group, "GitflowHeader", "entry_highlights should apply specified group")
+assert_equals(
+	entry_hl[1][4].hl_group,
+	"GitflowHeader",
+	"entry_highlights should apply specified group"
+)
 
 -- Clearing: re-apply and check old marks are gone
 ui_render.apply_panel_highlights(bufnr, ns, { "Title Only" }, {})
-local old_sep_hl = vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
+local old_sep_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
 assert_equals(#old_sep_hl, 0, "re-apply should clear previous namespace highlights")
 
 -- Invalid buffer should not error

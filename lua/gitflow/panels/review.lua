@@ -453,14 +453,15 @@ end
 local function render_review(
 	title, diff_text, files, hunks, comment_threads
 )
-	local lines = {
-		title,
-		ui_render.separator(),
-		("Files: %d  Hunks: %d"):format(#files, #hunks),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(title, render_opts)
+	lines[#lines + 1] = ("Files: %d  Hunks: %d"):format(#files, #hunks)
 	for _, f in ipairs(files) do
-		lines[#lines + 1] = ("  %s %s"):format(
-			status_indicator(f.status), f.path
+		lines[#lines + 1] = ui_render.entry(
+			("%s %s"):format(status_indicator(f.status), f.path)
 		)
 	end
 	if #M.state.pending_comments > 0 then
@@ -655,24 +656,23 @@ end
 
 ---@param message string
 local function render_loading(message)
-	ui.buffer.update("review", {
-		"Gitflow PR Review",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow PR Review", render_opts)
+	lines[#lines + 1] = ui_render.entry(message)
+	ui.buffer.update("review", lines)
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}
 	M.state.line_context = {}
 
 	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
-		vim.api.nvim_buf_clear_namespace(M.state.bufnr, REVIEW_HIGHLIGHT_NS, 0, -1)
-		vim.api.nvim_buf_add_highlight(
+		ui_render.apply_panel_highlights(
 			M.state.bufnr,
 			REVIEW_HIGHLIGHT_NS,
-			"GitflowTitle",
-			0,
-			0,
-			-1
+			lines,
+			{}
 		)
 	end
 end

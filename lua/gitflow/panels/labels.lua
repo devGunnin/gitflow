@@ -97,46 +97,64 @@ local function maybe_text(value)
 end
 
 local function render_loading(message)
-	ui.buffer.update("labels", {
-		"Gitflow Labels",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow Labels", render_opts)
+	lines[#lines + 1] = ui_render.entry(message)
+	ui.buffer.update("labels", lines)
 	M.state.line_entries = {}
+
+	local bufnr = M.state.bufnr
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {})
+	end
 end
 
 ---@param labels table[]
 local function render_list(labels)
-	local lines = {
-		"Gitflow Labels",
-		ui_render.separator(),
-		("Labels (%d)"):format(#labels),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Labels", render_opts)
+	local section_title, section_separator = ui_render.section("Labels", #labels, render_opts)
+	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_separator
 	local line_entries = {}
 
 	if #labels == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 	else
 		for _, label in ipairs(labels) do
 			local name = maybe_text(label.name)
 			local color = maybe_text(label.color)
 			local description = maybe_text(label.description)
-			lines[#lines + 1] = ("  %s (#%s)"):format(name, color)
-			lines[#lines + 1] = ("      %s"):format(description)
+			lines[#lines + 1] = ui_render.entry(("%s (#%s)"):format(name, color))
+			lines[#lines + 1] = ui_render.entry(("    %s"):format(description))
 			line_entries[#lines - 1] = label
 			line_entries[#lines] = label
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "c: create  d: delete  r: refresh  q: quit"
+	local key_hints = ui_render.format_key_hints({
+		{ "c", "create" },
+		{ "d", "delete" },
+		{ "r", "refresh" },
+		{ "q", "quit" },
+	})
+	local footer_lines = ui_render.panel_footer(nil, key_hints, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 
 	ui.buffer.update("labels", lines)
 
 	local bufnr = M.state.bufnr
 	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
 		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
+			footer_line = key_hints ~= "" and #lines or nil,
 		})
 	end
 

@@ -208,11 +208,13 @@ local function join_assignee_names(pr)
 end
 
 local function render_loading(message)
-	ui.buffer.update("prs", {
-		"Gitflow Pull Requests",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow Pull Requests", render_opts)
+	lines[#lines + 1] = message
+	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
@@ -220,26 +222,23 @@ local function render_loading(message)
 		return
 	end
 
-	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, {
-		"Gitflow Pull Requests",
-		"",
-		message,
-	}, {})
+	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {})
 end
 
 ---@param prs table[]
 local function render_list(prs)
-	local lines = {
-		"Gitflow Pull Requests",
-		ui_render.separator(),
-		("Filters: state=%s base=%s head=%s"):
-			format(
-				maybe_text(M.state.filters.state),
-				maybe_text(M.state.filters.base),
-				maybe_text(M.state.filters.head)
-			),
-		("PRs (%d)"):format(#prs),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Pull Requests", render_opts)
+	lines[#lines + 1] = ("Filters: state=%s base=%s head=%s"):
+		format(
+			maybe_text(M.state.filters.state),
+			maybe_text(M.state.filters.base),
+			maybe_text(M.state.filters.head)
+		)
+	lines[#lines + 1] = ("PRs (%d)"):format(#prs)
 	local line_entries = {}
 
 	if #prs == 0 then
@@ -288,17 +287,22 @@ end
 local function render_view(pr)
 	local view_state = pr_state(pr)
 	local view_icon = icons.get("github", "pr_" .. view_state)
-	local lines = {
-		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
-		ui_render.separator(),
-		("State: %s %s"):format(view_icon, view_state),
-		("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-"),
-		("Refs: %s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName)),
-		("Assignees: %s"):format(join_assignee_names(pr)),
-		"",
-		"Body",
-		"----",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(
+		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
+		render_opts
+	)
+	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
+	lines[#lines + 1] = ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-")
+	lines[#lines + 1] = ("Refs: %s -> %s"):
+		format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
+	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(pr))
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = "Body"
+	lines[#lines + 1] = "----"
 
 	local body_lines = split_lines(tostring(pr.body or ""))
 	if #body_lines == 0 then

@@ -100,22 +100,25 @@ end
 ---@param entries GitflowStashEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local lines = {
-		"Gitflow Stash",
-		ui_render.separator(),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Stash", render_opts)
 	local line_entries = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = "(no stash entries)"
+		lines[#lines + 1] = ui_render.empty("no stash entries")
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ("%s %s"):format(entry.ref, entry.description)
+			lines[#lines + 1] = ui_render.entry(("%s %s"):format(entry.ref, entry.description))
 			line_entries[#lines] = entry
 		end
 	end
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 
 	ui.buffer.update("stash", lines)
 	M.state.line_entries = line_entries

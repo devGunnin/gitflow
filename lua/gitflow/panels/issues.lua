@@ -209,33 +209,32 @@ local function split_lines(text)
 end
 
 local function render_loading(message)
-	ui.buffer.update("issues", {
-		"Gitflow Issues",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow Issues", render_opts)
+	lines[#lines + 1] = message
+	ui.buffer.update("issues", lines)
 	M.state.line_entries = {}
 
-	ui_render.apply_panel_highlights(M.state.bufnr, ISSUES_HIGHLIGHT_NS, {
-		"Gitflow Issues",
-		"",
-		message,
-	}, {})
+	ui_render.apply_panel_highlights(M.state.bufnr, ISSUES_HIGHLIGHT_NS, lines, {})
 end
 
 ---@param issues table[]
 local function render_list(issues)
-	local lines = {
-		"Gitflow Issues",
-		ui_render.separator(),
-		("Filters: state=%s label=%s assignee=%s"):
-			format(
-				maybe_text(M.state.filters.state),
-				maybe_text(M.state.filters.label),
-				maybe_text(M.state.filters.assignee)
-			),
-		("Issues (%d)"):format(#issues),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Issues", render_opts)
+	lines[#lines + 1] = ("Filters: state=%s label=%s assignee=%s"):
+		format(
+			maybe_text(M.state.filters.state),
+			maybe_text(M.state.filters.label),
+			maybe_text(M.state.filters.assignee)
+		)
+	lines[#lines + 1] = ("Issues (%d)"):format(#issues)
 	local line_entries = {}
 
 	if #issues == 0 then
@@ -282,17 +281,21 @@ end
 local function render_view(issue)
 	local view_state = issue_state(issue)
 	local view_icon = icons.get("github", "issue_" .. view_state)
-	local lines = {
-		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
-		ui_render.separator(),
-		("State: %s %s"):format(view_icon, view_state),
-		("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-"),
-		("Labels: %s"):format(join_label_names(issue)),
-		("Assignees: %s"):format(join_assignee_names(issue)),
-		"",
-		"Body",
-		"----",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(
+		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
+		render_opts
+	)
+	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
+	lines[#lines + 1] = ("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-")
+	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(issue))
+	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(issue))
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = "Body"
+	lines[#lines + 1] = "----"
 
 	local body_lines = split_lines(tostring(issue.body or ""))
 	if #body_lines == 0 then
