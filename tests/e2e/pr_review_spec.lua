@@ -222,6 +222,22 @@ T.run_suite("E2E: PR Review Flow", {
 			"R", "r", "q",
 		})
 
+		local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
+		local leader_toggle = vim.api.nvim_replace_termcodes(
+			"<leader>t", true, false, true
+		)
+		local has_leader_toggle = false
+		for _, map in ipairs(keymaps) do
+			if map.lhs == leader_toggle then
+				has_leader_toggle = true
+				break
+			end
+		end
+		T.assert_true(
+			has_leader_toggle,
+			"review panel should map <leader>t for thread toggle"
+		)
+
 		cleanup_panels()
 	end,
 
@@ -404,44 +420,52 @@ T.run_suite("E2E: PR Review Flow", {
 	-- ── Submit review as approve (a key) ──────────────────────────────
 
 	["approve review a invokes gh pr review --approve"] = function()
-		local review_mode = nil
-		local review_number = nil
-
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, on_confirm)
-					on_confirm("LGTM")
-				end,
-			},
-			{
-				table = gh_prs,
-				key = "review",
-				value = function(number, mode, _, _, cb)
-					review_number = number
-					review_mode = mode
-					cb(nil)
-				end,
-			},
-		}, function()
-			review_panel.review_approve()
-			T.drain_jobs(3000)
-		end)
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("LGTM")
+					end,
+				},
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
 
-		T.assert_equals(
-			review_number,
-			42,
-			"review should target PR #42"
-		)
-		T.assert_equals(
-			review_mode,
-			"approve",
-			"review mode should be 'approve'"
-		)
+			local lines = T.read_file(log_path)
+			local found_review = false
+			local found_approve = false
+			local found_body = false
+			for _, line in ipairs(lines) do
+				if line:find("pr review 42", 1, true) then
+					found_review = true
+				end
+				if line:find("--approve", 1, true) then
+					found_approve = true
+				end
+				if line:find("--body LGTM", 1, true) then
+					found_body = true
+				end
+			end
+
+			T.assert_true(
+				found_review,
+				"gh log should contain `pr review 42`"
+			)
+			T.assert_true(
+				found_approve,
+				"gh log should contain --approve"
+			)
+			T.assert_true(
+				found_body,
+				"gh log should contain approve review body"
+			)
+		end)
 
 		cleanup_panels()
 	end,
@@ -449,37 +473,52 @@ T.run_suite("E2E: PR Review Flow", {
 	-- ── Submit review as request-changes (x key) ──────────────────────
 
 	["request changes x invokes gh pr review --request-changes"] = function()
-		local review_mode = nil
-
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, on_confirm)
-					on_confirm("Please fix this")
-				end,
-			},
-			{
-				table = gh_prs,
-				key = "review",
-				value = function(_, mode, _, _, cb)
-					review_mode = mode
-					cb(nil)
-				end,
-			},
-		}, function()
-			review_panel.review_request_changes()
-			T.drain_jobs(3000)
-		end)
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("Please fix this")
+					end,
+				},
+			}, function()
+				review_panel.review_request_changes()
+				T.drain_jobs(3000)
+			end)
 
-		T.assert_equals(
-			review_mode,
-			"request_changes",
-			"review mode should be 'request_changes'"
-		)
+			local lines = T.read_file(log_path)
+			local found_review = false
+			local found_request_changes = false
+			local found_body = false
+			for _, line in ipairs(lines) do
+				if line:find("pr review 42", 1, true) then
+					found_review = true
+				end
+				if line:find("--request-changes", 1, true) then
+					found_request_changes = true
+				end
+				if line:find("--body Please fix this", 1, true) then
+					found_body = true
+				end
+			end
+
+			T.assert_true(
+				found_review,
+				"gh log should contain `pr review 42`"
+			)
+			T.assert_true(
+				found_request_changes,
+				"gh log should contain --request-changes"
+			)
+			T.assert_true(
+				found_body,
+				"gh log should contain request changes review body"
+			)
+		end)
 
 		cleanup_panels()
 	end,
@@ -613,7 +652,7 @@ T.run_suite("E2E: PR Review Flow", {
 
 	-- ── Thread collapse toggle (<leader>t) ────────────────────────────
 
-	["thread toggle collapses and expands thread"] = function()
+	["thread toggle via <leader>t keymap collapses thread"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
@@ -648,6 +687,7 @@ T.run_suite("E2E: PR Review Flow", {
 
 		-- Set cursor to thread line
 		vim.api.nvim_win_set_cursor(winid, { thread_line, 0 })
+		vim.api.nvim_set_current_win(winid)
 
 		-- Need to check thread_line_map is populated at this line
 		local thread_idx = review_panel.state.thread_line_map[thread_line]
@@ -656,8 +696,8 @@ T.run_suite("E2E: PR Review Flow", {
 			"thread_line_map should contain entry for thread line"
 		)
 
-		-- Toggle collapse
-		review_panel.toggle_thread()
+		-- Toggle collapse through the keymap path.
+		T.feedkeys("<leader>t")
 		T.drain_jobs(3000)
 
 		-- After toggle + re-render, thread should be collapsed
@@ -740,9 +780,6 @@ T.run_suite("E2E: PR Review Flow", {
 	-- ── Submit pending review with inline comments ────────────────────
 
 	["submit pending review batches inline comments"] = function()
-		local submit_mode = nil
-		local submit_comments = nil
-
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
@@ -759,48 +796,106 @@ T.run_suite("E2E: PR Review Flow", {
 			},
 		}
 
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(opts, on_confirm)
-					-- First prompt: mode selection
-					if opts.prompt:find("mode", 1, true) then
-						on_confirm("approve")
-					else
-						-- Second prompt: body
-						on_confirm("Good overall")
-					end
-				end,
-			},
-			{
-				table = gh_prs,
-				key = "submit_review",
-				value = function(_, mode, _, comments, _, cb)
-					submit_mode = mode
-					submit_comments = comments
-					cb(nil)
-				end,
-			},
-		}, function()
-			review_panel.submit_pending_review()
-			T.drain_jobs(3000)
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(opts, on_confirm)
+						-- First prompt: mode selection
+						if opts.prompt:find("mode", 1, true) then
+							on_confirm("approve")
+						else
+							-- Second prompt: body
+							on_confirm("Good overall")
+						end
+					end,
+				},
+			}, function()
+				review_panel.submit_pending_review()
+				T.drain_jobs(3000)
+			end)
+
+			local lines = T.read_file(log_path)
+			local found_review_api = false
+			local found_event = false
+			local found_body = false
+			local found_comments = false
+			for _, line in ipairs(lines) do
+				if line:find("api repos/{owner}/{repo}/pulls/42/reviews", 1, true) then
+					found_review_api = true
+				end
+				if line:find("event=APPROVE", 1, true) then
+					found_event = true
+				end
+				if line:find("body=Good overall", 1, true) then
+					found_body = true
+				end
+				if line:find("comments=", 1, true)
+					and line:find("lua/gitflow/highlights.lua", 1, true) then
+					found_comments = true
+				end
+			end
+
+			T.assert_true(
+				found_review_api,
+				"submit review should call reviews API endpoint"
+			)
+			T.assert_true(
+				found_event,
+				"submit review should map approve mode to event=APPROVE"
+			)
+			T.assert_true(
+				found_body,
+				"submit review should include provided body"
+			)
+			T.assert_true(
+				found_comments,
+				"submit review should include inline comments payload"
+			)
 		end)
 
-		T.assert_equals(
-			submit_mode,
-			"approve",
-			"submit_review should use approve mode"
-		)
-		T.assert_true(
-			submit_comments ~= nil and #submit_comments > 0,
-			"submit_review should include inline comments"
-		)
-		T.assert_equals(
-			submit_comments[1].path,
-			"lua/gitflow/highlights.lua",
-			"inline comment should target correct file path"
-		)
+		cleanup_panels()
+	end,
+
+	["submit review API maps request_changes to REQUEST_CHANGES"] = function()
+		with_temp_gh_log(function(log_path)
+			gh_prs.submit_review(
+				42,
+				"request_changes",
+				"Need another pass",
+				{},
+				{},
+				function(err)
+					T.assert_true(
+						err == nil,
+						"submit_review should succeed: " .. tostring(err)
+					)
+				end
+			)
+			T.drain_jobs(3000)
+
+			local lines = T.read_file(log_path)
+			local found_event = false
+			local found_body = false
+			for _, line in ipairs(lines) do
+				if line:find("event=REQUEST_CHANGES", 1, true) then
+					found_event = true
+				end
+				if line:find("body=Need another pass", 1, true) then
+					found_body = true
+				end
+			end
+
+			T.assert_true(
+				found_event,
+				"submit_review should map request_changes to REQUEST_CHANGES"
+			)
+			T.assert_true(
+				found_body,
+				"submit_review should include request changes body"
+			)
+		end)
 
 		cleanup_panels()
 	end,
