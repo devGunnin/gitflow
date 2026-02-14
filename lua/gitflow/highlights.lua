@@ -29,12 +29,12 @@ M.DEFAULT_GROUPS = {
 	GitflowBranchCurrent = { link = "Title" },
 	GitflowBranchRemote = { link = "Comment" },
 	-- PR state
-	GitflowPROpen = { link = "DiagnosticOk" },
+	GitflowPROpen = { fg = M.PALETTE.accent_primary, bold = true },
 	GitflowPRMerged = { link = "Special" },
 	GitflowPRClosed = { link = "DiagnosticError" },
 	GitflowPRDraft = { link = "Comment" },
 	-- Issue state
-	GitflowIssueOpen = { link = "DiagnosticOk" },
+	GitflowIssueOpen = { fg = M.PALETTE.accent_primary, bold = true },
 	GitflowIssueClosed = { link = "DiagnosticError" },
 	-- Review
 	GitflowReviewApproved = { link = "DiagnosticOk" },
