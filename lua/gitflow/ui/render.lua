@@ -31,15 +31,21 @@ local function should_render_inline_title(opts)
 	if options.inline_title ~= nil then
 		return options.inline_title == true
 	end
+	if options.include_title ~= nil then
+		return options.include_title == true
+	end
 
 	local winid = resolve_window_id(options)
 	if not winid then
 		return true
 	end
 
-	local config = vim.api.nvim_win_get_config(winid)
-	local relative = type(config) == "table" and config.relative or ""
-	return relative == ""
+	local ok, config = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(config) ~= "table" then
+		return true
+	end
+
+	return config.relative == nil or config.relative == ""
 end
 
 ---Resolve content width for a panel buffer/window.
@@ -76,6 +82,12 @@ function M.separator(width)
 	local sep_width = tonumber(resolved) or DEFAULT_SEPARATOR_WIDTH
 	sep_width = math.max(1, math.floor(sep_width))
 	return string.rep(SEPARATOR_CHAR, sep_width)
+end
+
+---@param line string|nil
+---@return boolean
+function M.is_separator(line)
+	return type(line) == "string" and vim.startswith(line, SEPARATOR_CHAR)
 end
 
 ---Format a title bar line with optional icon.
@@ -138,8 +150,8 @@ function M.format_key_hints(pairs)
 end
 
 ---Apply standard panel highlights to a buffer after rendering.
----Applies GitflowTitle to line 0, scans for section headers, separators,
----and footer metadata lines.
+---Applies GitflowTitle to line 0 only when the first line is an inline
+---header title, then scans separators and footer metadata lines.
 ---@param bufnr integer
 ---@param ns integer  highlight namespace
 ---@param lines string[]
@@ -150,19 +162,22 @@ function M.apply_panel_highlights(bufnr, ns, lines, opts)
 	end
 
 	local options = opts or {}
+	local has_inline_title = options.has_inline_title
+	if has_inline_title == nil then
+		has_inline_title = #lines > 0 and not M.is_separator(lines[1])
+	end
 
 	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
 
-	-- Title bar: line 0 (when present)
-	if #lines > 0 and not vim.startswith(lines[1], SEPARATOR_CHAR) then
+	-- Title bar: line 0
+	if has_inline_title then
 		vim.api.nvim_buf_add_highlight(bufnr, ns, "GitflowTitle", 0, 0, -1)
 	end
 
 	-- Scan for separator lines and section headers
-	local sep_pattern = "^" .. SEPARATOR_CHAR
 	for line_no, line in ipairs(lines) do
 		local idx = line_no - 1
-		if line:find(sep_pattern) then
+		if M.is_separator(line) then
 			vim.api.nvim_buf_add_highlight(bufnr, ns, "GitflowSeparator", idx, 0, -1)
 		end
 	end
@@ -182,7 +197,9 @@ function M.apply_panel_highlights(bufnr, ns, lines, opts)
 	end
 end
 
----Build a standard panel header block: title + separator.
+---Build a standard panel header block.
+---Split layout: title + separator.
+---Float layout: separator only (frame title already provides chrome).
 ---@param title_text string
 ---@param opts table|nil  separator width context
 ---@return string[]

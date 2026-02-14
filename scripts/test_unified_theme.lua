@@ -85,11 +85,31 @@ assert_equals(
 	"format_key_hints should join pairs with double space"
 )
 
--- panel_header()
-local ph = ui_render.panel_header("Gitflow Test")
-assert_equals(#ph, 2, "panel_header should return 2 lines")
-assert_equals(ph[1], "Gitflow Test", "panel_header first line should be title")
-assert_true(ph[2]:find("─") ~= nil, "panel_header second line should be a separator")
+-- panel_header() keeps inline title by default/split layout
+local ph_split = ui_render.panel_header("Gitflow Test")
+assert_equals(#ph_split, 2, "panel_header should return title+separator in split/default layout")
+assert_equals(ph_split[1], "Gitflow Test", "split/default panel_header first line should be title")
+assert_true(
+	ph_split[2]:find("─") ~= nil,
+	"split/default panel_header second line should be separator"
+)
+
+-- panel_header() omits inline title in float layout to avoid duplicate title chrome
+local ph_float_buf = vim.api.nvim_create_buf(false, true)
+local ph_float_win = vim.api.nvim_open_win(ph_float_buf, false, {
+	relative = "editor",
+	row = 1,
+	col = 1,
+	width = 40,
+	height = 5,
+	style = "minimal",
+	border = "rounded",
+})
+local ph_float = ui_render.panel_header("Gitflow Test", { winid = ph_float_win })
+assert_equals(#ph_float, 1, "panel_header should only include separator in float layout")
+assert_true(ph_float[1]:find("─") ~= nil, "float panel_header line should be separator")
+vim.api.nvim_win_close(ph_float_win, true)
+vim.api.nvim_buf_delete(ph_float_buf, { force = true })
 
 -- panel_header() should suppress inline title for float windows
 local header_buf = vim.api.nvim_create_buf(false, true)
@@ -202,6 +222,18 @@ ui_render.apply_panel_highlights(bufnr, ns, { "Title Only" }, {})
 local old_sep_hl =
 	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
 assert_equals(#old_sep_hl, 0, "re-apply should clear previous namespace highlights")
+
+-- Separator-first headers should not receive GitflowTitle highlight
+local separator_only_lines = { ui_render.separator(), "Body line" }
+ui_render.apply_panel_highlights(bufnr, ns, separator_only_lines, {})
+local separator_title_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 0, 0 }, { 0, -1 }, { details = true })
+assert_true(#separator_title_hl > 0, "separator line should be highlighted")
+assert_equals(
+	separator_title_hl[1][4].hl_group,
+	"GitflowSeparator",
+	"separator-first header should not apply GitflowTitle to line 0"
+)
 
 -- Invalid buffer should not error
 ui_render.apply_panel_highlights(-1, ns, test_lines, {})
