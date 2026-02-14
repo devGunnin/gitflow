@@ -2,7 +2,9 @@ local ui = require("gitflow.ui")
 local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local form = require("gitflow.ui.form")
 local gh_labels = require("gitflow.gh.labels")
+local highlights = require("gitflow.highlights")
 
 local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
 local LABELS_FLOAT_TITLE = "Gitflow Labels"
@@ -156,6 +158,22 @@ local function render_list(labels)
 		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {
 			footer_line = key_hints ~= "" and #lines or nil,
 		})
+
+		-- Apply colored label highlights
+		for line_no, label in pairs(line_entries) do
+			if label.color and label.name then
+				local group = highlights.label_color_group(label.color)
+				local line_text = lines[line_no] or ""
+				local name_start = line_text:find(label.name, 1, true)
+				if name_start then
+					vim.api.nvim_buf_add_highlight(
+						bufnr, LABELS_HIGHLIGHT_NS, group,
+						line_no - 1, name_start - 1,
+						name_start - 1 + #label.name
+					)
+				end
+			end
+		end
 	end
 
 	M.state.line_entries = line_entries
@@ -199,26 +217,31 @@ function M.create_interactive()
 		return
 	end
 
-	input.prompt({ prompt = "Label name: " }, function(name)
-		local label_name = vim.trim(name or "")
-		if label_name == "" then
-			utils.notify("Label name cannot be empty", vim.log.levels.WARN)
-			return
-		end
-
-		input.prompt({ prompt = "Label color (hex): " }, function(color)
-			input.prompt({ prompt = "Label description: " }, function(description)
-				gh_labels.create(label_name, color or "", description, {}, function(err)
+	form.open({
+		title = "Create Label",
+		fields = {
+			{ name = "Name", key = "name", required = true },
+			{ name = "Color (hex)", key = "color", required = true,
+				placeholder = "e.g. ff0000" },
+			{ name = "Description", key = "description" },
+		},
+		on_submit = function(values)
+			gh_labels.create(
+				values.name, values.color or "", values.description, {},
+				function(err)
 					if err then
 						utils.notify(err, vim.log.levels.ERROR)
 						return
 					end
-					utils.notify(("Created label '%s'"):format(label_name), vim.log.levels.INFO)
+					utils.notify(
+						("Created label '%s'"):format(values.name),
+						vim.log.levels.INFO
+					)
 					M.refresh()
-				end)
-			end)
-		end)
-	end)
+				end
+			)
+		end,
+	})
 end
 
 function M.delete_under_cursor()

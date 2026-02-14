@@ -50,7 +50,31 @@ M.DEFAULT_GROUPS = {
 	},
 	GitflowPaletteEntryIcon = { fg = "#56B6C2" },
 	GitflowPaletteBackdrop = { bg = "#000000" },
+	-- Form
+	GitflowFormLabel = { fg = "#56B6C2", bold = true },
+	GitflowFormActiveField = { link = "CursorLine" },
 }
+
+---Create or retrieve a dynamic highlight group for a label hex color.
+---@param hex_color string  6-digit hex (with or without leading #)
+---@return string  highlight group name
+function M.label_color_group(hex_color)
+	local color = vim.trim(tostring(hex_color or "")):gsub("^#", ""):lower()
+	if not color:match("^[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$") then
+		return "Comment"
+	end
+
+	local group_name = ("GitflowLabel_%s"):format(color)
+	-- Determine foreground contrast: use luminance to pick black or white.
+	local r = tonumber(color:sub(1, 2), 16) / 255
+	local g = tonumber(color:sub(3, 4), 16) / 255
+	local b = tonumber(color:sub(5, 6), 16) / 255
+	local luminance = 0.299 * r + 0.587 * g + 0.114 * b
+	local fg = luminance > 0.5 and "#000000" or "#ffffff"
+
+	vim.api.nvim_set_hl(0, group_name, { fg = fg, bg = "#" .. color, bold = true })
+	return group_name
+end
 
 ---@param user_overrides table<string, table>|nil
 function M.setup(user_overrides)
