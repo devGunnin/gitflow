@@ -1,5 +1,3 @@
-local icons = require("gitflow.icons")
-
 local M = {}
 
 local SEPARATOR_CHAR = "\u{2500}" -- ─ box drawing horizontal
