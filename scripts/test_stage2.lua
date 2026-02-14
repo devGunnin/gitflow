@@ -702,11 +702,8 @@ vim.fn.chdir(original_cwd)
 -- (regression guard for issue #191)
 local function extract_accelerators(choices_str)
 	local accels = {}
-	for choice in choices_str:gmatch("[^\n]+") do
-		local accel = choice:match("&(.)")
-		if accel then
-			table.insert(accels, accel:lower())
-		end
+	for accel in choices_str:gmatch("&(.)") do
+		table.insert(accels, accel:lower())
 	end
 	return accels
 end
