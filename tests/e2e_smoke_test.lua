@@ -98,6 +98,37 @@ T.run_suite("E2E Infrastructure", {
 		)
 	end,
 
+	["git stub returns porcelain v2 status format"] = function()
+		local result = vim.system(
+			{ "git", "status", "--porcelain=v2" },
+			{ text = true }
+		):wait()
+		T.assert_equals(
+			result.code,
+			0,
+			"git stub should exit 0 for porcelain v2 status"
+		)
+		T.assert_contains(
+			result.stdout,
+			"# branch.head main",
+			"porcelain v2 output should include branch head metadata"
+		)
+		T.assert_contains(
+			result.stdout,
+			"1 .M N... 100644 100644 100644 abc1234 abc1234 tracked.txt",
+			"porcelain v2 output should include a v2 tracked record"
+		)
+		T.assert_contains(
+			result.stdout,
+			"? new.txt",
+			"porcelain v2 output should include untracked file record"
+		)
+		T.assert_false(
+			result.stdout:find(" M tracked.txt", 1, true) ~= nil,
+			"porcelain v2 output should not include v1 tracked lines"
+		)
+	end,
+
 	["git stub returns diff output"] = function()
 		local result =
 			vim.system({ "git", "diff" }, { text = true }):wait()
@@ -402,6 +433,28 @@ T.run_suite("E2E Infrastructure", {
 			return flag
 		end, "flag should become true", 2000)
 		T.assert_true(flag, "flag should be true after wait")
+	end,
+
+	["helpers drain_jobs waits for async processes"] = function()
+		local uv = vim.uv or vim.loop
+		local done = false
+		local started_at = uv.hrtime()
+		vim.system(
+			{ "sh", "-c", "sleep 0.15; echo drained" },
+			{ text = true },
+			function()
+				done = true
+			end
+		)
+
+		T.drain_jobs(2000)
+
+		local elapsed_ms = (uv.hrtime() - started_at) / 1e6
+		T.assert_true(done, "drain_jobs should wait for vim.system callback")
+		T.assert_true(
+			elapsed_ms >= 100,
+			("drain_jobs returned too early (elapsed=%.2fms)"):format(elapsed_ms)
+		)
 	end,
 
 	["helpers pcall_message captures errors"] = function()

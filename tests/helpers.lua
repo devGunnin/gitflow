@@ -239,12 +239,64 @@ end
 
 -- ── Deterministic job synchronization ──────────────────────────────────
 
---- Block until no vim jobs are running (useful after git/gh calls).
+--- Count currently active async process jobs.
+---@return integer
+local function active_job_count()
+	local count = 0
+
+	for _, chan in ipairs(vim.api.nvim_list_chans()) do
+		if chan.stream == "job" then
+			count = count + 1
+		end
+	end
+
+	local uv = vim.uv or vim.loop
+	if uv and uv.walk then
+		uv.walk(function(handle)
+			local handle_type = uv.handle_get_type
+				and uv.handle_get_type(handle)
+				or nil
+			if handle_type ~= "process" then
+				return
+			end
+
+			local ok_active, active = pcall(function()
+				return handle:is_active()
+			end)
+			local ok_closing, closing = pcall(function()
+				return handle:is_closing()
+			end)
+			if ok_active and active and (not ok_closing or not closing) then
+				count = count + 1
+			end
+		end)
+	end
+
+	return count
+end
+
+--- Block until async jobs are drained (useful after git/gh calls).
 ---@param timeout_ms? integer  default 3000
 function M.drain_jobs(timeout_ms)
-	vim.wait(timeout_ms or 3000, function()
-		return true
-	end, 50)
+	local timeout = timeout_ms or 3000
+	local stable_idle_polls = 0
+
+	local ok = vim.wait(timeout, function()
+		if active_job_count() == 0 then
+			stable_idle_polls = stable_idle_polls + 1
+		else
+			stable_idle_polls = 0
+		end
+		-- Require two idle polls so queued callbacks can run.
+		return stable_idle_polls >= 2
+	end, 20)
+
+	M.assert_true(
+		ok,
+		("timed out waiting for jobs to drain (%d active)"):format(
+			active_job_count()
+		)
+	)
 end
 
 -- ── Safe error capture ─────────────────────────────────────────────────

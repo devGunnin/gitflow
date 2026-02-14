@@ -25,9 +25,20 @@ case "$subcmd" in
       echo "fatal: not a git repository" >&2
       exit 128
     fi
-    # Default: one modified, one untracked
-    printf ' M tracked.txt\n'
-    printf '?? new.txt\n'
+    case " $* " in
+      *" --porcelain=v2 "*|*" --porcelain=2 "*)
+        # porcelain v2 records
+        printf '# branch.oid abc1234567890abcdef1234567890abcdef1234\n'
+        printf '# branch.head main\n'
+        printf '1 .M N... 100644 100644 100644 abc1234 abc1234 tracked.txt\n'
+        printf '? new.txt\n'
+        ;;
+      *)
+        # porcelain v1 records
+        printf ' M tracked.txt\n'
+        printf '?? new.txt\n'
+        ;;
+    esac
     ;;
 
   # ── branch ────────────────────────────────────────────────────────────
