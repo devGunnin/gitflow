@@ -32,7 +32,7 @@ M.DEFAULT_GROUPS = {
 	GitflowBorder = { fg = "#56B6C2" },
 	GitflowTitle = { fg = "#56B6C2", bold = true },
 	GitflowHeader = { fg = "#56B6C2", bold = true },
-	GitflowFooter = { fg = "#6B7280", italic = true },
+	GitflowFooter = { fg = "#56B6C2", italic = true },
 	GitflowSeparator = { fg = "#3E4452" },
 	GitflowNormal = { link = "NormalFloat" },
 	GitflowPaletteSelection = { link = "PmenuSel" },
