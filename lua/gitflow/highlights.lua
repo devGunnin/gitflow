@@ -28,10 +28,10 @@ M.DEFAULT_GROUPS = {
 	GitflowReviewApproved = { link = "DiagnosticOk" },
 	GitflowReviewChangesRequested = { link = "WarningMsg" },
 	GitflowReviewComment = { link = "Comment" },
-	-- Window chrome — themed accent colors
-	GitflowBorder = { fg = "#DCA561" },
-	GitflowTitle = { fg = "#DCA561", bold = true },
-	GitflowHeader = { fg = "#DCA561", bold = true },
+	-- Window chrome — themed accent colors (cyan primary, gold secondary)
+	GitflowBorder = { fg = "#56B6C2" },
+	GitflowTitle = { fg = "#56B6C2", bold = true },
+	GitflowHeader = { fg = "#56B6C2", bold = true },
 	GitflowFooter = { fg = "#6B7280", italic = true },
 	GitflowSeparator = { fg = "#3E4452" },
 	GitflowNormal = { link = "NormalFloat" },
