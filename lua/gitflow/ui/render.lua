@@ -24,6 +24,24 @@ local function resolve_window_id(opts)
 	return nil
 end
 
+---@param opts table|nil
+---@return boolean
+local function should_render_inline_title(opts)
+	local options = opts or {}
+	if options.inline_title ~= nil then
+		return options.inline_title == true
+	end
+
+	local winid = resolve_window_id(options)
+	if not winid then
+		return true
+	end
+
+	local config = vim.api.nvim_win_get_config(winid)
+	local relative = type(config) == "table" and config.relative or ""
+	return relative == ""
+end
+
 ---Resolve content width for a panel buffer/window.
 ---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
 ---@return integer
@@ -135,8 +153,8 @@ function M.apply_panel_highlights(bufnr, ns, lines, opts)
 
 	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
 
-	-- Title bar: line 0
-	if #lines > 0 then
+	-- Title bar: line 0 (when present)
+	if #lines > 0 and not vim.startswith(lines[1], SEPARATOR_CHAR) then
 		vim.api.nvim_buf_add_highlight(bufnr, ns, "GitflowTitle", 0, 0, -1)
 	end
 
@@ -169,10 +187,12 @@ end
 ---@param opts table|nil  separator width context
 ---@return string[]
 function M.panel_header(title_text, opts)
-	return {
-		M.title(title_text),
-		M.separator(opts),
-	}
+	local lines = {}
+	if should_render_inline_title(opts) then
+		lines[#lines + 1] = M.title(title_text)
+	end
+	lines[#lines + 1] = M.separator(opts)
+	return lines
 end
 
 ---Build a standard panel footer block with separator and optional metadata.

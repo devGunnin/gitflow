@@ -115,6 +115,7 @@ local function render(title, text, current_branch)
 		winid = M.state.winid,
 	}
 	local lines = ui_render.panel_header(title, render_opts)
+	local header_line_count = #lines
 	for _, line in ipairs(diff_lines) do
 		lines[#lines + 1] = line
 	end
@@ -147,7 +148,7 @@ local function render(title, text, current_branch)
 			group = "GitflowRemoved"
 		end
 		if group then
-			entry_highlights[idx + 2] = group
+			entry_highlights[idx + header_line_count] = group
 		end
 	end
 

@@ -458,6 +458,7 @@ local function render_review(
 		winid = M.state.winid,
 	}
 	local lines = ui_render.panel_header(title, render_opts)
+	local header_line_count = #lines
 	lines[#lines + 1] = ("Files: %d  Hunks: %d"):format(#files, #hunks)
 	for _, f in ipairs(files) do
 		lines[#lines + 1] = ui_render.entry(
@@ -504,20 +505,14 @@ local function render_review(
 	M.state.thread_line_map = thread_line_map
 
 	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
-		vim.api.nvim_buf_clear_namespace(M.state.bufnr, REVIEW_HIGHLIGHT_NS, 0, -1)
-		vim.api.nvim_buf_add_highlight(
-			M.state.bufnr,
-			REVIEW_HIGHLIGHT_NS,
-			"GitflowTitle",
-			0,
-			0,
-			-1
-		)
+		ui_render.apply_panel_highlights(M.state.bufnr, REVIEW_HIGHLIGHT_NS, lines, {})
+		local files_summary_idx = header_line_count
+		local first_file_idx = files_summary_idx + 1
 		vim.api.nvim_buf_add_highlight(
 			M.state.bufnr,
 			REVIEW_HIGHLIGHT_NS,
 			"GitflowHeader",
-			2,
+			files_summary_idx,
 			0,
 			-1
 		)
@@ -527,7 +522,7 @@ local function render_review(
 				M.state.bufnr,
 				REVIEW_HIGHLIGHT_NS,
 				status_highlight_group(file.status),
-				2 + idx,
+				first_file_idx + idx - 1,
 				0,
 				-1
 			)

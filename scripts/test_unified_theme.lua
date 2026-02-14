@@ -91,6 +91,23 @@ assert_equals(#ph, 2, "panel_header should return 2 lines")
 assert_equals(ph[1], "Gitflow Test", "panel_header first line should be title")
 assert_true(ph[2]:find("─") ~= nil, "panel_header second line should be a separator")
 
+-- panel_header() should suppress inline title for float windows
+local header_buf = vim.api.nvim_create_buf(false, true)
+local header_win = vim.api.nvim_open_win(header_buf, false, {
+	relative = "editor",
+	row = 0,
+	col = 0,
+	width = 40,
+	height = 4,
+	style = "minimal",
+	border = "single",
+})
+local ph_float = ui_render.panel_header("Gitflow Float Header", { winid = header_win })
+assert_equals(#ph_float, 1, "panel_header should omit inline title in float layout")
+assert_true(ph_float[1]:find("─") ~= nil, "float panel_header should keep separator line")
+vim.api.nvim_win_close(header_win, true)
+vim.api.nvim_buf_delete(header_buf, { force = true })
+
 -- panel_footer() with branch and hints
 local pf = ui_render.panel_footer("main", "q quit")
 assert_true(#pf >= 3, "panel_footer with branch+hints should have at least 3 lines")
@@ -189,6 +206,24 @@ assert_equals(#old_sep_hl, 0, "re-apply should clear previous namespace highligh
 -- Invalid buffer should not error
 ui_render.apply_panel_highlights(-1, ns, test_lines, {})
 assert_true(true, "apply_panel_highlights with invalid bufnr should not error")
+
+-- Separator-first headers (float mode) should not apply GitflowTitle on line 0
+local bufnr_no_title = vim.api.nvim_create_buf(false, true)
+local no_title_lines = { ui_render.separator(20), "content" }
+vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr_no_title })
+vim.api.nvim_buf_set_lines(bufnr_no_title, 0, -1, false, no_title_lines)
+vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr_no_title })
+ui_render.apply_panel_highlights(bufnr_no_title, ns, no_title_lines, {})
+local line0_hl =
+	vim.api.nvim_buf_get_extmarks(bufnr_no_title, ns, { 0, 0 }, { 0, -1 }, { details = true })
+local found_title_hl = false
+for _, mark in ipairs(line0_hl) do
+	if mark[4].hl_group == "GitflowTitle" then
+		found_title_hl = true
+	end
+end
+assert_true(not found_title_hl, "separator-first header should not apply GitflowTitle to line 0")
+vim.api.nvim_buf_delete(bufnr_no_title, { force = true })
 
 vim.api.nvim_buf_delete(bufnr, { force = true })
 

@@ -295,6 +295,7 @@ local function render_view(pr)
 		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
 		render_opts
 	)
+	local header_line_count = #lines
 	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
 	lines[#lines + 1] = ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-")
 	lines[#lines + 1] = ("Refs: %s -> %s"):
@@ -357,7 +358,7 @@ local function render_view(pr)
 	end
 
 	local entry_highlights = {}
-	entry_highlights[3] = pr_highlight_group(pr_state(pr))
+	entry_highlights[header_line_count + 1] = pr_highlight_group(pr_state(pr))
 
 	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
 		entry_highlights = entry_highlights,

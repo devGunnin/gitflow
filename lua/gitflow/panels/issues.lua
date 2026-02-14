@@ -289,6 +289,7 @@ local function render_view(issue)
 		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
 		render_opts
 	)
+	local header_line_count = #lines
 	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
 	lines[#lines + 1] = ("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-")
 	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(issue))
@@ -340,8 +341,7 @@ local function render_view(issue)
 	end
 
 	local entry_highlights = {}
-	-- State line is now at line 3 (after title + separator)
-	entry_highlights[3] = issue_highlight_group(issue_state(issue))
+	entry_highlights[header_line_count + 1] = issue_highlight_group(issue_state(issue))
 
 	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
 		entry_highlights = entry_highlights,

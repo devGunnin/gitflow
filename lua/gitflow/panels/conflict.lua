@@ -160,6 +160,7 @@ local function render(files, operation)
 		winid = M.state.winid,
 	}
 	local lines = ui_render.panel_header("Gitflow Conflicts", render_opts)
+	local header_line_count = #lines
 	lines[#lines + 1] = ("Active operation: %s"):format(operation_label(operation))
 	lines[#lines + 1] = ("Unresolved files: %d"):format(#files)
 	lines[#lines + 1] = ""
@@ -190,9 +191,8 @@ local function render(files, operation)
 	end
 
 	local entry_highlights = {}
-	-- Header lines for operation and file count (lines 3-4)
-	entry_highlights[3] = "GitflowHeader"
-	entry_highlights[4] = "GitflowHeader"
+	entry_highlights[header_line_count + 1] = "GitflowHeader"
+	entry_highlights[header_line_count + 2] = "GitflowHeader"
 
 	-- File entry lines
 	for line_no, _ in pairs(line_entries) do
