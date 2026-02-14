@@ -2,9 +2,7 @@
 --- Opens a scratch buffer with labeled fields that the user edits directly.
 --- Navigation: <Tab>/<S-Tab> cycle fields, <CR> submit, <Esc>/q cancel.
 
-local ui_buffer = require("gitflow.ui.buffer")
 local ui_window = require("gitflow.ui.window")
-local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 
 local M = {}
