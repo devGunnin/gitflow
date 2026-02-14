@@ -2,11 +2,13 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
+local form = require("gitflow.ui.form")
 local gh_prs = require("gitflow.gh.prs")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local review_panel = require("gitflow.panels.review")
 local icons = require("gitflow.icons")
+local highlights = require("gitflow.highlights")
 
 ---@class GitflowPrPanelState
 ---@field bufnr integer|nil
@@ -207,6 +209,28 @@ local function join_assignee_names(pr)
 	return table.concat(names, ", ")
 end
 
+---@param pr table
+---@return string
+local function join_label_names(pr)
+	local labels = pr.labels or {}
+	if type(labels) ~= "table" or #labels == 0 then
+		return "-"
+	end
+
+	local names = {}
+	for _, label in ipairs(labels) do
+		if type(label) == "table" and label.name then
+			names[#names + 1] = label.name
+		elseif type(label) == "string" then
+			names[#names + 1] = label
+		end
+	end
+	if #names == 0 then
+		return "-"
+	end
+	return table.concat(names, ", ")
+end
+
 local function render_loading(message)
 	local render_opts = {
 		bufnr = M.state.bufnr,
@@ -300,6 +324,8 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-")
 	lines[#lines + 1] = ("Refs: %s -> %s"):
 		format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
+	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(pr))
+	local labels_line_no = #lines
 	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(pr))
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = "Body"
@@ -363,6 +389,27 @@ local function render_view(pr)
 	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
 		entry_highlights = entry_highlights,
 	})
+
+	-- Colored labels in detail view
+	local labels_line = lines[labels_line_no] or ""
+	if labels_line:find("Labels:", 1, true) then
+		local pr_labels = pr.labels or {}
+		for _, label in ipairs(pr_labels) do
+			local lname = type(label) == "table" and label.name
+				or type(label) == "string" and label
+			local lcolor = type(label) == "table" and label.color
+			if lname and lcolor then
+				local group = highlights.label_color_group(lcolor)
+				local s = labels_line:find(lname, 1, true)
+				if s then
+					vim.api.nvim_buf_add_highlight(
+						bufnr, PRS_HIGHLIGHT_NS, group,
+						labels_line_no - 1, s - 1, s - 1 + #lname
+					)
+				end
+			end
+		end
+	end
 end
 
 ---@return table|nil
@@ -475,38 +522,35 @@ function M.create_interactive()
 		return
 	end
 
-	input.prompt({ prompt = "PR title: " }, function(title)
-		local normalized_title = vim.trim(title or "")
-		if normalized_title == "" then
-			utils.notify("PR title cannot be empty", vim.log.levels.WARN)
-			return
-		end
-
-		input.prompt({ prompt = "PR body: " }, function(body)
-			input.prompt({ prompt = "Base branch (optional): " }, function(base)
-				input.prompt({ prompt = "Reviewers (comma-separated): " }, function(reviewers_raw)
-					input.prompt({ prompt = "Labels (comma-separated): " }, function(labels_raw)
-						gh_prs.create({
-							title = normalized_title,
-							body = body,
-							base = vim.trim(base or ""),
-							reviewers = parse_csv_input(reviewers_raw),
-							labels = parse_csv_input(labels_raw),
-						}, {}, function(err, response)
-							if err then
-								utils.notify(err, vim.log.levels.ERROR)
-								return
-							end
-							local message = response and response.url and ("Created PR: %s"):format(response.url)
-								or "Pull request created"
-							utils.notify(message, vim.log.levels.INFO)
-							M.refresh()
-						end)
-					end)
-				end)
+	form.open({
+		title = "Create Pull Request",
+		fields = {
+			{ name = "Title", key = "title", required = true },
+			{ name = "Body", key = "body", multiline = true },
+			{ name = "Base branch", key = "base" },
+			{ name = "Reviewers (comma-separated)", key = "reviewers" },
+			{ name = "Labels (comma-separated)", key = "labels" },
+		},
+		on_submit = function(values)
+			gh_prs.create({
+				title = values.title,
+				body = values.body,
+				base = vim.trim(values.base or ""),
+				reviewers = parse_csv_input(values.reviewers),
+				labels = parse_csv_input(values.labels),
+			}, {}, function(err, response)
+				if err then
+					utils.notify(err, vim.log.levels.ERROR)
+					return
+				end
+				local message = response and response.url
+					and ("Created PR: %s"):format(response.url)
+					or "Pull request created"
+				utils.notify(message, vim.log.levels.INFO)
+				M.refresh()
 			end)
-		end)
-	end)
+		end,
+	})
 end
 
 ---@param number integer|string

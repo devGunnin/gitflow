@@ -2,10 +2,12 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
+local form = require("gitflow.ui.form")
 local gh_issues = require("gitflow.gh.issues")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local icons = require("gitflow.icons")
+local highlights = require("gitflow.highlights")
 
 ---@class GitflowIssuePanelState
 ---@field bufnr integer|nil
@@ -275,6 +277,29 @@ local function render_list(issues)
 	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
 		entry_highlights = entry_highlights,
 	})
+
+	-- Apply colored label highlights on label lines
+	for line_no, issue in pairs(line_entries) do
+		local line_text = lines[line_no] or ""
+		if line_text:find("labels:", 1, true) then
+			local issue_labels = issue.labels or {}
+			for _, label in ipairs(issue_labels) do
+				local label_name = type(label) == "table" and label.name
+					or type(label) == "string" and label
+				local label_color = type(label) == "table" and label.color
+				if label_name and label_color then
+					local group = highlights.label_color_group(label_color)
+					local s = line_text:find(label_name, 1, true)
+					if s then
+						vim.api.nvim_buf_add_highlight(
+							bufnr, ISSUES_HIGHLIGHT_NS, group,
+							line_no - 1, s - 1, s - 1 + #label_name
+						)
+					end
+				end
+			end
+		end
+	end
 end
 
 ---@param issue table
@@ -346,6 +371,28 @@ local function render_view(issue)
 	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
 		entry_highlights = entry_highlights,
 	})
+
+	-- Colored labels in detail view
+	local labels_line_no = header_line_count + 3
+	local labels_line = lines[labels_line_no] or ""
+	if labels_line:find("Labels:", 1, true) then
+		local issue_labels = issue.labels or {}
+		for _, label in ipairs(issue_labels) do
+			local lname = type(label) == "table" and label.name
+				or type(label) == "string" and label
+			local lcolor = type(label) == "table" and label.color
+			if lname and lcolor then
+				local group = highlights.label_color_group(lcolor)
+				local s = labels_line:find(lname, 1, true)
+				if s then
+					vim.api.nvim_buf_add_highlight(
+						bufnr, ISSUES_HIGHLIGHT_NS, group,
+						labels_line_no - 1, s - 1, s - 1 + #lname
+					)
+				end
+			end
+		end
+	end
 end
 
 ---@return table|nil
@@ -436,40 +483,33 @@ function M.create_interactive()
 		return
 	end
 
-	input.prompt({ prompt = "Issue title: " }, function(title)
-		local normalized_title = vim.trim(title or "")
-		if normalized_title == "" then
-			utils.notify("Issue title cannot be empty", vim.log.levels.WARN)
-			return
-		end
-
-		input.prompt({ prompt = "Issue body: " }, function(body)
-			input.prompt({
-				prompt = "Labels (comma-separated): ",
-				completion = function(arglead, _, _)
-					return label_completion.complete_create_labels(arglead)
-				end,
-			}, function(labels_raw)
-				input.prompt({ prompt = "Assignees (comma-separated): " }, function(assignees_raw)
-					gh_issues.create({
-						title = normalized_title,
-						body = body,
-						labels = parse_csv_input(labels_raw),
-						assignees = parse_csv_input(assignees_raw),
-					}, {}, function(err, response)
-						if err then
-							utils.notify(err, vim.log.levels.ERROR)
-							return
-						end
-						local message = response and response.url and ("Created issue: %s"):format(response.url)
-							or "Issue created"
-						utils.notify(message, vim.log.levels.INFO)
-						M.refresh()
-					end)
-				end)
+	form.open({
+		title = "Create Issue",
+		fields = {
+			{ name = "Title", key = "title", required = true },
+			{ name = "Body", key = "body", multiline = true },
+			{ name = "Labels (comma-separated)", key = "labels" },
+			{ name = "Assignees (comma-separated)", key = "assignees" },
+		},
+		on_submit = function(values)
+			gh_issues.create({
+				title = values.title,
+				body = values.body,
+				labels = parse_csv_input(values.labels),
+				assignees = parse_csv_input(values.assignees),
+			}, {}, function(err, response)
+				if err then
+					utils.notify(err, vim.log.levels.ERROR)
+					return
+				end
+				local message = response and response.url
+					and ("Created issue: %s"):format(response.url)
+					or "Issue created"
+				utils.notify(message, vim.log.levels.INFO)
+				M.refresh()
 			end)
-		end)
-	end)
+		end,
+	})
 end
 
 ---@param number integer|string
