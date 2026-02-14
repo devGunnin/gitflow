@@ -233,6 +233,37 @@ local function open_commit_prompt(amend)
 	end)
 end
 
+---@param cb fun(remote: string|nil, err: string|nil)
+local function resolve_push_remote(cb)
+	git.git({ "remote" }, {}, function(result)
+		if result.code ~= 0 then
+			cb(nil, result_message(result, "git remote failed"))
+			return
+		end
+
+		local output = vim.trim(result.stdout or "")
+		if output == "" then
+			cb(nil, "No remotes configured")
+			return
+		end
+
+		local remotes = vim.split(output, "\n", { plain = true, trimempty = true })
+		if #remotes == 1 then
+			cb(remotes[1], nil)
+			return
+		end
+
+		for _, name in ipairs(remotes) do
+			if name == "origin" then
+				cb("origin", nil)
+				return
+			end
+		end
+
+		cb(remotes[1], nil)
+	end)
+end
+
 ---@param on_done fun(ok: boolean)|nil
 local function push_with_upstream(on_done)
 	git.git({ "rev-parse", "--abbrev-ref", "HEAD" }, {}, function(branch_result)
@@ -253,30 +284,42 @@ local function push_with_upstream(on_done)
 			return
 		end
 
-		local confirmed = ui.input.confirm(
-			("No upstream for '%s'. Push with -u origin %s?"):format(branch, branch),
-			{ choices = { "&Push", "&Cancel" }, default_choice = 1 }
-		)
-		if not confirmed then
-			if on_done then
-				on_done(false)
-			end
-			return
-		end
-
-		git.git({ "push", "-u", "origin", branch }, {}, function(push_result)
-			if push_result.code ~= 0 then
-				show_error(result_message(push_result, "git push -u failed"))
+		resolve_push_remote(function(remote, remote_err)
+			if remote_err or not remote then
+				show_error(remote_err or "Could not determine remote")
 				if on_done then
 					on_done(false)
 				end
 				return
 			end
-			show_info(result_message(push_result, "Pushed with upstream tracking"))
-			emit_post_operation()
-			if on_done then
-				on_done(true)
+
+			local confirmed = ui.input.confirm(
+				("No upstream for '%s'. Push with -u %s %s?"):format(
+					branch, remote, branch
+				),
+				{ choices = { "&Push", "&Cancel" }, default_choice = 1 }
+			)
+			if not confirmed then
+				if on_done then
+					on_done(false)
+				end
+				return
 			end
+
+			git.git({ "push", "-u", remote, branch }, {}, function(push_result)
+				if push_result.code ~= 0 then
+					show_error(result_message(push_result, "git push -u failed"))
+					if on_done then
+						on_done(false)
+					end
+					return
+				end
+				show_info(result_message(push_result, "Pushed with upstream tracking"))
+				emit_post_operation()
+				if on_done then
+					on_done(true)
+				end
+			end)
 		end)
 	end)
 end
