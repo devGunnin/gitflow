@@ -83,6 +83,7 @@ function M.defaults()
 			branch = "<leader>gb",
 			issue = "<leader>gi",
 			pr = "<leader>gr",
+			reset = "gR",
 			conflict = "<leader>gm",
 			palette = "<leader>go",
 		},
