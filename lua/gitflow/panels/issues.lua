@@ -4,8 +4,10 @@ local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
 local form = require("gitflow.ui.form")
 local gh_issues = require("gitflow.gh.issues")
+local gh_labels = require("gitflow.gh.labels")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
+local label_picker = require("gitflow.ui.label_picker")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
 
@@ -483,33 +485,57 @@ function M.create_interactive()
 		return
 	end
 
-	form.open({
-		title = "Create Issue",
-		fields = {
-			{ name = "Title", key = "title", required = true },
-			{ name = "Body", key = "body", multiline = true },
-			{ name = "Labels (comma-separated)", key = "labels" },
-			{ name = "Assignees (comma-separated)", key = "assignees" },
-		},
-		on_submit = function(values)
-			gh_issues.create({
-				title = values.title,
-				body = values.body,
-				labels = parse_csv_input(values.labels),
-				assignees = parse_csv_input(values.assignees),
-			}, {}, function(err, response)
-				if err then
-					utils.notify(err, vim.log.levels.ERROR)
-					return
-				end
-				local message = response and response.url
-					and ("Created issue: %s"):format(response.url)
-					or "Issue created"
-				utils.notify(message, vim.log.levels.INFO)
-				M.refresh()
-			end)
-		end,
-	})
+	local function open_form(available_labels)
+		form.open({
+			title = "Create Issue",
+			fields = {
+				{ name = "Title", key = "title", required = true },
+				{ name = "Body", key = "body", multiline = true },
+				{
+					name = "Labels",
+					key = "labels",
+					picker = function(ctx)
+						label_picker.open({
+							title = "Issue Labels",
+							labels = available_labels,
+							selected = parse_csv_input(ctx.value),
+							on_submit = function(selected_labels)
+								ctx.set_value(table.concat(selected_labels, ","))
+							end,
+						})
+					end,
+				},
+				{ name = "Assignees (comma-separated)", key = "assignees" },
+			},
+			on_submit = function(values)
+				gh_issues.create({
+					title = values.title,
+					body = values.body,
+					labels = parse_csv_input(values.labels),
+					assignees = parse_csv_input(values.assignees),
+				}, {}, function(err, response)
+					if err then
+						utils.notify(err, vim.log.levels.ERROR)
+						return
+					end
+					local message = response and response.url
+						and ("Created issue: %s"):format(response.url)
+						or "Issue created"
+					utils.notify(message, vim.log.levels.INFO)
+					M.refresh()
+				end)
+			end,
+		})
+	end
+
+	gh_labels.list({}, function(err, labels)
+		if err then
+			utils.notify(("Failed to load labels: %s"):format(err), vim.log.levels.WARN)
+			open_form({})
+			return
+		end
+		open_form(type(labels) == "table" and labels or {})
+	end)
 end
 
 ---@param number integer|string

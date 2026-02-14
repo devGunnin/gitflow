@@ -18,6 +18,16 @@ local function assert_equals(actual, expected, message)
 	end
 end
 
+local function assert_deep_equals(actual, expected, message)
+	if not vim.deep_equal(actual, expected) then
+		error(
+			("%s (expected=%s, actual=%s)")
+				:format(message, vim.inspect(expected), vim.inspect(actual)),
+			2
+		)
+	end
+end
+
 local function contains(list, value)
 	for _, item in ipairs(list) do
 		if item == value then
@@ -49,6 +59,22 @@ local function read_lines(path)
 	return vim.fn.readfile(path)
 end
 
+local function log_has_all(log_path, patterns)
+	for _, line in ipairs(read_lines(log_path)) do
+		local matches = true
+		for _, pattern in ipairs(patterns) do
+			if line:find(pattern, 1, true) == nil then
+				matches = false
+				break
+			end
+		end
+		if matches then
+			return true
+		end
+	end
+	return false
+end
+
 local function assert_keymaps(bufnr, required)
 	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
 	local missing = {}
@@ -63,6 +89,20 @@ local function assert_keymaps(bufnr, required)
 	for lhs, _ in pairs(missing) do
 		error(("missing keymap '%s'"):format(lhs), 2)
 	end
+end
+
+local function find_float_window_by_filetype(filetype)
+	for _, winid in ipairs(vim.api.nvim_list_wins()) do
+		local ok, config = pcall(vim.api.nvim_win_get_config, winid)
+		if ok and config.relative and config.relative ~= "" then
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			local ft = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+			if ft == filetype then
+				return winid, bufnr
+			end
+		end
+	end
+	return nil, nil
 end
 
 -- ── gh stub setup ──────────────────────────────────────────────
@@ -833,6 +873,192 @@ pcall(vim.api.nvim_win_close, tracking_state.winid, true)
 pcall(vim.api.nvim_buf_delete, tracking_state.bufnr, { force = true })
 passed = passed + 1
 print(("  [%d] form active_field starts at 1"):format(passed))
+
+-- ── Test 22: Label picker fuzzy filter ranks matches ───────────
+
+local label_picker = require("gitflow.ui.label_picker")
+local filtered_labels = label_picker.filter_labels({
+	{ name = "bug", description = "Something is broken" },
+	{ name = "documentation", description = "Docs updates" },
+	{ name = "enhancement", description = "New feature" },
+}, "dcm")
+assert_equals(#filtered_labels, 1, "fuzzy filter should narrow to one label")
+assert_equals(filtered_labels[1].name, "documentation", "fuzzy filter should match documentation")
+passed = passed + 1
+print(("  [%d] label picker fuzzy filter works"):format(passed))
+
+-- ── Test 23: Label picker selection and color preview ──────────
+
+local picker_submit = nil
+local picker_state = label_picker.open({
+	title = "Picker Test",
+	labels = {
+		{ name = "bug", color = "d73a4a", description = "Something is broken" },
+		{ name = "docs", color = "0075ca", description = "Documentation" },
+	},
+	selected = { "bug" },
+	on_submit = function(selected)
+		picker_submit = selected
+	end,
+})
+
+assert_true(picker_state.winid ~= nil, "picker should create a float window")
+assert_true(vim.api.nvim_win_is_valid(picker_state.winid), "picker window should be valid")
+local picker_lines = vim.api.nvim_buf_get_lines(picker_state.bufnr, 0, -1, false)
+local bug_picker_line = find_line(picker_lines, "[x] bug")
+assert_true(bug_picker_line ~= nil, "picker should mark preselected labels")
+
+local picker_ns = vim.api.nvim_create_namespace("gitflow_label_picker_hl")
+local picker_marks = vim.api.nvim_buf_get_extmarks(
+	picker_state.bufnr,
+	picker_ns,
+	{ bug_picker_line - 1, 0 },
+	{ bug_picker_line - 1, -1 },
+	{ details = true }
+)
+local has_picker_color = false
+for _, mark in ipairs(picker_marks) do
+	local details = mark[4]
+	if details and details.hl_group and details.hl_group:find("GitflowLabel_") then
+		has_picker_color = true
+		break
+	end
+end
+assert_true(has_picker_color, "picker should render color-preview highlight on label names")
+
+vim.api.nvim_set_current_win(picker_state.winid)
+vim.api.nvim_feedkeys("j", "x", false)
+vim.api.nvim_feedkeys(" ", "x", false)
+vim.api.nvim_feedkeys(
+	vim.api.nvim_replace_termcodes("<CR>", true, false, true),
+	"x",
+	false
+)
+
+wait_until(function()
+	return picker_submit ~= nil
+end, "picker submit callback should fire")
+assert_deep_equals(picker_submit, { "bug", "docs" }, "picker submit should return selected labels")
+passed = passed + 1
+print(("  [%d] label picker selection and color preview works"):format(passed))
+
+-- ── Test 24: Issue create uses picker-selected labels ──────────
+
+local original_picker_open = label_picker.open
+label_picker.open = function(opts)
+	opts.on_submit({ "bug", "docs" })
+	return { bufnr = nil, winid = nil }
+end
+
+issues_panel.create_interactive()
+wait_until(function()
+	local winid = find_float_window_by_filetype("gitflow-form")
+	return winid ~= nil
+end, "issue form should open for picker submit test", 2000)
+
+local issue_form_win, issue_form_buf = find_float_window_by_filetype("gitflow-form")
+assert_true(issue_form_win ~= nil and issue_form_buf ~= nil, "issue form window should be found")
+local issue_form_lines = vim.api.nvim_buf_get_lines(issue_form_buf, 0, -1, false)
+local issue_title_line = find_line(issue_form_lines, "Title")
+assert_true(issue_title_line ~= nil, "issue form should have title label")
+vim.api.nvim_buf_set_lines(
+	issue_form_buf,
+	issue_title_line,
+	issue_title_line + 1,
+	false,
+	{ "Issue picker label test" }
+)
+
+vim.api.nvim_set_current_win(issue_form_win)
+local tab = vim.api.nvim_replace_termcodes("<Tab>", true, false, true)
+vim.api.nvim_feedkeys(tab, "x", false)
+vim.api.nvim_feedkeys(tab, "x", false)
+vim.api.nvim_feedkeys(
+	vim.api.nvim_replace_termcodes("<C-l>", true, false, true),
+	"x",
+	false
+)
+vim.api.nvim_feedkeys(
+	vim.api.nvim_replace_termcodes("<CR>", true, false, true),
+	"x",
+	false
+)
+
+wait_until(function()
+	return log_has_all(gh_log, {
+		"issue create",
+		"--title Issue picker label test",
+		"--label bug,docs",
+	})
+end, "issue create should include picker-selected labels", 3000)
+label_picker.open = original_picker_open
+
+passed = passed + 1
+print(("  [%d] issue create maps picker labels to submission"):format(passed))
+
+-- ── Test 25: PR create uses picker-selected labels ─────────────
+
+local original_picker_open_pr = label_picker.open
+label_picker.open = function(opts)
+	opts.on_submit({ "bug", "docs" })
+	return { bufnr = nil, winid = nil }
+end
+
+pr_panel.create_interactive()
+wait_until(function()
+	local winid = find_float_window_by_filetype("gitflow-form")
+	return winid ~= nil
+end, "pr form should open for picker submit test", 2000)
+
+local pr_submit_win, pr_submit_buf = find_float_window_by_filetype("gitflow-form")
+assert_true(pr_submit_win ~= nil and pr_submit_buf ~= nil, "pr form window should be found")
+local pr_submit_lines = vim.api.nvim_buf_get_lines(pr_submit_buf, 0, -1, false)
+local pr_title_line = find_line(pr_submit_lines, "Title")
+assert_true(pr_title_line ~= nil, "pr form should have title label")
+vim.api.nvim_buf_set_lines(
+	pr_submit_buf,
+	pr_title_line,
+	pr_title_line + 1,
+	false,
+	{ "PR picker label test" }
+)
+
+vim.api.nvim_set_current_win(pr_submit_win)
+for _ = 1, 4 do
+	vim.api.nvim_feedkeys(tab, "x", false)
+end
+vim.api.nvim_feedkeys(
+	vim.api.nvim_replace_termcodes("<C-l>", true, false, true),
+	"x",
+	false
+)
+vim.api.nvim_feedkeys(
+	vim.api.nvim_replace_termcodes("<CR>", true, false, true),
+	"x",
+	false
+)
+
+wait_until(function()
+	return log_has_all(gh_log, {
+		"pr create",
+		"--title PR picker label test",
+		"--label bug,docs",
+	})
+end, "pr create should include picker-selected labels", 3000)
+label_picker.open = original_picker_open_pr
+
+commands.dispatch({ "pr", "list", "open" }, cfg)
+wait_until(function()
+	local prs_buf = buffer.get("prs")
+	if not prs_buf then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(prs_buf, 0, -1, false)
+	return find_line(lines, "labels: enhancement") ~= nil
+end, "pr list should display labels in list mode")
+
+passed = passed + 1
+print(("  [%d] pr create maps picker labels and list renders labels"):format(passed))
 
 -- ── Cleanup ────────────────────────────────────────────────────
 

@@ -19,6 +19,12 @@ local FORM_MARKER_NS = vim.api.nvim_create_namespace("gitflow_form_markers")
 ---@field required? boolean  submission guard
 ---@field multiline? boolean allow multiple lines of input
 ---@field placeholder? string hint text shown when empty
+---@field picker? fun(ctx: GitflowFormFieldActionCtx) optional picker action for field values
+
+---@class GitflowFormFieldActionCtx
+---@field field GitflowFormField
+---@field value string
+---@field set_value fun(new_value: string)
 
 ---@class GitflowFormOpts
 ---@field title string                float window title
@@ -41,6 +47,17 @@ local FORM_MARKER_NS = vim.api.nvim_create_namespace("gitflow_form_markers")
 
 -- Separator between label row and editable value row
 local FIELD_SEPARATOR = "─"
+
+---@param state GitflowFormState
+---@return boolean
+local function has_picker_field(state)
+	for _, field in ipairs(state.fields or {}) do
+		if type(field.picker) == "function" then
+			return true
+		end
+	end
+	return false
+end
 
 ---Render the form buffer content and record field line ranges.
 ---@param state GitflowFormState
@@ -85,7 +102,12 @@ local function render_form(state, values)
 
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = string.rep(FIELD_SEPARATOR, 40)
-	lines[#lines + 1] = "<Tab> next  <S-Tab> prev  <CR> submit  q/Esc cancel"
+	local hints = "<Tab> next  <S-Tab> prev  <CR> submit"
+	if has_picker_field(state) then
+		hints = hints .. "  <C-l> picker"
+	end
+	hints = hints .. "  q/Esc cancel"
+	lines[#lines + 1] = hints
 
 	state.field_lines = field_lines
 	return lines
@@ -183,6 +205,64 @@ local function sync_field_lines(state)
 	return ranges
 end
 
+---@param state GitflowFormState
+---@param field_idx integer
+---@return string
+local function read_field_value(state, field_idx)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return ""
+	end
+
+	sync_field_lines(state)
+	local range = state.field_lines[field_idx]
+	if not range then
+		return ""
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(
+		bufnr,
+		range.start - 1,
+		range.stop,
+		false
+	)
+	return table.concat(lines or {}, "\n")
+end
+
+---@param state GitflowFormState
+---@param field_idx integer
+---@param new_value string|nil
+local function replace_field_value(state, field_idx, new_value)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	sync_field_lines(state)
+	local range = state.field_lines[field_idx]
+	local field = state.fields[field_idx]
+	if not range or not field then
+		return
+	end
+
+	local replacement = vim.split(tostring(new_value or ""), "\n", { plain = true })
+	if #replacement == 0 then
+		replacement = { "" }
+	end
+	if not field.multiline and #replacement > 1 then
+		replacement = { table.concat(replacement, " ") }
+	end
+
+	vim.api.nvim_buf_set_lines(
+		bufnr,
+		range.start - 1,
+		range.stop,
+		false,
+		replacement
+	)
+	sync_field_lines(state)
+end
+
 ---Apply highlight groups to form labels, active field, and footer.
 ---@param state GitflowFormState
 ---@param lines string[]
@@ -278,6 +358,24 @@ local function jump_to_field(state, field_idx)
 	-- Re-apply highlights to show active field
 	local all_lines = vim.api.nvim_buf_get_lines(state.bufnr, 0, -1, false)
 	apply_form_highlights(state, all_lines)
+end
+
+---@param state GitflowFormState
+local function trigger_field_picker(state)
+	local field = state.fields[state.active_field]
+	if not field or type(field.picker) ~= "function" then
+		return
+	end
+
+	local field_idx = state.active_field
+	field.picker({
+		field = field,
+		value = read_field_value(state, field_idx),
+		set_value = function(new_value)
+			replace_field_value(state, field_idx, new_value)
+			jump_to_field(state, field_idx)
+		end,
+	})
 end
 
 ---Close and clean up form state.
@@ -382,6 +480,11 @@ function M.open(opts)
 
 		close_form(state)
 		state.on_submit(values)
+	end, { buffer = bufnr, silent = true })
+
+	-- <C-l>: trigger picker action for the active field (when defined)
+	vim.keymap.set("n", "<C-l>", function()
+		trigger_field_picker(state)
 	end, { buffer = bufnr, silent = true })
 
 	-- q / <Esc>: cancel
