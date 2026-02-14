@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_log = require("gitflow.git.log")
@@ -58,10 +59,13 @@ M.state = {
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param diff_staged boolean
-local function append_file_section(title, entries, lines, line_entries, diff_staged)
-	lines[#lines + 1] = title
+---@param render_opts table
+local function append_file_section(title, entries, lines, line_entries, diff_staged, render_opts)
+	local section_title, section_separator = ui_render.section(title, nil, render_opts)
+	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_separator
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 		lines[#lines + 1] = ""
 		return
 	end
@@ -72,7 +76,7 @@ local function append_file_section(title, entries, lines, line_entries, diff_sta
 		if entry.untracked then
 			icon = icons.get("git_state", "untracked")
 		end
-		local line = ("  %s %s  %s"):format(icon, status, entry.path)
+		local line = ui_render.entry(("%s %s  %s"):format(icon, status, entry.path))
 		lines[#lines + 1] = line
 		line_entries[#lines] = {
 			kind = "file",
@@ -88,10 +92,13 @@ end
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param pushable boolean|table<string, boolean>
-local function append_commit_section(title, entries, lines, line_entries, pushable)
-	lines[#lines + 1] = title
+---@param render_opts table
+local function append_commit_section(title, entries, lines, line_entries, pushable, render_opts)
+	local section_title, section_separator = ui_render.section(title, nil, render_opts)
+	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_separator
 	if #entries == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 		lines[#lines + 1] = ""
 		return
 	end
@@ -104,7 +111,7 @@ local function append_commit_section(title, entries, lines, line_entries, pushab
 			entry_pushable = pushable[entry.sha] == true
 		end
 
-		lines[#lines + 1] = ("  %s"):format(entry.summary)
+		lines[#lines + 1] = ui_render.entry(entry.summary)
 		line_entries[#lines] = {
 			kind = "commit",
 			entry = entry,
@@ -313,10 +320,11 @@ end
 ---@param upstream_name string|nil
 ---@param current_branch string
 local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
-	local lines = {
-		"Gitflow Status",
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Status", render_opts)
 	local line_entries = {}
 
 	append_file_section(
@@ -324,21 +332,24 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		grouped.staged,
 		lines,
 		line_entries,
-		true
+		true,
+		render_opts
 	)
 	append_file_section(
 		("Unstaged (%d)"):format(#grouped.unstaged),
 		grouped.unstaged,
 		lines,
 		line_entries,
-		false
+		false,
+		render_opts
 	)
 	append_file_section(
 		("Untracked (%d)"):format(#grouped.untracked),
 		grouped.untracked,
 		lines,
 		line_entries,
-		false
+		false,
+		render_opts
 	)
 
 	if upstream_name then
@@ -348,20 +359,26 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 				outgoing_entries,
 				lines,
 				line_entries,
-				true
+				true,
+				render_opts
 			)
 		end
 		local outgoing_title = ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name)
-		append_commit_section(outgoing_title, outgoing_entries, lines, line_entries, true)
+		append_commit_section(outgoing_title, outgoing_entries, lines, line_entries, true, render_opts)
 		local incoming_title = ("Incoming (oldest -> newest, only on %s)"):format(upstream_name)
-		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false)
+		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false, render_opts)
 	else
-		lines[#lines + 1] = "Outgoing / Incoming"
-		lines[#lines + 1] = "  (upstream branch is not configured)"
+		local upstream_title, upstream_sep = ui_render.section("Outgoing / Incoming", nil, render_opts)
+		lines[#lines + 1] = upstream_title
+		lines[#lines + 1] = upstream_sep
+		lines[#lines + 1] = ui_render.entry("(upstream branch is not configured)")
 		lines[#lines + 1] = ""
 	end
 
-	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 
 	ui.buffer.update("status", lines)
 	M.state.line_entries = line_entries
@@ -371,10 +388,9 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, STATUS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, "GitflowFooter", #lines - 1, 0, -1)
+	local entry_highlights = {}
 
+	-- Mark section headers
 	for line_no, line in ipairs(lines) do
 		if vim.startswith(line, "Staged")
 			or vim.startswith(line, "Unstaged")
@@ -383,33 +399,27 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 			or vim.startswith(line, "Incoming")
 			or vim.startswith(line, "Commit History")
 		then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				STATUS_HIGHLIGHT_NS,
-				"GitflowHeader",
-				line_no - 1,
-				0,
-				-1
-			)
+			entry_highlights[line_no] = "GitflowHeader"
 		end
 	end
 
+	-- Mark file entry highlights
 	for line_no, entry in pairs(line_entries) do
-		if entry.kind ~= "file" then
-			goto continue
+		if entry.kind == "file" then
+			local group = "GitflowUnstaged"
+			if entry.entry.untracked then
+				group = "GitflowUntracked"
+			elseif entry.diff_staged then
+				group = "GitflowStaged"
+			end
+			entry_highlights[line_no] = group
 		end
-
-		local group = "GitflowUnstaged"
-		if entry.entry.untracked then
-			group = "GitflowUntracked"
-		elseif entry.diff_staged then
-			group = "GitflowStaged"
-		end
-
-		vim.api.nvim_buf_add_highlight(bufnr, STATUS_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
-
-		::continue::
 	end
+
+	ui_render.apply_panel_highlights(bufnr, STATUS_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@param err string|nil

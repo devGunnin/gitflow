@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_stash = require("gitflow.git.stash")
 local git_branch = require("gitflow.git.branch")
 local status_panel = require("gitflow.panels.status")
+local ui_render = require("gitflow.ui.render")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -13,6 +14,7 @@ local status_panel = require("gitflow.panels.status")
 
 local M = {}
 local STASH_FLOAT_TITLE = "Gitflow Stash"
+local STASH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_stash_hl")
 local STASH_FLOAT_FOOTER = "P pop  D drop  S stash  r refresh  q close"
 
 ---@type GitflowStashPanelState
@@ -98,25 +100,37 @@ end
 ---@param entries GitflowStashEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local lines = {
-		"Gitflow Stash",
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Stash", render_opts)
 	local line_entries = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = "(no stash entries)"
+		lines[#lines + 1] = ui_render.empty("no stash entries")
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ("%s %s"):format(entry.ref, entry.description)
+			lines[#lines + 1] = ui_render.entry(("%s %s"):format(entry.ref, entry.description))
 			line_entries[#lines] = entry
 		end
 	end
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 
 	ui.buffer.update("stash", lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	ui_render.apply_panel_highlights(bufnr, STASH_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+	})
 end
 
 ---@return GitflowStashEntry|nil

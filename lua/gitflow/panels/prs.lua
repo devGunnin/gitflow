@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local ui_render = require("gitflow.ui.render")
 local gh_prs = require("gitflow.gh.prs")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -207,11 +208,13 @@ local function join_assignee_names(pr)
 end
 
 local function render_loading(message)
-	ui.buffer.update("prs", {
-		"Gitflow Pull Requests",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow Pull Requests", render_opts)
+	lines[#lines + 1] = message
+	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
@@ -219,23 +222,23 @@ local function render_loading(message)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {})
 end
 
 ---@param prs table[]
 local function render_list(prs)
-	local lines = {
-		"Gitflow Pull Requests",
-		"",
-		("Filters: state=%s base=%s head=%s"):
-			format(
-				maybe_text(M.state.filters.state),
-				maybe_text(M.state.filters.base),
-				maybe_text(M.state.filters.head)
-			),
-		("PRs (%d)"):format(#prs),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Pull Requests", render_opts)
+	lines[#lines + 1] = ("Filters: state=%s base=%s head=%s"):
+		format(
+			maybe_text(M.state.filters.state),
+			maybe_text(M.state.filters.base),
+			maybe_text(M.state.filters.head)
+		)
+	lines[#lines + 1] = ("PRs (%d)"):format(#prs)
 	local line_entries = {}
 
 	if #prs == 0 then
@@ -269,29 +272,38 @@ local function render_list(prs)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-
+	local entry_highlights = {}
 	for line_no, pr in pairs(line_entries) do
 		local group = pr_highlight_group(pr_state(pr))
-		vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
+		entry_highlights[line_no] = group
 	end
+
+	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@param pr table
 local function render_view(pr)
 	local view_state = pr_state(pr)
 	local view_icon = icons.get("github", "pr_" .. view_state)
-	local lines = {
-		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
-		("State: %s %s"):format(view_icon, view_state),
-		("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-"),
-		("Refs: %s -> %s"):format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName)),
-		("Assignees: %s"):format(join_assignee_names(pr)),
-		"",
-		"Body",
-		"----",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(
+		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
+		render_opts
+	)
+	local header_line_count = #lines
+	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
+	lines[#lines + 1] = ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-")
+	lines[#lines + 1] = ("Refs: %s -> %s"):
+		format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
+	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(pr))
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = "Body"
+	lines[#lines + 1] = "----"
 
 	local body_lines = split_lines(tostring(pr.body or ""))
 	if #body_lines == 0 then
@@ -345,16 +357,12 @@ local function render_view(pr)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, PRS_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PRS_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(
-		bufnr,
-		PRS_HIGHLIGHT_NS,
-		pr_highlight_group(pr_state(pr)),
-		1,
-		0,
-		-1
-	)
+	local entry_highlights = {}
+	entry_highlights[header_line_count + 1] = pr_highlight_group(pr_state(pr))
+
+	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@return table|nil

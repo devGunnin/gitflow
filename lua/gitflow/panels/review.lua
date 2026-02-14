@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local ui_render = require("gitflow.ui.render")
 local gh_prs = require("gitflow.gh.prs")
 local icons = require("gitflow.icons")
 
@@ -452,14 +453,16 @@ end
 local function render_review(
 	title, diff_text, files, hunks, comment_threads
 )
-	local lines = {
-		title,
-		"",
-		("Files: %d  Hunks: %d"):format(#files, #hunks),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(title, render_opts)
+	local header_line_count = #lines
+	lines[#lines + 1] = ("Files: %d  Hunks: %d"):format(#files, #hunks)
 	for _, f in ipairs(files) do
-		lines[#lines + 1] = ("  %s %s"):format(
-			status_indicator(f.status), f.path
+		lines[#lines + 1] = ui_render.entry(
+			("%s %s"):format(status_indicator(f.status), f.path)
 		)
 	end
 	if #M.state.pending_comments > 0 then
@@ -502,20 +505,14 @@ local function render_review(
 	M.state.thread_line_map = thread_line_map
 
 	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
-		vim.api.nvim_buf_clear_namespace(M.state.bufnr, REVIEW_HIGHLIGHT_NS, 0, -1)
-		vim.api.nvim_buf_add_highlight(
-			M.state.bufnr,
-			REVIEW_HIGHLIGHT_NS,
-			"GitflowTitle",
-			0,
-			0,
-			-1
-		)
+		ui_render.apply_panel_highlights(M.state.bufnr, REVIEW_HIGHLIGHT_NS, lines, {})
+		local files_summary_idx = header_line_count
+		local first_file_idx = files_summary_idx + 1
 		vim.api.nvim_buf_add_highlight(
 			M.state.bufnr,
 			REVIEW_HIGHLIGHT_NS,
 			"GitflowHeader",
-			2,
+			files_summary_idx,
 			0,
 			-1
 		)
@@ -525,7 +522,7 @@ local function render_review(
 				M.state.bufnr,
 				REVIEW_HIGHLIGHT_NS,
 				status_highlight_group(file.status),
-				2 + idx,
+				first_file_idx + idx - 1,
 				0,
 				-1
 			)
@@ -654,24 +651,23 @@ end
 
 ---@param message string
 local function render_loading(message)
-	ui.buffer.update("review", {
-		"Gitflow PR Review",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow PR Review", render_opts)
+	lines[#lines + 1] = ui_render.entry(message)
+	ui.buffer.update("review", lines)
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}
 	M.state.line_context = {}
 
 	if M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) then
-		vim.api.nvim_buf_clear_namespace(M.state.bufnr, REVIEW_HIGHLIGHT_NS, 0, -1)
-		vim.api.nvim_buf_add_highlight(
+		ui_render.apply_panel_highlights(
 			M.state.bufnr,
 			REVIEW_HIGHLIGHT_NS,
-			"GitflowTitle",
-			0,
-			0,
-			-1
+			lines,
+			{}
 		)
 	end
 end

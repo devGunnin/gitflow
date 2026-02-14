@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local ui_render = require("gitflow.ui.render")
 local gh_issues = require("gitflow.gh.issues")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -208,35 +209,32 @@ local function split_lines(text)
 end
 
 local function render_loading(message)
-	ui.buffer.update("issues", {
-		"Gitflow Issues",
-		"",
-		message,
-	})
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header("Gitflow Issues", render_opts)
+	lines[#lines + 1] = message
+	ui.buffer.update("issues", lines)
 	M.state.line_entries = {}
 
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
+	ui_render.apply_panel_highlights(M.state.bufnr, ISSUES_HIGHLIGHT_NS, lines, {})
 end
 
 ---@param issues table[]
 local function render_list(issues)
-	local lines = {
-		"Gitflow Issues",
-		"",
-		("Filters: state=%s label=%s assignee=%s"):
-			format(
-				maybe_text(M.state.filters.state),
-				maybe_text(M.state.filters.label),
-				maybe_text(M.state.filters.assignee)
-			),
-		("Issues (%d)"):format(#issues),
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Issues", render_opts)
+	lines[#lines + 1] = ("Filters: state=%s label=%s assignee=%s"):
+		format(
+			maybe_text(M.state.filters.state),
+			maybe_text(M.state.filters.label),
+			maybe_text(M.state.filters.assignee)
+		)
+	lines[#lines + 1] = ("Issues (%d)"):format(#issues)
 	local line_entries = {}
 
 	if #issues == 0 then
@@ -268,29 +266,37 @@ local function render_list(issues)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-
+	local entry_highlights = {}
 	for line_no, issue in pairs(line_entries) do
 		local group = issue_highlight_group(issue_state(issue))
-		vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, group, line_no - 1, 0, -1)
+		entry_highlights[line_no] = group
 	end
+
+	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@param issue table
 local function render_view(issue)
 	local view_state = issue_state(issue)
 	local view_icon = icons.get("github", "issue_" .. view_state)
-	local lines = {
-		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
-		("State: %s %s"):format(view_icon, view_state),
-		("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-"),
-		("Labels: %s"):format(join_label_names(issue)),
-		("Assignees: %s"):format(join_assignee_names(issue)),
-		"",
-		"Body",
-		"----",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header(
+		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
+		render_opts
+	)
+	local header_line_count = #lines
+	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
+	lines[#lines + 1] = ("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-")
+	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(issue))
+	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(issue))
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = "Body"
+	lines[#lines + 1] = "----"
 
 	local body_lines = split_lines(tostring(issue.body or ""))
 	if #body_lines == 0 then
@@ -334,16 +340,12 @@ local function render_view(issue)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, ISSUES_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, ISSUES_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(
-		bufnr,
-		ISSUES_HIGHLIGHT_NS,
-		issue_highlight_group(issue_state(issue)),
-		1,
-		0,
-		-1
-	)
+	local entry_highlights = {}
+	entry_highlights[header_line_count + 1] = issue_highlight_group(issue_state(issue))
+
+	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@return table|nil

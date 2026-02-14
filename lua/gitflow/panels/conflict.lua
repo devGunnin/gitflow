@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
 local conflict_view = require("gitflow.ui.conflict")
+local ui_render = require("gitflow.ui.render")
 
 ---@class GitflowConflictFileEntry
 ---@field path string
@@ -154,21 +155,23 @@ end
 ---@param files GitflowConflictFileEntry[]
 ---@param operation GitflowConflictOperation|nil
 local function render(files, operation)
-	local lines = {
-		"Gitflow Conflicts",
-		"",
-		("Active operation: %s"):format(operation_label(operation)),
-		("Unresolved files: %d"):format(#files),
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Conflicts", render_opts)
+	local header_line_count = #lines
+	lines[#lines + 1] = ("Active operation: %s"):format(operation_label(operation))
+	lines[#lines + 1] = ("Unresolved files: %d"):format(#files)
+	lines[#lines + 1] = ""
 	local line_entries = {}
 
 	if #files == 0 then
-		lines[#lines + 1] = "  (none)"
+		lines[#lines + 1] = ui_render.empty()
 	else
 		for _, item in ipairs(files) do
 			local suffix = (" (%d hunks)"):format(item.hunk_count)
-			lines[#lines + 1] = ("  %s%s"):format(item.path, suffix)
+			lines[#lines + 1] = ui_render.entry(("%s%s"):format(item.path, suffix))
 			line_entries[#lines] = item
 
 			if item.marker_error then
@@ -187,34 +190,25 @@ local function render(files, operation)
 		return
 	end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, CONFLICT_HIGHLIGHT_NS, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowTitle", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 2, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, CONFLICT_HIGHLIGHT_NS, "GitflowHeader", 3, 0, -1)
+	local entry_highlights = {}
+	entry_highlights[header_line_count + 1] = "GitflowHeader"
+	entry_highlights[header_line_count + 2] = "GitflowHeader"
 
+	-- File entry lines
 	for line_no, _ in pairs(line_entries) do
-		vim.api.nvim_buf_add_highlight(
-			bufnr,
-			CONFLICT_HIGHLIGHT_NS,
-			"GitflowConflictBase",
-			line_no - 1,
-			0,
-			-1
-		)
+		entry_highlights[line_no] = "GitflowConflictBase"
 	end
 
+	-- Error marker lines
 	for line_no, line in ipairs(lines) do
 		if vim.startswith(line, "    ! ") then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				CONFLICT_HIGHLIGHT_NS,
-				"GitflowConflictRemote",
-				line_no - 1,
-				0,
-				-1
-			)
+			entry_highlights[line_no] = "GitflowConflictRemote"
 		end
 	end
+
+	ui_render.apply_panel_highlights(bufnr, CONFLICT_HIGHLIGHT_NS, lines, {
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@return GitflowConflictFileEntry|nil

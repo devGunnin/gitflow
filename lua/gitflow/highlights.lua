@@ -1,31 +1,40 @@
 local M = {}
 
 M.DEFAULT_GROUPS = {
+	-- Diff / git state
 	GitflowAdded = { link = "DiffAdd" },
 	GitflowRemoved = { link = "DiffDelete" },
 	GitflowModified = { link = "DiffChange" },
 	GitflowStaged = { link = "DiffAdd" },
 	GitflowUnstaged = { link = "DiffChange" },
 	GitflowUntracked = { link = "Comment" },
+	-- Conflict
 	GitflowConflictLocal = { link = "DiffAdd" },
 	GitflowConflictBase = { link = "DiffChange" },
 	GitflowConflictRemote = { link = "DiffDelete" },
 	GitflowConflictResolved = { link = "DiffText" },
+	-- Branch
 	GitflowBranchCurrent = { link = "Title" },
 	GitflowBranchRemote = { link = "Comment" },
+	-- PR state
 	GitflowPROpen = { link = "DiagnosticOk" },
 	GitflowPRMerged = { link = "Special" },
 	GitflowPRClosed = { link = "DiagnosticError" },
 	GitflowPRDraft = { link = "Comment" },
+	-- Issue state
 	GitflowIssueOpen = { link = "DiagnosticOk" },
 	GitflowIssueClosed = { link = "DiagnosticError" },
+	-- Review
 	GitflowReviewApproved = { link = "DiagnosticOk" },
 	GitflowReviewChangesRequested = { link = "WarningMsg" },
 	GitflowReviewComment = { link = "Comment" },
-	GitflowBorder = { link = "FloatBorder" },
-	GitflowTitle = { link = "Title" },
-	GitflowHeader = { link = "TabLineSel" },
-	GitflowFooter = { link = "Comment" },
+	-- Window chrome — themed accent colors (cyan primary, gold secondary)
+	GitflowBorder = { fg = "#56B6C2" },
+	GitflowTitle = { fg = "#56B6C2", bold = true },
+	GitflowHeader = { fg = "#56B6C2", bold = true },
+	GitflowFooter = { fg = "#56B6C2", italic = true },
+	GitflowSeparator = { fg = "#3E4452" },
+	GitflowNormal = { link = "NormalFloat" },
 	GitflowPaletteSelection = { link = "PmenuSel" },
 	GitflowPaletteHeader = { bold = true, link = "Type" },
 	GitflowPaletteKeybind = { link = "Special" },

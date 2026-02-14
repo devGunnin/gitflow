@@ -3,6 +3,7 @@ local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
+local ui_render = require("gitflow.ui.render")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -17,6 +18,7 @@ local icons = require("gitflow.icons")
 local M = {}
 local LOG_FLOAT_TITLE = "Gitflow Log"
 local LOG_FLOAT_FOOTER = "<CR> open commit diff  r refresh  q close"
+local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
 M.state = {
@@ -88,26 +90,40 @@ end
 ---@param entries GitflowLogEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local lines = {
-		"Gitflow Log",
-		"",
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Log", render_opts)
 	local line_entries = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = "(no commits found)"
+		lines[#lines + 1] = ui_render.empty("no commits found")
 	else
 		for _, entry in ipairs(entries) do
 			local commit_icon = icons.get("git_state", "commit")
-			lines[#lines + 1] = ("%s %s %s"):format(commit_icon, entry.short_sha, entry.summary)
+			lines[#lines + 1] = ui_render.entry(
+				("%s %s %s"):format(commit_icon, entry.short_sha, entry.summary)
+			)
 			line_entries[#lines] = entry
 		end
 	end
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 
 	ui.buffer.update("log", lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	ui_render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+	})
 end
 
 ---@return GitflowLogEntry|nil
