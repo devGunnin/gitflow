@@ -155,8 +155,17 @@ local function render_list(labels)
 
 	local bufnr = M.state.bufnr
 	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		local entry_highlights = {}
+		-- Mark section header
+		for line_no, line in ipairs(lines) do
+			if vim.startswith(line, "Labels (") or line == "Labels" then
+				entry_highlights[line_no] = "GitflowHeader"
+			end
+		end
+
 		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {
 			footer_line = key_hints ~= "" and #lines or nil,
+			entry_highlights = entry_highlights,
 		})
 
 		-- Apply colored label highlights

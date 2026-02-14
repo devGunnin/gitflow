@@ -124,6 +124,19 @@ local function render(entries, current_branch)
 	ui_render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, lines, {
 		footer_line = #lines,
 	})
+
+	-- Apply GitflowLogHash to commit SHA portion of each entry
+	for line_no, entry in pairs(line_entries) do
+		local line_text = lines[line_no] or ""
+		local sha_start = line_text:find(entry.short_sha, 1, true)
+		if sha_start then
+			vim.api.nvim_buf_add_highlight(
+				bufnr, LOG_HIGHLIGHT_NS, "GitflowLogHash",
+				line_no - 1, sha_start - 1,
+				sha_start - 1 + #entry.short_sha
+			)
+		end
+	end
 end
 
 ---@return GitflowLogEntry|nil

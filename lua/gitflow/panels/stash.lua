@@ -131,6 +131,19 @@ local function render(entries, current_branch)
 	ui_render.apply_panel_highlights(bufnr, STASH_HIGHLIGHT_NS, lines, {
 		footer_line = #lines,
 	})
+
+	-- Apply GitflowStashRef to stash ref portion of each entry
+	for line_no, entry in pairs(line_entries) do
+		local line_text = lines[line_no] or ""
+		local ref_start = line_text:find(entry.ref, 1, true)
+		if ref_start then
+			vim.api.nvim_buf_add_highlight(
+				bufnr, STASH_HIGHLIGHT_NS, "GitflowStashRef",
+				line_no - 1, ref_start - 1,
+				ref_start - 1 + #entry.ref
+			)
+		end
+	end
 end
 
 ---@return GitflowStashEntry|nil

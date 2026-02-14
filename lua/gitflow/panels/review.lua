@@ -552,11 +552,17 @@ local function render_review(
 
 		for idx, line in ipairs(diff_lines) do
 			local group = nil
-			if vim.startswith(line, "@@") then
+			if vim.startswith(line, "diff --git")
+				or vim.startswith(line, "index ")
+				or vim.startswith(line, "--- ")
+				or vim.startswith(line, "+++ ")
+			then
+				group = "GitflowHeader"
+			elseif vim.startswith(line, "@@") then
 				group = "GitflowModified"
-			elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
+			elseif vim.startswith(line, "+") then
 				group = "GitflowAdded"
-			elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
+			elseif vim.startswith(line, "-") then
 				group = "GitflowRemoved"
 			end
 			if group then
