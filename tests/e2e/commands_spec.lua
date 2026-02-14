@@ -13,6 +13,45 @@ local cfg = _G.TestConfig
 local commands = require("gitflow.commands")
 local ui = require("gitflow.ui")
 
+---@param patches table[]
+---@param fn fun()
+local function with_temporary_patches(patches, fn)
+	local originals = {}
+	for index, patch in ipairs(patches) do
+		originals[index] = patch.table[patch.key]
+		patch.table[patch.key] = patch.value
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+
+	for index = #patches, 1, -1 do
+		local patch = patches[index]
+		patch.table[patch.key] = originals[index]
+	end
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
+---@param fn fun(log_path: string)
+local function with_temp_git_log(fn)
+	local log_path = vim.fn.tempname()
+	local previous = vim.env.GITFLOW_GIT_LOG
+	vim.env.GITFLOW_GIT_LOG = log_path
+
+	local ok, err = xpcall(function()
+		fn(log_path)
+	end, debug.traceback)
+
+	vim.env.GITFLOW_GIT_LOG = previous
+	pcall(vim.fn.delete, log_path)
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
 -- All subcommands that should be registered after setup
 local EXPECTED_SUBCOMMANDS = {
 	"help",
@@ -47,6 +86,7 @@ local function cleanup_panels()
 	for _, panel_name in ipairs({
 		"status", "diff", "log", "stash", "branch",
 		"conflict", "issues", "prs", "labels", "review",
+		"palette",
 	}) do
 		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
 		if mod_ok and mod.close then
@@ -113,6 +153,176 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 			commands.dispatch({ "help" }, cfg)
 		end)
 		T.assert_true(ok, "help should not crash: " .. (err or ""))
+	end,
+
+	-- ── palette subcommand ────────────────────────────────────────────────
+
+	["palette executes without crash"] = function()
+		local palette_panel = require("gitflow.panels.palette")
+		local ok, err = T.pcall_message(function()
+			commands.dispatch({ "palette" }, cfg)
+		end)
+		T.assert_true(ok, "palette should not crash: " .. (err or ""))
+		T.assert_true(
+			palette_panel.is_open(),
+			"palette should open after dispatch"
+		)
+		cleanup_panels()
+	end,
+
+	-- ── commit + quick actions ────────────────────────────────────────────
+
+	["commit executes prompt-driven flow without crash"] = function()
+		local git_status = require("gitflow.git.status")
+		local input = require("gitflow.ui.input")
+
+		with_temp_git_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = git_status,
+					key = "fetch",
+					value = function(_, cb)
+						cb(nil, {}, {
+							staged = { { path = "tracked.txt" } },
+							unstaged = {},
+							untracked = {},
+						}, { code = 0, stdout = "", stderr = "" })
+					end,
+				},
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("Test commit from E2E")
+					end,
+				},
+				{
+					table = input,
+					key = "confirm",
+					value = function()
+						return true, 1
+					end,
+				},
+			}, function()
+				local result
+				local ok, err = T.pcall_message(function()
+					result = commands.dispatch({ "commit" }, cfg)
+				end)
+				T.assert_true(ok, "commit should not crash: " .. (err or ""))
+				T.assert_contains(
+					result,
+					"Commit prompt opened",
+					"commit should report opening prompt"
+				)
+
+				T.drain_jobs(3000)
+				local lines = T.read_file(log_path)
+				T.assert_true(
+					T.find_line(lines, "commit -m Test commit from E2E") ~= nil,
+					"commit flow should invoke git commit with prompted message"
+				)
+			end)
+		end)
+	end,
+
+	["quick-commit executes prompt-driven flow without crash"] = function()
+		local git_status = require("gitflow.git.status")
+		local input = require("gitflow.ui.input")
+
+		with_temp_git_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = git_status,
+					key = "fetch",
+					value = function(_, cb)
+						cb(nil, {}, {
+							staged = { { path = "tracked.txt" } },
+							unstaged = {},
+							untracked = {},
+						}, { code = 0, stdout = "", stderr = "" })
+					end,
+				},
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("Quick commit from E2E")
+					end,
+				},
+			}, function()
+				local result
+				local ok, err = T.pcall_message(function()
+					result = commands.dispatch({ "quick-commit" }, cfg)
+				end)
+				T.assert_true(ok, "quick-commit should not crash: " .. (err or ""))
+				T.assert_contains(
+					result,
+					"Running quick commit",
+					"quick-commit should return execution message"
+				)
+
+				T.drain_jobs(3000)
+				local lines = T.read_file(log_path)
+				T.assert_true(
+					T.find_line(lines, "add -A") ~= nil,
+					"quick-commit should stage all changes"
+				)
+				T.assert_true(
+					T.find_line(lines, "commit -m Quick commit from E2E") ~= nil,
+					"quick-commit should invoke git commit"
+				)
+			end)
+		end)
+	end,
+
+	["quick-push executes prompt-driven flow without crash"] = function()
+		local git_status = require("gitflow.git.status")
+		local input = require("gitflow.ui.input")
+
+		with_temp_git_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = git_status,
+					key = "fetch",
+					value = function(_, cb)
+						cb(nil, {}, {
+							staged = { { path = "tracked.txt" } },
+							unstaged = {},
+							untracked = {},
+						}, { code = 0, stdout = "", stderr = "" })
+					end,
+				},
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("Quick push from E2E")
+					end,
+				},
+			}, function()
+				local result
+				local ok, err = T.pcall_message(function()
+					result = commands.dispatch({ "quick-push" }, cfg)
+				end)
+				T.assert_true(ok, "quick-push should not crash: " .. (err or ""))
+				T.assert_contains(
+					result,
+					"Running quick push",
+					"quick-push should return execution message"
+				)
+
+				T.drain_jobs(3000)
+				local lines = T.read_file(log_path)
+				T.assert_true(
+					T.find_line(lines, "commit -m Quick push from E2E") ~= nil,
+					"quick-push should invoke git commit"
+				)
+				T.assert_true(
+					T.find_line(lines, "push") ~= nil,
+					"quick-push should invoke git push"
+				)
+			end)
+		end)
 	end,
 
 	-- ── open / close subcommands ────────────────────────────────────────

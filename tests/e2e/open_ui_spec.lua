@@ -8,6 +8,16 @@ local cfg = _G.TestConfig
 local ui = require("gitflow.ui")
 local commands = require("gitflow.commands")
 
+---@param dimension number
+---@param max_value integer
+---@return integer
+local function resolve_expected_dimension(dimension, max_value)
+	if dimension > 0 and dimension <= 1 then
+		return math.max(1, math.floor(max_value * dimension))
+	end
+	return math.max(1, math.floor(dimension))
+end
+
 T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 
 	-- ── Main panel via :Gitflow open ────────────────────────────────────
@@ -126,11 +136,28 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 			"panel should be a floating window in float layout"
 		)
 
-		-- verify float dimensions are reasonable
+		-- verify float dimensions match configured values
 		local width = vim.api.nvim_win_get_width(winid)
 		local height = vim.api.nvim_win_get_height(winid)
-		T.assert_true(width > 0, "float width should be positive")
-		T.assert_true(height > 0, "float height should be positive")
+		local expected_width = resolve_expected_dimension(
+			float_cfg.ui.float.width,
+			vim.o.columns
+		)
+		local expected_height = resolve_expected_dimension(
+			float_cfg.ui.float.height,
+			vim.o.lines - vim.o.cmdheight
+		)
+
+		T.assert_equals(
+			width,
+			expected_width,
+			"float width should match configured width"
+		)
+		T.assert_equals(
+			height,
+			expected_height,
+			"float height should match configured height"
+		)
 
 		T.exec_command("Gitflow close")
 
