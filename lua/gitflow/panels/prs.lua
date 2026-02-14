@@ -8,7 +8,9 @@ local gh_labels = require("gitflow.gh.labels")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local label_picker = require("gitflow.ui.label_picker")
+local list_picker = require("gitflow.ui.list_picker")
 local review_panel = require("gitflow.panels.review")
+local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
 
@@ -551,14 +553,47 @@ function M.create_interactive()
 		return
 	end
 
-	local function open_form(available_labels)
+	local function open_form(available_labels, branch_items, assignee_items)
 		form.open({
 			title = "Create Pull Request",
 			fields = {
 				{ name = "Title", key = "title", required = true },
 				{ name = "Body", key = "body", multiline = true },
-				{ name = "Base branch", key = "base" },
-				{ name = "Reviewers (comma-separated)", key = "reviewers" },
+				{
+					name = "Base branch",
+					key = "base",
+					picker = function(ctx)
+						list_picker.open({
+							title = "Select Base Branch",
+							items = branch_items,
+							selected = ctx.value ~= ""
+								and { ctx.value } or {},
+							multi_select = false,
+							on_submit = function(selected)
+								if #selected > 0 then
+									ctx.set_value(selected[1])
+								end
+							end,
+						})
+					end,
+				},
+				{
+					name = "Reviewers (comma-separated)",
+					key = "reviewers",
+					picker = function(ctx)
+						list_picker.open({
+							title = "Select Reviewers",
+							items = assignee_items,
+							selected = parse_csv_input(ctx.value),
+							multi_select = true,
+							on_submit = function(selected)
+								ctx.set_value(
+									table.concat(selected, ",")
+								)
+							end,
+						})
+					end,
+				},
 				{
 					name = "Labels",
 					key = "labels",
@@ -568,7 +603,9 @@ function M.create_interactive()
 							labels = available_labels,
 							selected = parse_csv_input(ctx.value),
 							on_submit = function(selected_labels)
-								ctx.set_value(table.concat(selected_labels, ","))
+								ctx.set_value(
+									table.concat(selected_labels, ",")
+								)
 							end,
 						})
 					end,
@@ -596,13 +633,58 @@ function M.create_interactive()
 		})
 	end
 
-	gh_labels.list({}, function(err, labels)
-		if err then
-			utils.notify(("Failed to load labels: %s"):format(err), vim.log.levels.WARN)
-			open_form({})
+	local loaded = { labels = nil, branches = nil, assignees = nil }
+	local pending = 3
+
+	local function try_open()
+		pending = pending - 1
+		if pending > 0 then
 			return
 		end
-		open_form(type(labels) == "table" and labels or {})
+		vim.schedule(function()
+			open_form(
+				loaded.labels or {},
+				loaded.branches or {},
+				loaded.assignees or {}
+			)
+		end)
+	end
+
+	gh_labels.list({}, function(err, labels)
+		if err then
+			utils.notify(
+				("Failed to load labels: %s"):format(err),
+				vim.log.levels.WARN
+			)
+		end
+		loaded.labels = type(labels) == "table" and labels or {}
+		try_open()
+	end)
+
+	git_branch.list({}, function(err, entries)
+		if err then
+			utils.notify(
+				("Failed to load branches: %s"):format(err),
+				vim.log.levels.WARN
+			)
+		end
+		local items = {}
+		for _, entry in ipairs(entries or {}) do
+			items[#items + 1] = { name = entry.name }
+		end
+		loaded.branches = items
+		try_open()
+	end)
+
+	local assignee_comp = require("gitflow.completion.assignees")
+	vim.schedule(function()
+		local names = assignee_comp.list_repo_assignee_candidates()
+		local items = {}
+		for _, name in ipairs(names) do
+			items[#items + 1] = { name = name }
+		end
+		loaded.assignees = items
+		try_open()
 	end)
 end
 
