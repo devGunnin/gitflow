@@ -1,0 +1,24 @@
+[
+  {
+    "id": 2001,
+    "body": "Consider renaming this variable.",
+    "path": "lua/gitflow/highlights.lua",
+    "line": 13,
+    "original_line": 13,
+    "start_line": null,
+    "in_reply_to_id": null,
+    "diff_hunk": "@@ -10,7 +10,9 @@ local M = {}",
+    "user": {"login": "reviewer1"}
+  },
+  {
+    "id": 2002,
+    "body": "Good point, will rename.",
+    "path": "lua/gitflow/highlights.lua",
+    "line": 13,
+    "original_line": 13,
+    "start_line": null,
+    "in_reply_to_id": 2001,
+    "diff_hunk": "@@ -10,7 +10,9 @@ local M = {}",
+    "user": {"login": "octocat"}
+  }
+]
