@@ -1,6 +1,9 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
+local git_branch = require("gitflow.git.branch")
+local icons = require("gitflow.icons")
+local ui_render = require("gitflow.ui.render")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -13,6 +16,9 @@ local git_log = require("gitflow.git.log")
 ---@field opts GitflowLogPanelOpts
 
 local M = {}
+local LOG_FLOAT_TITLE = "Gitflow Log"
+local LOG_FLOAT_FOOTER = "<CR> open commit diff  r refresh  q close"
+local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
 M.state = {
@@ -41,15 +47,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "log",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "log",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = LOG_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and LOG_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "log",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "<CR>", function()
 		M.open_commit_under_cursor()
@@ -65,24 +88,42 @@ local function ensure_window(cfg)
 end
 
 ---@param entries GitflowLogEntry[]
-local function render(entries)
-	local lines = {
-		"Gitflow Log",
-		"",
+---@param current_branch string
+local function render(entries, current_branch)
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
 	}
+	local lines = ui_render.panel_header("Gitflow Log", render_opts)
 	local line_entries = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = "(no commits found)"
+		lines[#lines + 1] = ui_render.empty("no commits found")
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ("%s %s"):format(entry.short_sha, entry.summary)
+			local commit_icon = icons.get("git_state", "commit")
+			lines[#lines + 1] = ui_render.entry(
+				("%s %s %s"):format(commit_icon, entry.short_sha, entry.summary)
+			)
 			line_entries[#lines] = entry
 		end
+	end
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
 	end
 
 	ui.buffer.update("log", lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	ui_render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+	})
 end
 
 ---@return GitflowLogEntry|nil
@@ -110,15 +151,17 @@ function M.refresh()
 		return
 	end
 
-	git_log.list({
-		count = cfg.git.log.count,
-		format = cfg.git.log.format,
-	}, function(err, entries)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		render(entries)
+	git_branch.current({}, function(_, branch)
+		git_log.list({
+			count = cfg.git.log.count,
+			format = cfg.git.log.format,
+		}, function(err, entries)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			render(entries, branch or "(unknown)")
+		end)
 	end)
 end
 

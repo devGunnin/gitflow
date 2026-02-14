@@ -1,6 +1,8 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
+local git_branch = require("gitflow.git.branch")
 
 ---@class GitflowDiffPanelState
 ---@field bufnr integer|nil
@@ -8,6 +10,9 @@ local git_diff = require("gitflow.git.diff")
 ---@field request table|nil
 
 local M = {}
+local DIFF_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_diff_hl")
+local DIFF_FLOAT_TITLE = "Gitflow Diff"
+local DIFF_FLOAT_FOOTER = "r refresh  q close"
 
 ---@type GitflowDiffPanelState
 M.state = {
@@ -62,15 +67,32 @@ local function ensure_window(cfg)
 		return
 	end
 
-	M.state.winid = ui.window.open_split({
-		name = "diff",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.winid = nil
-		end,
-	})
+	if cfg.ui.default_layout == "float" then
+		M.state.winid = ui.window.open_float({
+			name = "diff",
+			bufnr = bufnr,
+			width = cfg.ui.float.width,
+			height = cfg.ui.float.height,
+			border = cfg.ui.float.border,
+			title = DIFF_FLOAT_TITLE,
+			title_pos = cfg.ui.float.title_pos,
+			footer = cfg.ui.float.footer and DIFF_FLOAT_FOOTER or nil,
+			footer_pos = cfg.ui.float.footer_pos,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	else
+		M.state.winid = ui.window.open_split({
+			name = "diff",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.winid = nil
+			end,
+		})
+	end
 
 	vim.keymap.set("n", "q", function()
 		M.close()
@@ -85,9 +107,55 @@ end
 
 ---@param _title string
 ---@param text string
-local function render(_title, text)
-	local lines = to_lines(text)
+---@param current_branch string
+local function render(title, text, current_branch)
+	local diff_lines = to_lines(text)
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local lines = ui_render.panel_header(title, render_opts)
+	local header_line_count = #lines
+	for _, line in ipairs(diff_lines) do
+		lines[#lines + 1] = line
+	end
+	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
+	for _, line in ipairs(footer_lines) do
+		lines[#lines + 1] = line
+	end
 	ui.buffer.update("diff", lines)
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	local entry_highlights = {}
+
+	for idx, line in ipairs(diff_lines) do
+		local group = nil
+		if vim.startswith(line, "diff --git")
+			or vim.startswith(line, "index ")
+			or vim.startswith(line, "--- ")
+			or vim.startswith(line, "+++ ")
+		then
+			group = "GitflowHeader"
+		elseif vim.startswith(line, "@@") then
+			group = "GitflowModified"
+		elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
+			group = "GitflowAdded"
+		elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
+			group = "GitflowRemoved"
+		end
+		if group then
+			entry_highlights[idx + header_line_count] = group
+		end
+	end
+
+	ui_render.apply_panel_highlights(bufnr, DIFF_HIGHLIGHT_NS, lines, {
+		footer_line = #lines,
+		entry_highlights = entry_highlights,
+	})
 end
 
 ---@param cfg GitflowConfig
@@ -96,13 +164,15 @@ function M.open(cfg, request)
 	M.state.request = vim.deepcopy(request)
 	ensure_window(cfg)
 
-	git_diff.get(request, function(err, output)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
+	git_branch.current({}, function(_, branch)
+		git_diff.get(request, function(err, output)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
 
-		render(request_to_title(request), output or "")
+			render(request_to_title(request), output or "", branch or "(unknown)")
+		end)
 	end)
 end
 
