@@ -380,7 +380,89 @@ pcall(vim.api.nvim_buf_delete, validation_state.bufnr, { force = true })
 passed = passed + 1
 print(("  [%d] form required field validation"):format(passed))
 
--- ── Test 13: Labels panel shows colored labels ─────────────────
+-- ── Test 13: Multiline edits preserve navigation and values ─────
+
+local multiline_submit = nil
+local multiline_state = form.open({
+	title = "Multiline Form",
+	fields = {
+		{ name = "Title", key = "title", required = true },
+		{ name = "Body", key = "body", multiline = true },
+		{ name = "Labels", key = "labels" },
+	},
+	on_submit = function(values)
+		multiline_submit = values
+	end,
+})
+
+local multiline_buf = multiline_state.bufnr
+assert_true(multiline_buf ~= nil, "multiline form buffer should exist")
+
+local title_range = multiline_state.field_lines[1]
+assert_true(title_range ~= nil, "title range should exist")
+vim.api.nvim_buf_set_lines(
+	multiline_buf,
+	title_range.start - 1,
+	title_range.stop,
+	false,
+	{ "Multiline title" }
+)
+
+local body_range = multiline_state.field_lines[2]
+assert_true(body_range ~= nil, "body range should exist")
+vim.api.nvim_buf_set_lines(
+	multiline_buf,
+	body_range.start - 1,
+	body_range.stop,
+	false,
+	{ "First body line", "Second body line", "Third body line" }
+)
+
+vim.api.nvim_set_current_win(multiline_state.winid)
+local tab_key = vim.api.nvim_replace_termcodes("<Tab>", true, false, true)
+vim.api.nvim_feedkeys(tab_key, "x", false) -- field 1 -> field 2
+vim.api.nvim_feedkeys(tab_key, "x", false) -- field 2 -> field 3
+
+local cursor = vim.api.nvim_win_get_cursor(multiline_state.winid)
+assert_equals(
+	cursor[1],
+	multiline_state.field_lines[3].start,
+	"Tab should jump to Labels after multiline edits"
+)
+
+local labels_range = multiline_state.field_lines[3]
+assert_true(labels_range ~= nil, "labels range should exist")
+vim.api.nvim_buf_set_lines(
+	multiline_buf,
+	labels_range.start - 1,
+	labels_range.stop,
+	false,
+	{ "bug,docs" }
+)
+
+local cr_key = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+vim.api.nvim_feedkeys(cr_key, "x", false)
+
+assert_true(multiline_submit ~= nil, "submit should fire for multiline form")
+assert_equals(
+	multiline_submit.title,
+	"Multiline title",
+	"title should be collected after multiline edits"
+)
+assert_equals(
+	multiline_submit.body,
+	"First body line\nSecond body line\nThird body line",
+	"body should preserve all edited multiline rows"
+)
+assert_equals(
+	multiline_submit.labels,
+	"bug,docs",
+	"labels should remain mapped to labels field after multiline edits"
+)
+passed = passed + 1
+print(("  [%d] multiline form edits preserve values and navigation"):format(passed))
+
+-- ── Test 14: Labels panel shows colored labels ─────────────────
 
 local buffer = require("gitflow.ui.buffer")
 local commands = require("gitflow.commands")
@@ -423,7 +505,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] labels panel shows colored labels"):format(passed))
 
--- ── Test 14: Issues panel shows colored labels ─────────────────
+-- ── Test 15: Issues panel shows colored labels ─────────────────
 
 commands.dispatch({ "issue", "list", "open" }, cfg)
 wait_until(function()
@@ -466,7 +548,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] issues panel shows colored labels"):format(passed))
 
--- ── Test 15: Issue detail view shows colored labels ────────────
+-- ── Test 16: Issue detail view shows colored labels ────────────
 
 commands.dispatch({ "issue", "view", "10" }, cfg)
 wait_until(function()
@@ -510,7 +592,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] issue detail view shows colored labels"):format(passed))
 
--- ── Test 16: PR detail view shows Labels line ──────────────────
+-- ── Test 17: PR detail view shows Labels line ──────────────────
 
 commands.dispatch({ "pr", "view", "20" }, cfg)
 wait_until(function()
@@ -557,7 +639,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] pr detail view shows colored labels"):format(passed))
 
--- ── Test 17: Issue create_interactive opens form ───────────────
+-- ── Test 18: Issue create_interactive opens form ───────────────
 
 local issues_panel = require("gitflow.panels.issues")
 issues_panel.create_interactive()
@@ -614,7 +696,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] issue create opens form with correct fields"):format(passed))
 
--- ── Test 18: PR create_interactive opens form ──────────────────
+-- ── Test 19: PR create_interactive opens form ──────────────────
 
 local pr_panel = require("gitflow.panels.prs")
 -- Ensure PR panel is open first
@@ -683,7 +765,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] pr create opens form with correct fields"):format(passed))
 
--- ── Test 19: Label create_interactive opens form ───────────────
+-- ── Test 20: Label create_interactive opens form ───────────────
 
 local label_panel = require("gitflow.panels.labels")
 label_panel.create_interactive()
@@ -733,7 +815,7 @@ assert_true(
 passed = passed + 1
 print(("  [%d] label create opens form with correct fields"):format(passed))
 
--- ── Test 20: Form active_field starts at 1 ─────────────────────
+-- ── Test 21: Form active_field starts at 1 ─────────────────────
 
 local tracking_state = form.open({
 	title = "Track Form",

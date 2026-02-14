@@ -10,6 +10,7 @@ local utils = require("gitflow.utils")
 local M = {}
 
 local FORM_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_form_hl")
+local FORM_MARKER_NS = vim.api.nvim_create_namespace("gitflow_form_markers")
 
 ---@class GitflowFormField
 ---@field name string        display label (e.g. "Title")
@@ -32,6 +33,8 @@ local FORM_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_form_hl")
 ---@field winid integer|nil
 ---@field fields GitflowFormField[]
 ---@field field_lines table<integer, {start: integer, stop: integer}>
+---@field field_markers table<integer, integer>
+---@field separator_marker integer|nil
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel? fun()
 ---@field active_field integer
@@ -86,6 +89,98 @@ local function render_form(state, values)
 
 	state.field_lines = field_lines
 	return lines
+end
+
+---Initialize extmark anchors for field labels and footer separator.
+---@param state GitflowFormState
+---@param lines string[]
+local function initialize_markers(state, lines)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, FORM_MARKER_NS, 0, -1)
+	state.field_markers = {}
+
+	for idx, range in pairs(state.field_lines) do
+		-- `range.start` is 1-indexed value row. Label row is just above it.
+		local label_row = range.start - 2
+		state.field_markers[idx] = vim.api.nvim_buf_set_extmark(
+			bufnr,
+			FORM_MARKER_NS,
+			label_row,
+			0,
+			{ right_gravity = false }
+		)
+	end
+
+	local separator_row = #lines - 2
+	state.separator_marker = vim.api.nvim_buf_set_extmark(
+		bufnr,
+		FORM_MARKER_NS,
+		separator_row,
+		0,
+		{ right_gravity = false }
+	)
+end
+
+---Recompute live value ranges from extmark anchors.
+---@param state GitflowFormState
+---@return table<integer, {start: integer, stop: integer}>
+local function sync_field_lines(state)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return state.field_lines
+	end
+
+	local label_lines = {}
+	for idx, marker_id in pairs(state.field_markers or {}) do
+		local pos = vim.api.nvim_buf_get_extmark_by_id(
+			bufnr,
+			FORM_MARKER_NS,
+			marker_id,
+			{}
+		)
+		if pos and pos[1] ~= nil then
+			label_lines[idx] = pos[1] + 1
+		end
+	end
+
+	local separator_line = nil
+	if state.separator_marker then
+		local sep_pos = vim.api.nvim_buf_get_extmark_by_id(
+			bufnr,
+			FORM_MARKER_NS,
+			state.separator_marker,
+			{}
+		)
+		if sep_pos and sep_pos[1] ~= nil then
+			separator_line = sep_pos[1] + 1
+		end
+	end
+
+	local ranges = {}
+	local line_count = vim.api.nvim_buf_line_count(bufnr)
+	for idx, _ in ipairs(state.fields) do
+		local label_line = label_lines[idx]
+		if label_line then
+			local start_line = label_line + 1
+			local stop_line = line_count
+
+			local next_label = label_lines[idx + 1]
+			if next_label then
+				stop_line = next_label - 2
+			elseif separator_line then
+				stop_line = separator_line - 2
+			end
+
+			ranges[idx] = { start = start_line, stop = stop_line }
+		end
+	end
+
+	state.field_lines = ranges
+	return ranges
 end
 
 ---Apply highlight groups to form labels, active field, and footer.
@@ -147,6 +242,7 @@ local function collect_values(state)
 
 	local all_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local result = {}
+	sync_field_lines(state)
 	for idx, field in ipairs(state.fields) do
 		local range = state.field_lines[idx]
 		if range then
@@ -170,6 +266,7 @@ local function jump_to_field(state, field_idx)
 		return
 	end
 
+	sync_field_lines(state)
 	local range = state.field_lines[field_idx]
 	if not range then
 		return
@@ -205,6 +302,8 @@ function M.open(opts)
 		winid = nil,
 		fields = opts.fields,
 		field_lines = {},
+		field_markers = {},
+		separator_marker = nil,
 		on_submit = opts.on_submit,
 		on_cancel = opts.on_cancel,
 		active_field = 1,
@@ -221,6 +320,8 @@ function M.open(opts)
 	-- Render initial content
 	local lines = render_form(state, nil)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	initialize_markers(state, lines)
+	sync_field_lines(state)
 
 	-- Open float
 	local width = opts.width or 0.5
