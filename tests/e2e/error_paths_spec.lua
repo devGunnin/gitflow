@@ -263,6 +263,13 @@ T.run_suite("E2E: Error Paths", {
 			end)
 		end)
 
+		T.assert_true(
+			has_notification(notifications, "git diff failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "error", vim.log.levels.ERROR),
+			"diff failure should produce error notification"
+		)
+
 		-- Diff panel should open even if git diff fails (shows empty diff)
 		T.assert_true(
 			vim.api.nvim_get_current_buf() ~= nil,
@@ -384,6 +391,13 @@ T.run_suite("E2E: Error Paths", {
 				T.drain_jobs(3000)
 			end)
 		end)
+
+		T.assert_true(
+			has_notification(notifications, "git status failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "error", vim.log.levels.ERROR),
+			"status failure should produce error notification"
+		)
 
 		T.assert_true(
 			vim.api.nvim_get_current_buf() ~= nil,
@@ -513,11 +527,19 @@ T.run_suite("E2E: Error Paths", {
 
 	["git log failure does not crash log panel"] = function()
 		local log_panel = require("gitflow.panels.log")
-
-		with_git_fail("log", function()
-			log_panel.open(cfg, {})
-			T.drain_jobs(3000)
+		local notifications = capture_notifications(function()
+			with_git_fail("log", function()
+				log_panel.open(cfg, {})
+				T.drain_jobs(3000)
+			end)
 		end)
+
+		T.assert_true(
+			has_notification(notifications, "git log failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "error", vim.log.levels.ERROR),
+			"log failure should produce error notification"
+		)
 
 		T.assert_true(
 			vim.api.nvim_get_current_buf() ~= nil,
@@ -537,6 +559,13 @@ T.run_suite("E2E: Error Paths", {
 				T.drain_jobs(3000)
 			end)
 		end)
+
+		T.assert_true(
+			has_notification(notifications, "git stash list failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "failed", vim.log.levels.ERROR)
+			or has_notification(notifications, "error", vim.log.levels.ERROR),
+			"stash failure should produce error notification"
+		)
 
 		T.assert_true(
 			vim.api.nvim_get_current_buf() ~= nil,

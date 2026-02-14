@@ -173,16 +173,12 @@ T.run_suite("E2E: Async Determinism", {
 
 	-- ── No race conditions in concurrent panel operations ─────────────
 
-	["sequential panel opens do not race"] = function()
-		-- Open multiple panels in sequence — each should be stable
+	["concurrent panel opens do not race"] = function()
+		-- Queue multiple panel opens before draining to force overlap.
 		status_panel.open(cfg, {})
-		T.drain_jobs(3000)
-
 		diff_panel.open(cfg, {})
-		T.drain_jobs(3000)
-
 		log_panel.open(cfg, {})
-		T.drain_jobs(3000)
+		T.drain_jobs(5000)
 
 		-- All should have valid buffers
 		local status_buf = ui.buffer.get("status")
@@ -191,15 +187,21 @@ T.run_suite("E2E: Async Determinism", {
 
 		T.assert_true(
 			status_buf ~= nil and vim.api.nvim_buf_is_valid(status_buf),
-			"status buffer should be valid after sequential opens"
+			"status buffer should be valid after concurrent opens"
 		)
 		T.assert_true(
 			diff_buf ~= nil and vim.api.nvim_buf_is_valid(diff_buf),
-			"diff buffer should be valid after sequential opens"
+			"diff buffer should be valid after concurrent opens"
 		)
 		T.assert_true(
 			log_buf ~= nil and vim.api.nvim_buf_is_valid(log_buf),
-			"log buffer should be valid after sequential opens"
+			"log buffer should be valid after concurrent opens"
+		)
+		T.assert_true(
+			#T.buf_lines(status_buf) > 0
+				and #T.buf_lines(diff_buf) > 0
+				and #T.buf_lines(log_buf) > 0,
+			"concurrent opens should render content for all panels"
 		)
 
 		cleanup_panels()
@@ -273,6 +275,28 @@ T.run_suite("E2E: Async Determinism", {
 			process_count,
 			0,
 			"no active process handles after drain"
+		)
+	end,
+
+	["active timers return to baseline after async operations"] = function()
+		local baseline_timers = active_timer_count()
+
+		status_panel.open(cfg, {})
+		diff_panel.open(cfg, {})
+		log_panel.open(cfg, {})
+		commands.dispatch({ "fetch" }, cfg)
+		T.drain_jobs(5000)
+		cleanup_panels()
+
+		T.wait_until(function()
+			return active_timer_count() <= baseline_timers
+		end, "active timers should return to baseline after drain", 1500)
+
+		local remaining_timers = active_timer_count()
+		T.assert_true(
+			remaining_timers <= baseline_timers,
+			("active timers should return to baseline (baseline=%d, remaining=%d)")
+				:format(baseline_timers, remaining_timers)
 		)
 	end,
 
