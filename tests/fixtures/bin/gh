@@ -65,6 +65,10 @@ case "$subcmd" in
         cat "$FIXTURE_DIR/pr_view.json"
         ;;
       create)
+        if [ "$fail_cmd" = "pr_create" ]; then
+          echo "gh pr create failed: unable to create" >&2
+          exit 1
+        fi
         cat "$FIXTURE_DIR/pr_create.json"
         ;;
       list)
@@ -74,10 +78,17 @@ case "$subcmd" in
         echo "pr comment ok"
         ;;
       review)
-        if [ -f "$FIXTURE_DIR/pr_review.json" ]; then
-          cat "$FIXTURE_DIR/pr_review.json"
+        if [ "$fail_cmd" = "pr_review" ]; then
+          echo "gh pr review failed" >&2
+          exit 1
+        fi
+        echo "pr review ok"
+        ;;
+      diff)
+        if [ -f "$FIXTURE_DIR/pr_diff.patch" ]; then
+          cat "$FIXTURE_DIR/pr_diff.patch"
         else
-          echo "pr review ok"
+          echo ""
         fi
         ;;
       merge)
@@ -165,8 +176,31 @@ case "$subcmd" in
 
   # ── api ───────────────────────────────────────────────────────────────
   api)
-    # Used by prs.lua label edit fallback
-    echo '[]'
+    if [ "$fail_cmd" = "api" ]; then
+      echo "gh api failed" >&2
+      exit 1
+    fi
+    # Route api calls based on endpoint path
+    endpoint="$sub2"
+    case "$endpoint" in
+      *pulls/*/comments)
+        if [ -f "$FIXTURE_DIR/pr_review_comments.json" ]; then
+          cat "$FIXTURE_DIR/pr_review_comments.json"
+        else
+          echo '[]'
+        fi
+        ;;
+      *pulls/*/reviews)
+        # POST review submission or GET reviews list
+        echo '{"id": 5001, "state": "APPROVED"}'
+        ;;
+      *pulls/*/comments/*/replies)
+        echo '{"id": 6001, "body": "reply ok"}'
+        ;;
+      *)
+        echo '[]'
+        ;;
+    esac
     ;;
 
   # ── Unknown ───────────────────────────────────────────────────────────
