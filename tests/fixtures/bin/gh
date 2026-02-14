@@ -1,0 +1,179 @@
+#!/bin/sh
+# tests/fixtures/bin/gh — deterministic gh CLI stub for E2E tests
+#
+# Returns canned JSON from tests/fixtures/gh/ for supported commands.
+# Set GITFLOW_GH_LOG to a file path to record all invocations.
+# Set GITFLOW_GH_FAIL=<subcommand> to force that subcommand to fail.
+set -eu
+
+if [ -n "${GITFLOW_GH_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$GITFLOW_GH_LOG"
+fi
+
+# Resolve fixture directory relative to this script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FIXTURE_DIR="$SCRIPT_DIR/../gh"
+
+# Allow forcing failure for any subcommand
+fail_cmd="${GITFLOW_GH_FAIL:-}"
+
+# ── Top-level flags ────────────────────────────────────────────────────
+if [ "$#" -ge 1 ] && [ "$1" = "--version" ]; then
+  echo "gh version 2.55.0 (2026-01-15)"
+  exit 0
+fi
+
+subcmd="${1:-}"
+shift 2>/dev/null || true
+sub2="${1:-}"
+shift 2>/dev/null || true
+
+case "$subcmd" in
+
+  # ── auth ──────────────────────────────────────────────────────────────
+  auth)
+    case "$sub2" in
+      status)
+        if [ "$fail_cmd" = "auth" ]; then
+          echo "You are not logged into any GitHub hosts." >&2
+          exit 1
+        fi
+        echo "Logged in to github.com as e2e-test-user"
+        ;;
+      *)
+        echo "gh stub: unknown auth subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ── pr ────────────────────────────────────────────────────────────────
+  pr)
+    if [ "$fail_cmd" = "pr" ]; then
+      echo "gh pr failed" >&2
+      exit 1
+    fi
+    case "$sub2" in
+      view)
+        # Check for failure variant
+        pr_num="${1:-}"
+        if [ -f "$FIXTURE_DIR/pr_view_fail.json" ] && \
+           [ "$pr_num" = "999" ]; then
+          cat "$FIXTURE_DIR/pr_view_fail.json" >&2
+          exit 1
+        fi
+        cat "$FIXTURE_DIR/pr_view.json"
+        ;;
+      create)
+        cat "$FIXTURE_DIR/pr_create.json"
+        ;;
+      list)
+        cat "$FIXTURE_DIR/pr_list.json"
+        ;;
+      comment)
+        echo "pr comment ok"
+        ;;
+      review)
+        if [ -f "$FIXTURE_DIR/pr_review.json" ]; then
+          cat "$FIXTURE_DIR/pr_review.json"
+        else
+          echo "pr review ok"
+        fi
+        ;;
+      merge)
+        echo "pr merge ok"
+        ;;
+      checkout)
+        echo "pr checkout ok"
+        ;;
+      close)
+        echo "pr close ok"
+        ;;
+      edit)
+        echo "pr edit ok"
+        ;;
+      *)
+        echo "gh stub: unknown pr subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ── issue ─────────────────────────────────────────────────────────────
+  issue)
+    if [ "$fail_cmd" = "issue" ]; then
+      echo "gh issue failed" >&2
+      exit 1
+    fi
+    case "$sub2" in
+      list)
+        cat "$FIXTURE_DIR/issue_list.json"
+        ;;
+      view)
+        issue_num="${1:-}"
+        if [ -f "$FIXTURE_DIR/issue_view_fail.json" ] && \
+           [ "$issue_num" = "999" ]; then
+          cat "$FIXTURE_DIR/issue_view_fail.json" >&2
+          exit 1
+        fi
+        cat "$FIXTURE_DIR/issue_view.json"
+        ;;
+      create)
+        echo "https://github.com/devGunnin/Gitflow/issues/10"
+        ;;
+      comment)
+        echo "issue comment ok"
+        ;;
+      close)
+        echo "issue close ok"
+        ;;
+      reopen)
+        echo "issue reopen ok"
+        ;;
+      edit)
+        echo "issue edit ok"
+        ;;
+      *)
+        echo "gh stub: unknown issue subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ── label ─────────────────────────────────────────────────────────────
+  label)
+    if [ "$fail_cmd" = "label" ]; then
+      echo "gh label failed" >&2
+      exit 1
+    fi
+    case "$sub2" in
+      list)
+        cat "$FIXTURE_DIR/label_list.json"
+        ;;
+      create)
+        echo "label create ok"
+        ;;
+      delete)
+        echo "label delete ok"
+        ;;
+      *)
+        echo "gh stub: unknown label subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ── api ───────────────────────────────────────────────────────────────
+  api)
+    # Used by prs.lua label edit fallback
+    echo '[]'
+    ;;
+
+  # ── Unknown ───────────────────────────────────────────────────────────
+  *)
+    echo "gh stub: unknown command '$subcmd'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

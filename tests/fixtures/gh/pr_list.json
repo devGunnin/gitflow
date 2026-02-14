@@ -1,0 +1,26 @@
+[
+  {
+    "number": 42,
+    "title": "Add dark mode support",
+    "state": "OPEN",
+    "isDraft": false,
+    "author": {"login": "octocat"},
+    "headRefName": "feature/dark-mode",
+    "baseRefName": "main",
+    "labels": [{"name": "enhancement", "color": "a2eeef"}],
+    "updatedAt": "2026-02-10T12:00:00Z",
+    "mergedAt": null
+  },
+  {
+    "number": 41,
+    "title": "Fix login bug",
+    "state": "MERGED",
+    "isDraft": false,
+    "author": {"login": "devGunnin"},
+    "headRefName": "bugfix/login",
+    "baseRefName": "main",
+    "labels": [{"name": "bug", "color": "d73a4a"}],
+    "updatedAt": "2026-02-09T08:30:00Z",
+    "mergedAt": "2026-02-09T10:00:00Z"
+  }
+]
