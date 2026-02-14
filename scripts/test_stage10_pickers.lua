@@ -197,7 +197,18 @@ if [ "$#" -ge 1 ] && [ "$1" = "for-each-ref" ]; then
   printf ' \tmain\trefs/heads/main\n'
   printf ' \tdevelop\trefs/heads/develop\n'
   printf ' \tfeature/pickers\trefs/heads/feature/pickers\n'
+  printf ' \torigin\trefs/remotes/origin\n'
   printf ' \torigin/main\trefs/remotes/origin/main\n'
+  exit 0
+fi
+
+if [ "$#" -ge 2 ] && [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then
+  pwd
+  exit 0
+fi
+
+if [ "$#" -ge 3 ] && [ "$1" = "rev-parse" ] && [ "$2" = "--abbrev-ref" ] && [ "$3" = "HEAD" ]; then
+  echo "main"
   exit 0
 fi
 
@@ -734,6 +745,8 @@ print(("  [%d] pr form branch and reviewer pickers work"):format(passed))
 local has_main = false
 local has_develop = false
 local has_feature = false
+local has_origin = false
+local has_origin_main = false
 for _, item in ipairs(branch_picker_items or {}) do
 	if item.name == "main" then
 		has_main = true
@@ -744,10 +757,18 @@ for _, item in ipairs(branch_picker_items or {}) do
 	if item.name == "feature/pickers" then
 		has_feature = true
 	end
+	if item.name == "origin" then
+		has_origin = true
+	end
+	if item.name == "origin/main" then
+		has_origin_main = true
+	end
 end
 assert_true(has_main, "branch items should include main")
 assert_true(has_develop, "branch items should include develop")
 assert_true(has_feature, "branch items should include feature/pickers")
+assert_true(not has_origin, "branch items should exclude remote sentinel origin")
+assert_true(not has_origin_main, "branch items should exclude remote branch origin/main")
 passed = passed + 1
 print(("  [%d] pr form branch items include local branches"):format(passed))
 

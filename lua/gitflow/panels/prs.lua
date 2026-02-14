@@ -526,6 +526,39 @@ local function parse_csv_input(value)
 	return items
 end
 
+---@param entries GitflowBranchEntry[]|nil
+---@return { name: string }[]
+local function build_base_branch_items(entries)
+	local items = {}
+	local seen = {}
+
+	local function add(name)
+		local normalized = vim.trim(name or "")
+		if normalized == "" or seen[normalized] then
+			return
+		end
+		seen[normalized] = true
+		items[#items + 1] = { name = normalized }
+	end
+
+	for _, entry in ipairs(entries or {}) do
+		if not entry.is_remote then
+			add(entry.name)
+		end
+	end
+
+	-- Fallback for unusual repos with no local branches available.
+	if #items == 0 then
+		for _, entry in ipairs(entries or {}) do
+			if entry.is_remote and entry.remote and entry.short_name ~= "HEAD" then
+				add(entry.short_name)
+			end
+		end
+	end
+
+	return items
+end
+
 ---@param value string
 ---@return string[], string[]
 local function parse_label_patch(value)
@@ -668,11 +701,7 @@ function M.create_interactive()
 				vim.log.levels.WARN
 			)
 		end
-		local items = {}
-		for _, entry in ipairs(entries or {}) do
-			items[#items + 1] = { name = entry.name }
-		end
-		loaded.branches = items
+		loaded.branches = build_base_branch_items(entries)
 		try_open()
 	end)
 
