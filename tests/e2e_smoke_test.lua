@@ -156,6 +156,22 @@ T.run_suite("E2E Infrastructure", {
 		)
 	end,
 
+	["gitflow.git.log.list parses stub log output"] = function()
+		local log_mod = require("gitflow.git.log")
+		local err, entries, git_result = T.wait_async(function(done)
+			log_mod.list({ count = 3 }, function(list_err, list_entries, result)
+				done(list_err, list_entries, result)
+			end)
+		end, 2000)
+
+		T.assert_equals(err, nil, "gitflow.git.log.list should not return error")
+		T.assert_equals(git_result.code, 0, "gitflow.git.log.list git call should succeed")
+		T.assert_true(type(entries) == "table", "gitflow.git.log.list should return entries table")
+		T.assert_true(#entries >= 3, "gitflow.git.log.list should parse all stub entries")
+		T.assert_true(#entries[1].sha > 7, "parsed sha should be full length")
+		T.assert_contains(entries[1].summary, "Initial commit", "parsed summary should match stub")
+	end,
+
 	["git stub returns branch output"] = function()
 		local result = vim.system(
 			{ "git", "branch", "-a", "--format=%(refname:short)" },

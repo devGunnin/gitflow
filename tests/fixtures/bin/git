@@ -86,9 +86,20 @@ DIFF
       echo "fatal: log failed" >&2
       exit 1
     fi
-    printf 'abc1234 Initial commit\n'
-    printf 'def5678 Add feature\n'
-    printf 'ghi9012 Fix bug\n'
+    case " $* " in
+      *" --pretty=format:"*)
+        # parser-compatible shape for gitflow.git.log.parse():
+        # <full_sha><TAB><summary>
+        printf 'abc1234567890abcdef1234567890abcdef1234\tabc1234 Initial commit\n'
+        printf 'def5678901234abcdef1234567890abcdef5678\tdef5678 Add feature\n'
+        printf 'fed9012345678abcdef1234567890abcdef9012\tfed9012 Fix bug\n'
+        ;;
+      *)
+        printf 'abc1234 Initial commit\n'
+        printf 'def5678 Add feature\n'
+        printf 'ghi9012 Fix bug\n'
+        ;;
+    esac
     ;;
 
   # ── checkout ──────────────────────────────────────────────────────────
