@@ -743,8 +743,11 @@ for _, filepath in ipairs(source_files) do
 		-- Match confirm() calls with inline choices: { "&Foo", "&Bar" }
 		for choices_block in content:gmatch("choices%s*=%s*{([^}]+)}") do
 			local accels = {}
-			for choice in choices_block:gmatch('"&(.)"') do
-				table.insert(accels, choice:lower())
+			for choice in choices_block:gmatch('"([^"]+)"') do
+				local accel = choice:match("&(.)")
+				if accel then
+					table.insert(accels, accel:lower())
+				end
 			end
 			local dup, key = has_duplicate(accels)
 			assert_true(
