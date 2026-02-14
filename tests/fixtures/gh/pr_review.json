@@ -1,0 +1,19 @@
+{
+  "id": 1001,
+  "body": "Approved with minor suggestions.",
+  "state": "APPROVED",
+  "author": {"login": "reviewer1"},
+  "submittedAt": "2026-02-10T14:00:00Z",
+  "comments": [
+    {
+      "id": 2001,
+      "body": "Consider renaming this variable.",
+      "path": "lua/gitflow/highlights.lua",
+      "line": 10,
+      "original_line": 10,
+      "start_line": null,
+      "in_reply_to_id": null,
+      "author": {"login": "reviewer1"}
+    }
+  ]
+}

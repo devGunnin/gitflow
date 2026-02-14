@@ -1,0 +1,250 @@
+#!/bin/sh
+# tests/fixtures/bin/git — deterministic git stub for E2E tests
+#
+# Supports the subcommands that Gitflow invokes. Returns canned output
+# for each supported command and exits non-zero for unknown commands.
+# Set GITFLOW_GIT_LOG to a file path to record all invocations.
+# Set GITFLOW_GIT_FAIL=<subcommand> to force that subcommand to fail.
+set -eu
+
+if [ -n "${GITFLOW_GIT_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$GITFLOW_GIT_LOG"
+fi
+
+# Allow forcing failure for any subcommand
+fail_cmd="${GITFLOW_GIT_FAIL:-}"
+
+subcmd="${1:-}"
+shift 2>/dev/null || true
+
+case "$subcmd" in
+
+  # ── status ────────────────────────────────────────────────────────────
+  status)
+    if [ "$fail_cmd" = "status" ]; then
+      echo "fatal: not a git repository" >&2
+      exit 128
+    fi
+    # Default: one modified, one untracked
+    printf ' M tracked.txt\n'
+    printf '?? new.txt\n'
+    ;;
+
+  # ── branch ────────────────────────────────────────────────────────────
+  branch)
+    if [ "$fail_cmd" = "branch" ]; then
+      echo "fatal: branch failed" >&2
+      exit 1
+    fi
+    # Check for format flag (used by panels/branch.lua)
+    case "$*" in
+      *--format*)
+        printf 'main\n'
+        printf 'feature/test\n'
+        printf 'bugfix/login\n'
+        ;;
+      *)
+        printf '* main\n'
+        printf '  feature/test\n'
+        printf '  bugfix/login\n'
+        ;;
+    esac
+    ;;
+
+  # ── diff ──────────────────────────────────────────────────────────────
+  diff)
+    if [ "$fail_cmd" = "diff" ]; then
+      echo "fatal: diff failed" >&2
+      exit 1
+    fi
+    cat <<'DIFF'
+diff --git a/tracked.txt b/tracked.txt
+index 1234567..abcdefg 100644
+--- a/tracked.txt
++++ b/tracked.txt
+@@ -1,2 +1,3 @@
+ alpha
+ beta
++gamma
+DIFF
+    ;;
+
+  # ── log ───────────────────────────────────────────────────────────────
+  log)
+    if [ "$fail_cmd" = "log" ]; then
+      echo "fatal: log failed" >&2
+      exit 1
+    fi
+    printf 'abc1234 Initial commit\n'
+    printf 'def5678 Add feature\n'
+    printf 'ghi9012 Fix bug\n'
+    ;;
+
+  # ── checkout ──────────────────────────────────────────────────────────
+  checkout)
+    if [ "$fail_cmd" = "checkout" ]; then
+      echo "error: checkout failed" >&2
+      exit 1
+    fi
+    printf "Switched to branch '%s'\n" "${1:-main}"
+    ;;
+
+  # ── merge ─────────────────────────────────────────────────────────────
+  merge)
+    if [ "$fail_cmd" = "merge" ]; then
+      echo "CONFLICT (content): Merge conflict in file.txt" >&2
+      exit 1
+    fi
+    printf 'Already up to date.\n'
+    ;;
+
+  # ── rev-parse ─────────────────────────────────────────────────────────
+  rev-parse)
+    if [ "$fail_cmd" = "rev-parse" ]; then
+      echo "fatal: rev-parse failed" >&2
+      exit 128
+    fi
+    case "$*" in
+      *--show-toplevel*)
+        pwd
+        ;;
+      *--abbrev-ref*)
+        printf 'main\n'
+        ;;
+      *)
+        printf 'abc1234567890\n'
+        ;;
+    esac
+    ;;
+
+  # ── stash ─────────────────────────────────────────────────────────────
+  stash)
+    if [ "$fail_cmd" = "stash" ]; then
+      echo "error: stash failed" >&2
+      exit 1
+    fi
+    stash_sub="${1:-list}"
+    shift 2>/dev/null || true
+    case "$stash_sub" in
+      list)
+        printf 'stash@{0}: WIP on main: abc1234 Initial commit\n'
+        printf 'stash@{1}: On main: save work\n'
+        ;;
+      push)
+        printf 'Saved working directory and index state WIP on main\n'
+        ;;
+      pop)
+        printf 'Dropped refs/stash@{0}\n'
+        ;;
+      drop)
+        printf 'Dropped refs/stash@{0}\n'
+        ;;
+    esac
+    ;;
+
+  # ── push ──────────────────────────────────────────────────────────────
+  push)
+    if [ "$fail_cmd" = "push" ]; then
+      echo "error: push failed" >&2
+      exit 1
+    fi
+    printf 'Everything up-to-date\n'
+    ;;
+
+  # ── pull ──────────────────────────────────────────────────────────────
+  pull)
+    if [ "$fail_cmd" = "pull" ]; then
+      echo "error: pull failed" >&2
+      exit 1
+    fi
+    printf 'Already up to date.\n'
+    ;;
+
+  # ── fetch ─────────────────────────────────────────────────────────────
+  fetch)
+    if [ "$fail_cmd" = "fetch" ]; then
+      echo "error: fetch failed" >&2
+      exit 1
+    fi
+    # fetch produces no stdout on success
+    ;;
+
+  # ── rebase ────────────────────────────────────────────────────────────
+  rebase)
+    if [ "$fail_cmd" = "rebase" ]; then
+      echo "CONFLICT (content): Merge conflict in file.txt" >&2
+      exit 1
+    fi
+    printf 'Current branch main is up to date.\n'
+    ;;
+
+  # ── cherry-pick ───────────────────────────────────────────────────────
+  cherry-pick)
+    if [ "$fail_cmd" = "cherry-pick" ]; then
+      echo "error: cherry-pick failed" >&2
+      exit 1
+    fi
+    printf '[main abc1234] Cherry-picked commit\n'
+    ;;
+
+  # ── add ───────────────────────────────────────────────────────────────
+  add)
+    if [ "$fail_cmd" = "add" ]; then
+      echo "fatal: add failed" >&2
+      exit 1
+    fi
+    # add produces no stdout on success
+    ;;
+
+  # ── reset ─────────────────────────────────────────────────────────────
+  reset)
+    if [ "$fail_cmd" = "reset" ]; then
+      echo "fatal: reset failed" >&2
+      exit 1
+    fi
+    printf 'Unstaged changes after reset:\n'
+    ;;
+
+  # ── show ──────────────────────────────────────────────────────────────
+  show)
+    if [ "$fail_cmd" = "show" ]; then
+      echo "fatal: show failed" >&2
+      exit 1
+    fi
+    printf 'commit abc1234567890\nAuthor: Test <test@example.com>\n\n    Initial commit\n'
+    ;;
+
+  # ── config ────────────────────────────────────────────────────────────
+  config)
+    # config is used internally; silently succeed
+    ;;
+
+  # ── remote ────────────────────────────────────────────────────────────
+  remote)
+    printf 'origin\n'
+    ;;
+
+  # ── restore ───────────────────────────────────────────────────────────
+  restore)
+    if [ "$fail_cmd" = "restore" ]; then
+      echo "error: restore failed" >&2
+      exit 1
+    fi
+    ;;
+
+  # ── clean ─────────────────────────────────────────────────────────────
+  clean)
+    if [ "$fail_cmd" = "clean" ]; then
+      echo "error: clean failed" >&2
+      exit 1
+    fi
+    ;;
+
+  # ── Unknown command ───────────────────────────────────────────────────
+  *)
+    echo "git stub: unknown command '$subcmd'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0
