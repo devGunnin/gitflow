@@ -997,6 +997,72 @@ T.run_suite("E2E: PR Review Flow", {
 
 	-- ── Review via command dispatch ───────────────────────────────────
 
+	-- ── Cursor restoration after inline comment ─────────────────────
+
+	["cursor returns to same diff line after inline comment"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local winid = review_panel.state.winid
+		T.assert_true(
+			winid ~= nil and vim.api.nvim_win_is_valid(winid),
+			"review window should be valid"
+		)
+
+		-- Find a diff line with line_context (has path + new_line)
+		local target_line = nil
+		local target_ctx = nil
+		for buf_line, ctx in pairs(review_panel.state.line_context) do
+			if ctx.path and ctx.new_line then
+				target_line = buf_line
+				target_ctx = ctx
+				break
+			end
+		end
+		T.assert_true(
+			target_line ~= nil,
+			"should find a diff line with path and new_line context"
+		)
+
+		-- Move cursor to the target diff line
+		vim.api.nvim_win_set_cursor(winid, { target_line, 0 })
+
+		-- Add an inline comment (patches input to auto-confirm)
+		with_temporary_patches({
+			{
+				table = input,
+				key = "prompt",
+				value = function(_, on_confirm)
+					on_confirm("Cursor restore test comment")
+				end,
+			},
+		}, function()
+			review_panel.inline_comment()
+			T.drain_jobs(5000)
+		end)
+
+		-- After re-render, cursor should be on a line with the
+		-- same path and new_line as before
+		local cursor_after =
+			vim.api.nvim_win_get_cursor(winid)[1]
+		local ctx_after =
+			review_panel.state.line_context[cursor_after] or {}
+		T.assert_equals(
+			ctx_after.path,
+			target_ctx.path,
+			"cursor should return to same file path after comment"
+		)
+		T.assert_equals(
+			ctx_after.new_line,
+			target_ctx.new_line,
+			"cursor should return to same new_line after comment"
+		)
+
+		cleanup_panels()
+	end,
+
+	-- ── Review via command dispatch ───────────────────────────────────
+
 	["pr review 42 approve via command dispatch"] = function()
 		local review_mode = nil
 
