@@ -141,4 +141,49 @@ function M.cherry_pick(sha, cb)
 	end)
 end
 
+---Build an auto-named branch: `<target>-<source>`.
+---@param target_branch string
+---@param source_branch string
+---@return string
+function M.auto_branch_name(target_branch, source_branch)
+	return ("%s-%s"):format(target_branch, source_branch)
+end
+
+---Create a new branch off target, cherry-pick a commit onto it.
+---Workflow: checkout -b <new_branch> <target> → cherry-pick <sha>.
+---@param sha string
+---@param target_branch string
+---@param source_branch string
+---@param opts table|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult|nil, branch_name: string)
+function M.create_branch_and_cherry_pick(
+	sha, target_branch, source_branch, opts, cb
+)
+	if not sha or sha == "" then
+		error(
+			"gitflow cherry-pick error:"
+				.. " create_branch_and_cherry_pick"
+				.. " requires a SHA",
+			2
+		)
+	end
+
+	local new_branch =
+		M.auto_branch_name(target_branch, source_branch)
+
+	git_branch.create(
+		new_branch, target_branch, opts or {},
+		function(create_err)
+			if create_err then
+				cb(create_err, nil, new_branch)
+				return
+			end
+
+			M.cherry_pick(sha, function(cp_err, cp_result)
+				cb(cp_err, cp_result, new_branch)
+			end)
+		end
+	)
+end
+
 return M

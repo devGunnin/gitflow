@@ -23,7 +23,7 @@ local status_panel = require("gitflow.panels.status")
 local M = {}
 local CP_FLOAT_TITLE = "Gitflow Cherry Pick"
 local CP_FLOAT_FOOTER_COMMITS =
-	"<CR> cherry-pick  1-9 position  b branches  r refresh  q close"
+	"<CR> pick  B into branch  b branches  r refresh  q close"
 local CP_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_cherry_pick_hl")
 
@@ -162,6 +162,10 @@ local function ensure_window(cfg)
 			M.select_by_position(i)
 		end, { buffer = bufnr, silent = true, nowait = true })
 	end
+
+	vim.keymap.set("n", "B", function()
+		M.cherry_pick_into_branch()
+	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "b", function()
 		M.show_branch_picker()
@@ -495,6 +499,165 @@ function M.select_by_position(position)
 		return
 	end
 	execute_cherry_pick(entry)
+end
+
+---Show target-branch picker, then create a new branch and cherry-pick.
+---@param entry GitflowCherryPickEntry
+local function show_target_branch_picker(entry)
+	local cfg = M.state.cfg
+	if not cfg then
+		return
+	end
+
+	local source = M.state.source_branch
+	if not source then
+		utils.notify(
+			"No source branch selected", vim.log.levels.WARN
+		)
+		return
+	end
+
+	local request_id = next_picker_request_id()
+	git_cherry_pick.list_branches({}, function(err, branches)
+		if not is_active_picker_request(request_id) then
+			return
+		end
+
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+
+		if not branches or #branches == 0 then
+			utils.notify(
+				"No target branches found",
+				vim.log.levels.WARN
+			)
+			return
+		end
+
+		local items = {}
+		for _, branch in ipairs(branches) do
+			items[#items + 1] = { name = branch }
+		end
+
+		vim.schedule(function()
+			if not is_active_picker_request(request_id) then
+				return
+			end
+
+			list_picker.open({
+				items = items,
+				title = "Select Target Branch",
+				multi_select = false,
+				on_submit = function(selected)
+					if not is_active_picker_request(
+						request_id
+					) then
+						return
+					end
+					if #selected == 0 then
+						return
+					end
+
+					next_picker_request_id()
+					local target = selected[1]
+					local new_branch =
+						git_cherry_pick.auto_branch_name(
+							target, source
+						)
+
+					utils.notify(
+						("Cherry-picking %s into"
+							.. " new branch %s..."):format(
+							entry.short_sha, new_branch
+						),
+						vim.log.levels.INFO
+					)
+
+					git_cherry_pick
+						.create_branch_and_cherry_pick(
+						entry.sha, target, source, {},
+						function(cp_err, _, branch_name)
+							if cp_err then
+								local output = cp_err
+								local parsed =
+									git_conflict
+									.parse_conflicted_paths_from_output(
+										output
+									)
+								if #parsed > 0 then
+									utils.notify(
+										("Cherry-pick on"
+											.. " %s has"
+											.. " conflicts"
+											):format(
+											branch_name
+										),
+										vim.log.levels
+											.ERROR
+									)
+									local cp =
+										require(
+											"gitflow"
+											.. ".panels"
+											.. ".conflict"
+										)
+									refresh_status_panel_if_open()
+									cp.open(cfg)
+								else
+									utils.notify(
+										cp_err,
+										vim.log.levels
+											.ERROR
+									)
+								end
+								return
+							end
+
+							utils.notify(
+								("Cherry-picked"
+									.. " %s into new"
+									.. " branch %s"
+									):format(
+									entry.short_sha,
+									branch_name
+								),
+								vim.log.levels.INFO
+							)
+							refresh_status_panel_if_open()
+							emit_post_operation()
+							M.refresh()
+						end
+					)
+				end,
+				on_cancel = function() end,
+			})
+		end)
+	end)
+end
+
+---Trigger cherry-pick into a new auto-named branch.
+---Prompts for a target branch, creates `<target>-<source>`,
+---cherry-picks the selected commit onto it.
+function M.cherry_pick_into_branch()
+	if M.state.stage ~= "commits" then
+		utils.notify(
+			"Select a source branch first",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	local entry = entry_under_cursor()
+	if not entry then
+		utils.notify(
+			"No commit selected", vim.log.levels.WARN
+		)
+		return
+	end
+
+	show_target_branch_picker(entry)
 end
 
 function M.close()

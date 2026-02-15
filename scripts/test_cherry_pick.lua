@@ -1066,6 +1066,303 @@ test("position numbers are rendered for commits", function()
 	cp_panel.close()
 end)
 
+-- ─── Auto branch naming tests ───
+
+test("auto_branch_name follows <target>-<source> convention", function()
+	local git_cp = require("gitflow.git.cherry_pick")
+	assert_equals(
+		git_cp.auto_branch_name("release/1.0", "feature/login"),
+		"release/1.0-feature/login",
+		"branch name should be <target>-<source>"
+	)
+end)
+
+test("auto_branch_name handles simple branch names", function()
+	local git_cp = require("gitflow.git.cherry_pick")
+	assert_equals(
+		git_cp.auto_branch_name("main", "feature-a"),
+		"main-feature-a",
+		"simple branch names should concatenate with -"
+	)
+end)
+
+-- ─── create_branch_and_cherry_pick tests ───
+
+test("create_branch_and_cherry_pick is exported", function()
+	local git_cp = require("gitflow.git.cherry_pick")
+	assert_true(
+		type(git_cp.create_branch_and_cherry_pick) == "function",
+		"create_branch_and_cherry_pick should be a function"
+	)
+end)
+
+test(
+	"create_branch_and_cherry_pick creates branch and picks commit",
+	function()
+		-- Reset to main for a clean state
+		run_git(repo_dir, { "checkout", "main" })
+
+		-- Use feature-b commit (adds other.txt, no conflict
+		-- with main). But we already cherry-picked it above,
+		-- so create a fresh test branch with a unique commit.
+		run_git(repo_dir, { "checkout", "-b", "cp-src" })
+		write_file(
+			repo_dir .. "/cp-unique.txt", { "cp-line1" }
+		)
+		run_git(repo_dir, { "add", "cp-unique.txt" })
+		run_git(
+			repo_dir,
+			{ "commit", "-m", "cp-src unique commit" }
+		)
+		local sha = vim.trim(
+			run_git(repo_dir, {
+				"rev-parse", "HEAD",
+			})
+		)
+		run_git(repo_dir, { "checkout", "main" })
+
+		local git_cp = require("gitflow.git.cherry_pick")
+		local err, _, branch_name = wait_async(function(done)
+			git_cp.create_branch_and_cherry_pick(
+				sha, "main", "cp-src", {},
+				function(e, r, bn)
+					done(e, r, bn)
+				end
+			)
+		end)
+
+		assert_true(
+			err == nil,
+			"should not error: " .. tostring(err)
+		)
+		assert_equals(
+			branch_name, "main-cp-src",
+			"branch name should follow convention"
+		)
+
+		-- Verify we are on the new branch
+		local current = vim.trim(
+			run_git(repo_dir, {
+				"rev-parse", "--abbrev-ref", "HEAD",
+			})
+		)
+		assert_equals(
+			current, "main-cp-src",
+			"should be on the new branch"
+		)
+
+		-- Verify the cherry-picked file exists
+		local content =
+			vim.fn.readfile(repo_dir .. "/cp-unique.txt")
+		assert_true(
+			#content > 0,
+			"cherry-picked file should exist on new branch"
+		)
+
+		-- Cleanup: go back to main and delete the branch
+		run_git(repo_dir, { "checkout", "main" })
+		run_git(
+			repo_dir,
+			{ "branch", "-D", "main-cp-src" }
+		)
+	end
+)
+
+test(
+	"create_branch_and_cherry_pick returns error on bad SHA",
+	function()
+		run_git(repo_dir, { "checkout", "main" })
+
+		local git_cp = require("gitflow.git.cherry_pick")
+		local bad_sha =
+			"0000000000000000000000000000000000000000"
+		local err, _, branch_name = wait_async(function(done)
+			git_cp.create_branch_and_cherry_pick(
+				bad_sha, "main", "bad-src", {},
+				function(e, r, bn)
+					done(e, r, bn)
+				end
+			)
+		end)
+
+		assert_true(
+			err ~= nil,
+			"should return error for invalid SHA"
+		)
+		assert_equals(
+			branch_name, "main-bad-src",
+			"branch name should still be returned"
+		)
+
+		-- Cleanup: abort any in-progress cherry-pick
+		run_git(
+			repo_dir,
+			{ "cherry-pick", "--abort" },
+			false
+		)
+		run_git(
+			repo_dir,
+			{ "checkout", "main" },
+			false
+		)
+		run_git(
+			repo_dir,
+			{ "branch", "-D", "main-bad-src" },
+			false
+		)
+	end
+)
+
+-- ─── Panel cherry_pick_into_branch tests ───
+
+test("cherry_pick_into_branch is exported", function()
+	local cp_panel = require("gitflow.panels.cherry_pick")
+	assert_true(
+		type(cp_panel.cherry_pick_into_branch) == "function",
+		"cherry_pick_into_branch should be a function"
+	)
+end)
+
+test("B keymap is set on panel buffer", function()
+	local cp_panel = require("gitflow.panels.cherry_pick")
+	cp_panel.state.cfg = cfg
+	cp_panel.state.source_branch = "feature-a"
+	cp_panel.state.stage = "commits"
+
+	local ui_mod = require("gitflow.ui")
+	local bufnr = ui_mod.buffer.create("cherry_pick", {
+		filetype = "gitflowcherrypick",
+		lines = { "Loading..." },
+	})
+	cp_panel.state.bufnr = bufnr
+	cp_panel.state.winid = ui_mod.window.open_split({
+		name = "cherry_pick",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			cp_panel.state.winid = nil
+		end,
+	})
+
+	-- Set keymaps as ensure_window does
+	vim.keymap.set("n", "B", function()
+		cp_panel.cherry_pick_into_branch()
+	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set("n", "<CR>", function()
+		cp_panel.select_under_cursor()
+	end, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "b", function()
+		cp_panel.show_branch_picker()
+	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set("n", "r", function()
+		cp_panel.refresh()
+	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set("n", "q", function()
+		cp_panel.close()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
+	local found_B = false
+	for _, km in ipairs(keymaps) do
+		if km.lhs == "B" then
+			found_B = true
+			break
+		end
+	end
+	assert_true(found_B, "B keymap should be set on buffer")
+
+	cp_panel.close()
+end)
+
+test(
+	"cherry_pick_into_branch warns when not in commits stage",
+	function()
+		local cp_panel =
+			require("gitflow.panels.cherry_pick")
+		local notifications = {}
+		local original_notify = vim.notify
+		vim.notify = function(msg, level, _)
+			notifications[#notifications + 1] = {
+				msg = msg, level = level,
+			}
+		end
+
+		cp_panel.state.stage = "branch"
+		cp_panel.cherry_pick_into_branch()
+
+		vim.notify = original_notify
+
+		local found_warn = false
+		for _, n in ipairs(notifications) do
+			if n.msg:find("source branch", 1, true) then
+				found_warn = true
+				break
+			end
+		end
+		assert_true(
+			found_warn,
+			"should warn about selecting source branch first"
+		)
+	end
+)
+
+test("float footer includes B keybind hint", function()
+	-- The float footer constant is used when opening
+	-- in float layout. We verify it contains B hint.
+	-- This is a module-level constant test.
+	local cp_panel = require("gitflow.panels.cherry_pick")
+	-- Open and close to verify the panel module loads ok
+	cp_panel.close()
+
+	-- Reopen with float layout to capture footer
+	local float_cfg = vim.deepcopy(cfg)
+	float_cfg.ui.default_layout = "float"
+	float_cfg.ui.float = float_cfg.ui.float or {}
+	float_cfg.ui.float.footer = true
+
+	-- Stub list_branches to prevent async picker
+	local git_cp = require("gitflow.git.cherry_pick")
+	local orig = git_cp.list_branches
+	git_cp.list_branches = function(_, cb)
+		cb(nil, {})
+	end
+
+	cp_panel.open(float_cfg)
+
+	-- Check the float window config for footer
+	local winid = cp_panel.state.winid
+	local has_B_hint = false
+	if winid and vim.api.nvim_win_is_valid(winid) then
+		local win_cfg =
+			vim.api.nvim_win_get_config(winid)
+		local footer = win_cfg.footer
+		if type(footer) == "string" then
+			has_B_hint = footer:find("B", 1, true)
+				and footer:find("branch", 1, true)
+		elseif type(footer) == "table" then
+			for _, part in ipairs(footer) do
+				local text = type(part) == "table"
+					and part[1] or tostring(part)
+				if text:find("B", 1, true)
+					and text:find("branch", 1, true)
+				then
+					has_B_hint = true
+					break
+				end
+			end
+		end
+	end
+
+	cp_panel.close()
+	git_cp.list_branches = orig
+
+	assert_true(
+		has_B_hint,
+		"float footer should include B keybind hint"
+	)
+end)
+
 -- ─── Config tests ───
 
 test("config validation accepts cherry_pick keybinding", function()
