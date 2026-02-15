@@ -546,8 +546,8 @@ issues_panel.create_interactive()
 wait_until(function()
 	local wins = vim.api.nvim_list_wins()
 	for _, winid in ipairs(wins) do
-		local ok, wc = pcall(vim.api.nvim_win_get_config, winid)
-		if ok and wc.relative and wc.relative ~= "" then
+		local ok_w, wconfig = pcall(vim.api.nvim_win_get_config, winid)
+		if ok_w and wconfig.relative and wconfig.relative ~= "" then
 			local wbuf = vim.api.nvim_win_get_buf(winid)
 			local ft = vim.api.nvim_get_option_value("filetype", { buf = wbuf })
 			if ft == "gitflow-form" then
@@ -558,23 +558,30 @@ wait_until(function()
 	return false
 end, "create_interactive should open form float", 3000)
 
+local create_form_buf = nil
 local create_form_lines = {}
 for _, winid in ipairs(vim.api.nvim_list_wins()) do
-	local ok, wc = pcall(vim.api.nvim_win_get_config, winid)
-	if ok and wc.relative and wc.relative ~= "" then
+	local ok_w, wconfig = pcall(vim.api.nvim_win_get_config, winid)
+	if ok_w and wconfig.relative and wconfig.relative ~= "" then
 		local wbuf = vim.api.nvim_win_get_buf(winid)
 		local ft = vim.api.nvim_get_option_value("filetype", { buf = wbuf })
 		if ft == "gitflow-form" then
+			create_form_buf = wbuf
 			create_form_lines = vim.api.nvim_buf_get_lines(wbuf, 0, -1, false)
-			vim.api.nvim_win_close(winid, true)
+			pcall(vim.api.nvim_win_close, winid, true)
 			break
 		end
 	end
 end
+assert_true(create_form_buf ~= nil, "issue create form buffer should exist")
 assert_true(#create_form_lines > 0, "issue create form should have content")
 assert_true(
 	find_line(create_form_lines, "Title") ~= nil,
 	"issue create form should have Title field"
+)
+assert_true(
+	find_line(create_form_lines, "Body") ~= nil,
+	"issue create form should have Body field"
 )
 assert_true(
 	find_line(create_form_lines, "Labels") ~= nil,

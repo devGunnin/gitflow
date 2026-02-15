@@ -46,6 +46,23 @@ assert_true(
 	"invalid highlight config error should mention highlights"
 )
 
+-- ── PALETTE validation ───────────────────────────────────────────
+assert_true(type(highlights.PALETTE) == "table", "highlights.PALETTE should exist")
+local expected_palette_keys = {
+	"accent_primary", "accent_secondary", "separator_fg",
+	"backdrop_bg", "dark_fg", "log_hash", "stash_ref",
+}
+for _, key in ipairs(expected_palette_keys) do
+	assert_true(
+		type(highlights.PALETTE[key]) == "string",
+		("PALETTE.%s should be a string"):format(key)
+	)
+	assert_true(
+		highlights.PALETTE[key]:match("^#%x%x%x%x%x%x$") ~= nil,
+		("PALETTE.%s should be a 6-digit hex color"):format(key)
+	)
+end
+
 for group, attrs in pairs(highlights.DEFAULT_GROUPS) do
 	local has_link = type(attrs.link) == "string"
 	local has_explicit = attrs.fg ~= nil or attrs.bg ~= nil
@@ -63,8 +80,73 @@ highlights.setup({})
 
 for group, attrs in pairs(highlights.DEFAULT_GROUPS) do
 	local hl = get_highlight(group)
-	assert_equals(hl.link, attrs.link, ("%s should link to default group"):format(group))
+	if attrs.link then
+		assert_equals(
+			hl.link, attrs.link,
+			("%s should link to %s"):format(group, attrs.link)
+		)
+	else
+		local resolved = get_highlight(group, { link = false })
+		if attrs.fg then
+			local expected_fg = tonumber(attrs.fg:gsub("^#", ""), 16)
+			assert_equals(
+				resolved.fg, expected_fg,
+				("%s should have fg=%s"):format(group, attrs.fg)
+			)
+		end
+		if attrs.bg then
+			local expected_bg = tonumber(attrs.bg:gsub("^#", ""), 16)
+			assert_equals(
+				resolved.bg, expected_bg,
+				("%s should have bg=%s"):format(group, attrs.bg)
+			)
+		end
+	end
 end
+
+-- ── Themed accent groups: attribute validation after setup ────────
+local accent_primary_num = tonumber(
+	highlights.PALETTE.accent_primary:gsub("^#", ""), 16
+)
+local separator_fg_num = tonumber(
+	highlights.PALETTE.separator_fg:gsub("^#", ""), 16
+)
+
+local border_hl = get_highlight("GitflowBorder", { link = false })
+assert_equals(
+	border_hl.fg, accent_primary_num,
+	"GitflowBorder fg should match PALETTE.accent_primary"
+)
+
+local title_hl = get_highlight("GitflowTitle", { link = false })
+assert_equals(
+	title_hl.fg, accent_primary_num,
+	"GitflowTitle fg should match PALETTE.accent_primary"
+)
+assert_true(title_hl.bold == true, "GitflowTitle should be bold after setup")
+
+local header_hl = get_highlight("GitflowHeader", { link = false })
+assert_equals(
+	header_hl.fg, accent_primary_num,
+	"GitflowHeader fg should match PALETTE.accent_primary"
+)
+assert_true(header_hl.bold == true, "GitflowHeader should be bold after setup")
+
+local footer_hl = get_highlight("GitflowFooter", { link = false })
+assert_equals(
+	footer_hl.fg, accent_primary_num,
+	"GitflowFooter fg should match PALETTE.accent_primary"
+)
+assert_true(
+	footer_hl.italic == true,
+	"GitflowFooter should be italic after setup"
+)
+
+local sep_hl = get_highlight("GitflowSeparator", { link = false })
+assert_equals(
+	sep_hl.fg, separator_fg_num,
+	"GitflowSeparator fg should match PALETTE.separator_fg"
+)
 
 vim.o.background = "light"
 highlights.setup({})
@@ -77,6 +159,14 @@ assert_equals(
 	get_highlight("GitflowPaletteSelection").link,
 	"PmenuSel",
 	"palette selection highlight should remain defined"
+)
+
+-- Light background should use light palette colors
+local light_sep = get_highlight("GitflowSeparator", { link = false })
+assert_equals(
+	light_sep.fg,
+	tonumber(highlights.PALETTE_LIGHT.separator_fg:sub(2), 16),
+	"light background should apply light separator color"
 )
 
 highlights.setup({
@@ -97,6 +187,23 @@ assert_equals(
 	get_highlight("GitflowAdded").link,
 	"DiffAdd",
 	"setup should be idempotent across calls"
+)
+
+-- ── Override round-trip for explicit-color group ──────────────────
+highlights.setup({ GitflowBorder = { fg = "#FF00FF" } })
+local border_override = get_highlight("GitflowBorder", { link = false })
+assert_equals(
+	border_override.fg,
+	tonumber("FF00FF", 16),
+	"GitflowBorder override should apply custom fg"
+)
+
+highlights.setup({})
+local border_restored = get_highlight("GitflowBorder", { link = false })
+assert_equals(
+	border_restored.fg,
+	accent_primary_num,
+	"GitflowBorder should restore PALETTE.accent_primary after reset"
 )
 
 local gh = require("gitflow.gh")

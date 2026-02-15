@@ -84,7 +84,11 @@ end
 local config = require("gitflow.config")
 local defaults = config.defaults()
 assert_equals(defaults.sync.pull_strategy, "merge", "default pull strategy should be merge")
-assert_equals(defaults.keybindings.palette, "<leader>go", "default palette keybinding should exist")
+assert_equals(
+	defaults.keybindings.palette,
+	"<leader>go",
+	"default palette keybinding should exist"
+)
 assert_deep_equals(
 	defaults.quick_actions.quick_commit,
 	{ "commit" },

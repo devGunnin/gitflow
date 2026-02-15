@@ -32,9 +32,15 @@ end
 
 local ui_render = require("gitflow.ui.render")
 
--- separator() returns correct default width
+-- separator() returns adaptive width (vim.o.columns when no window context)
 local sep = ui_render.separator()
-assert_equals(#sep, 50 * #"\u{2500}", "separator default should be 50 chars wide")
+local expected_default_width = vim.o.columns
+local char_len_check = #"\u{2500}"
+assert_equals(
+	#sep,
+	expected_default_width * char_len_check,
+	"separator default should adapt to vim.o.columns"
+)
 assert_true(sep:find("─") ~= nil, "separator should use box-drawing horizontal char")
 
 -- separator(n) returns correct custom width
@@ -45,6 +51,28 @@ assert_equals(#sep10, 10 * char_len, "separator(10) should repeat 10 times")
 -- separator(opts) uses fallback width when no window context is available
 local sep_opts = ui_render.separator({ fallback = 37 })
 assert_equals(#sep_opts, 37 * char_len, "separator(opts) should use fallback width")
+
+-- content_width() with no opts uses vim.o.columns as fallback
+local cw_default = ui_render.content_width()
+assert_equals(
+	cw_default,
+	vim.o.columns,
+	"content_width() with no opts should return vim.o.columns"
+)
+
+-- content_width() with explicit fallback honors that value
+local cw_explicit = ui_render.content_width({ fallback = 42 })
+assert_equals(cw_explicit, 42, "content_width() should honor explicit fallback")
+
+-- ui.separator_width config override takes precedence over vim.o.columns
+local cfg = require("gitflow.config")
+local saved = cfg.current.ui.separator_width
+cfg.current.ui.separator_width = 60
+local cw_cfg = ui_render.content_width()
+assert_equals(cw_cfg, 60, "content_width() should use ui.separator_width when set")
+local sep_cfg = ui_render.separator()
+assert_equals(#sep_cfg, 60 * char_len, "separator() should use ui.separator_width when set")
+cfg.current.ui.separator_width = saved
 
 -- title() returns text as-is
 assert_equals(ui_render.title("Gitflow Status"), "Gitflow Status", "title should return text as-is")
