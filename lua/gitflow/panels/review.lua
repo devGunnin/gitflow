@@ -814,6 +814,7 @@ function M.inline_comment()
 			hunk = context.hunk,
 			line = cursor_line,
 			body = body,
+			_anchor_new_line = context.new_line,
 		}
 		utils.notify(
 			("Inline comment queued (#%d)"
@@ -863,6 +864,7 @@ function M.inline_comment_visual()
 				start_line = start_line,
 				end_line = end_line,
 				body = body,
+				_anchor_new_line = start_ctx.new_line,
 			}
 			utils.notify(
 				("Inline comment queued (#%d, lines %d-%d)"
@@ -1008,6 +1010,90 @@ function M.prev_hunk()
 	jump_to_marker(M.state.hunk_markers, -1)
 end
 
+--- Capture the cursor's diff-context anchor before a re-render so that
+--- the cursor can be restored to the same logical diff line afterward.
+---@return table|nil anchor  {path, new_line, old_line} or nil
+local function capture_cursor_anchor()
+	if not M.state.winid
+		or not vim.api.nvim_win_is_valid(M.state.winid) then
+		return nil
+	end
+	local cursor_line =
+		vim.api.nvim_win_get_cursor(M.state.winid)[1]
+	local ctx = M.state.line_context[cursor_line]
+	if ctx then
+		return {
+			path = ctx.path,
+			new_line = ctx.new_line,
+			old_line = ctx.old_line,
+			buf_line = cursor_line,
+		}
+	end
+	-- Cursor is not on a diff line; save raw buffer line as fallback
+	return { buf_line = cursor_line }
+end
+
+--- Restore the cursor to the buffer line matching a previously captured
+--- diff-context anchor.  Falls back to the saved buffer line (clamped).
+---@param anchor table|nil
+local function restore_cursor_from_anchor(anchor)
+	if not anchor then
+		return
+	end
+	if not M.state.winid
+		or not vim.api.nvim_win_is_valid(M.state.winid) then
+		return
+	end
+	-- Try to find the same logical diff line in the new line_context
+	if anchor.path then
+		for buf_line, ctx in pairs(M.state.line_context) do
+			local match = ctx.path == anchor.path
+			if match and anchor.new_line and ctx.new_line then
+				match = ctx.new_line == anchor.new_line
+			elseif match and anchor.old_line and ctx.old_line then
+				match = ctx.old_line == anchor.old_line
+			else
+				match = false
+			end
+			if match then
+				pcall(vim.api.nvim_win_set_cursor,
+					M.state.winid, { buf_line, 0 })
+				return
+			end
+		end
+	end
+	-- Fallback: clamp original buffer line to new buffer length
+	if anchor.buf_line and M.state.bufnr
+		and vim.api.nvim_buf_is_valid(M.state.bufnr) then
+		local max_line =
+			vim.api.nvim_buf_line_count(M.state.bufnr)
+		local target = math.min(anchor.buf_line, max_line)
+		pcall(vim.api.nvim_win_set_cursor,
+			M.state.winid, { target, 0 })
+	end
+end
+
+--- After a re-render, update pending_comments buffer-line references
+--- so that extmark indicators land on the correct new buffer lines.
+local function update_pending_comment_lines()
+	for _, pc in ipairs(M.state.pending_comments) do
+		if pc.path then
+			for buf_line, ctx in pairs(M.state.line_context) do
+				local match = ctx.path == pc.path
+				if match and ctx.new_line then
+					-- Match by new_line from the original context
+					local orig_ctx_new = pc._anchor_new_line
+					if orig_ctx_new
+						and ctx.new_line == orig_ctx_new then
+						pc.line = buf_line
+						break
+					end
+				end
+			end
+		end
+	end
+end
+
 function M.re_render()
 	if not M.state.bufnr
 		or not vim.api.nvim_buf_is_valid(M.state.bufnr) then
@@ -1030,6 +1116,9 @@ function M.refresh()
 			collapsed_map[thread.id] = true
 		end
 	end
+
+	-- Capture cursor anchor before the buffer is rebuilt
+	local anchor = capture_cursor_anchor()
 
 	render_loading(
 		("Loading review for PR #%s..."):format(format_number(number))
@@ -1085,6 +1174,10 @@ function M.refresh()
 						title, diff_text or "",
 						files, hunks, comment_threads
 					)
+
+					-- Restore cursor to the same diff line
+					update_pending_comment_lines()
+					restore_cursor_from_anchor(anchor)
 				end
 			)
 		end)
