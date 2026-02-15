@@ -102,6 +102,7 @@ Default keybindings:
     log             gl                  <Plug>(GitflowLog)
     stash           gS                  <Plug>(GitflowStash)
     stash_push      gZ                  <Plug>(GitflowStashPush)
+    stash_pop       gX                  <Plug>(GitflowStashPop)
     branch          <leader>gb          <Plug>(GitflowBranch)
     issue           <leader>gI          <Plug>(GitflowIssue)
     pr              <leader>gR          <Plug>(GitflowPr)

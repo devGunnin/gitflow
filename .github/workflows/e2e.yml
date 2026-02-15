@@ -1,0 +1,73 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim: [stable, nightly]
+    name: E2E (Neovim ${{ matrix.neovim }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      - name: Verify Neovim version
+        run: nvim --version | head -3
+
+      - name: Make stubs executable
+        run: chmod +x tests/fixtures/bin/*
+
+      - name: Run E2E test suite
+        run: |
+          exit_code=0
+          for spec in tests/e2e_smoke_test.lua tests/e2e/*.lua; do
+            echo ""
+            echo "::group::$(basename "$spec")"
+            if nvim --headless -u tests/minimal_init.lua -l "$spec" 2>&1; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::FAILED: $spec"
+              exit_code=1
+            fi
+          done
+          exit $exit_code
+
+      - name: Run stage smoke tests
+        if: always()
+        run: |
+          passing_stages=(
+            scripts/test_stage1.lua
+            scripts/test_stage6.lua
+            scripts/test_stage8_highlights.lua
+            scripts/test_stage8_signs.lua
+            scripts/test_stage8_statusline.lua
+            scripts/test_stage8_windows.lua
+            scripts/test_stage10_forms.lua
+            scripts/test_stage10_palette.lua
+            scripts/test_unified_theme.lua
+          )
+          exit_code=0
+          for t in "${passing_stages[@]}"; do
+            echo ""
+            echo "::group::$(basename "$t")"
+            if nvim --headless -u NONE -l "$t" 2>&1; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::FAILED: $t"
+              exit_code=1
+            fi
+          done
+          exit $exit_code

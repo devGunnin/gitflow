@@ -23,10 +23,12 @@ Normal-mode mappings available in any buffer. Configured via
 | `gl` | Open log panel | `log` |
 | `gS` | Open stash list | `stash` |
 | `gZ` | Stash push (with prompt) | `stash_push` |
+| `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
 | `<leader>gI` | Open issue list | `issue` |
 | `<leader>gR` | Open PR list | `pr` |
 | `<leader>gL` | Open label list | `label` |
+| `gR` | Open reset panel | `reset` |
 | `<leader>gm` | Open conflict panel | `conflict` |
 | `<leader>gp` | Open command palette | `palette` |
 
@@ -79,6 +81,19 @@ Buffer-local bindings active in the log panel (`:Gitflow log`).
 | Key | Action |
 | --- | --- |
 | `<CR>` | Open diff for commit under cursor |
+| `r` | Refresh |
+| `q` | Close |
+
+## Reset Panel
+
+Buffer-local bindings active in the reset panel (`:Gitflow reset`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Select commit under cursor (prompts soft/hard) |
+| `1`-`9` | Select commit by position (prompts soft/hard) |
+| `S` | Soft reset to commit under cursor |
+| `H` | Hard reset to commit under cursor |
 | `r` | Refresh |
 | `q` | Close |
 

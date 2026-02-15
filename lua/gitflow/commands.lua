@@ -20,6 +20,7 @@ local label_panel = require("gitflow.panels.labels")
 local review_panel = require("gitflow.panels.review")
 local conflict_panel = require("gitflow.panels.conflict")
 local palette_panel = require("gitflow.panels.palette")
+local reset_panel = require("gitflow.panels.reset")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -969,6 +970,7 @@ local function register_builtin_subcommands(cfg)
 			label_panel.close()
 			review_panel.close()
 			conflict_panel.close()
+			reset_panel.close()
 			palette_panel.close()
 			return "Gitflow panels closed"
 		end,
@@ -1089,6 +1091,14 @@ local function register_builtin_subcommands(cfg)
 				end,
 			})
 			return "Log view opened"
+		end,
+	}
+
+	M.subcommands.reset = {
+		description = "Open git reset panel",
+		run = function()
+			reset_panel.open(cfg)
+			return "Reset panel opened"
 		end,
 	}
 
@@ -2129,10 +2139,12 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowLog)", "<Cmd>Gitflow log<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStash)", "<Cmd>Gitflow stash list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowStashPush)", "<Cmd>Gitflow stash push<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowStashPop)", "<Cmd>Gitflow stash pop<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowIssue)", "<Cmd>Gitflow issue list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPr)", "<Cmd>Gitflow pr list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPalette)", "<Cmd>Gitflow palette<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowReset)", "<Cmd>Gitflow reset<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 
@@ -2151,9 +2163,11 @@ function M.setup(cfg)
 		log = "<Plug>(GitflowLog)",
 		stash = "<Plug>(GitflowStash)",
 		stash_push = "<Plug>(GitflowStashPush)",
+		stash_pop = "<Plug>(GitflowStashPop)",
 		issue = "<Plug>(GitflowIssue)",
 		pr = "<Plug>(GitflowPr)",
 		label = "<Plug>(GitflowLabel)",
+		reset = "<Plug>(GitflowReset)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 	}

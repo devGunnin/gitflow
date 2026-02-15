@@ -100,6 +100,7 @@ local registry = {
 		issue = { nerd = NF.issue_open, ascii = "#" },
 		pr = { nerd = NF.pr_open, ascii = "!" },
 		review = { nerd = NF.review_commented, ascii = "R" },
+		reset = { nerd = NF.commit, ascii = "R" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
