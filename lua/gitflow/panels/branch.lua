@@ -122,7 +122,7 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "R", function()
-		M.refresh()
+		M.refresh_with_fetch()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "f", function()
@@ -376,18 +376,29 @@ function M.refresh_graph()
 	end)
 end
 
-function M.fetch_remotes()
+---@param show_success_message boolean
+local function fetch_then_refresh(show_success_message)
 	git_branch.fetch(nil, {}, function(err, result)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		utils.notify(
-			result_message(result, "Fetched remote branches"),
-			vim.log.levels.INFO
-		)
+		if show_success_message then
+			utils.notify(
+				result_message(result, "Fetched remote branches"),
+				vim.log.levels.INFO
+			)
+		end
 		M.refresh()
 	end)
+end
+
+function M.refresh_with_fetch()
+	fetch_then_refresh(false)
+end
+
+function M.fetch_remotes()
+	fetch_then_refresh(true)
 end
 
 function M.toggle_view()

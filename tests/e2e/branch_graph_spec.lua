@@ -14,6 +14,36 @@ local function close_panel()
 	end)
 end
 
+---@param fn fun(log_path: string)
+local function with_temp_git_log(fn)
+	local log_path = vim.fn.tempname()
+	local previous = vim.env.GITFLOW_GIT_LOG
+	vim.env.GITFLOW_GIT_LOG = log_path
+
+	local ok, err = xpcall(function()
+		fn(log_path)
+	end, debug.traceback)
+
+	vim.env.GITFLOW_GIT_LOG = previous
+	pcall(vim.fn.delete, log_path)
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
+---@param lines string[]
+---@param needle string
+---@return integer|nil
+local function find_line_index(lines, needle)
+	for i, line in ipairs(lines) do
+		if line:find(needle, 1, true) then
+			return i
+		end
+	end
+	return nil
+end
+
 T.run_suite("Branch Graph Visualization", {
 
 	-- ── Module loading ──────────────────────────────────────────────────
@@ -420,6 +450,55 @@ T.run_suite("Branch Graph Visualization", {
 		)
 
 		close_panel()
+	end,
+
+	["R refresh fetches before graph redraw"] = function()
+		with_temp_git_log(function(log_path)
+			close_panel()
+			branch_panel.open(cfg)
+			T.drain_jobs(3000)
+
+			branch_panel.toggle_view()
+			T.drain_jobs(3000)
+
+			local winid = branch_panel.state.winid
+			T.assert_true(
+				winid ~= nil and vim.api.nvim_win_is_valid(winid),
+				"branch panel window should be valid"
+			)
+
+			local before_lines = T.read_file(log_path)
+			vim.api.nvim_set_current_win(winid)
+			T.feedkeys("R")
+			T.drain_jobs(3000)
+
+			local after_lines = T.read_file(log_path)
+			local new_lines = {}
+			for i = #before_lines + 1, #after_lines do
+				new_lines[#new_lines + 1] = after_lines[i]
+			end
+
+			local fetch_line = find_line_index(new_lines, "fetch --prune --all")
+			local graph_line = find_line_index(
+				new_lines,
+				"log --all --graph --oneline --decorate=short -n100"
+			)
+
+			T.assert_true(
+				fetch_line ~= nil,
+				"R refresh should run git fetch"
+			)
+			T.assert_true(
+				graph_line ~= nil,
+				"R refresh should redraw graph"
+			)
+			T.assert_true(
+				fetch_line < graph_line,
+				"R refresh should fetch before redrawing graph"
+			)
+
+			close_panel()
+		end)
 	end,
 
 	-- ── State reset on close ────────────────────────────────────────────
