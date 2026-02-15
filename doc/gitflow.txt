@@ -346,19 +346,22 @@ not merged). >lua
                                                     *gitflow-highlights-palette*
 Accent Color Palette ~
 
-Gitflow ships with a built-in accent palette used by window chrome, diff
-headers, and command palette groups. The palette values are defined in
-`lua/gitflow/highlights.lua` as `PALETTE` and can be referenced from
-user highlight overrides:
+Gitflow uses a background-dependent built-in accent palette selected by
+`vim.o.background`:
+  - `dark` background -> `PALETTE_DARK`
+  - `light` background -> `PALETTE_LIGHT`
 
-    Name                Hex         Used by ~
-    accent_primary      #56B6C2     Border, Title, Header, Footer, icons
-    accent_secondary    #DCA561     Palette header bar background
-    separator_fg        #3E4452     Separator lines
-    backdrop_bg         #000000     Palette backdrop overlay
-    dark_fg             #222222     Palette header bar text
-    log_hash            #E5C07B     Log commit SHA, diff file headers
-    stash_ref           #C678DD     Stash ref, diff hunk headers
+Palette values are defined in `lua/gitflow/highlights.lua` and can be
+referenced from user highlight overrides:
+
+    Name                Dark         Light        Used by ~
+    accent_primary      #56B6C2      #0E7490      Border, Title, Header, Footer, icons
+    accent_secondary    #DCA561      #B5651D      Palette header bar background
+    separator_fg        #3E4452      #C8CCD4      Separator lines
+    backdrop_bg         #000000      #E8E8E8      Palette backdrop overlay
+    dark_fg             #222222      #222222      Palette header bar text
+    log_hash            #E5C07B      #986801      Log commit SHA, diff file headers
+    stash_ref           #C678DD      #A626A4      Stash ref, diff hunk headers
 
 To change the accent colors for all related groups, override each
 group individually: >lua
@@ -412,7 +415,8 @@ Link-based groups (track your colorscheme automatically):
     GitflowResetMergeBase           WarningMsg
     GitflowFormActiveField          CursorLine
 
-Accent-colored groups (use hardcoded hex colors from the palette):
+Accent-colored groups (dark-background defaults shown below; light mode uses
+`PALETTE_LIGHT` values from the table above):
 
     Group                       Default Attrs ~
     GitflowBorder               fg=#56B6C2
