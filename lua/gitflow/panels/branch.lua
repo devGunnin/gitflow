@@ -214,96 +214,293 @@ local function render_list(entries)
 	})
 end
 
--- ── Graph colors ────────────────────────────────────────────────────
--- Cycle through colors for graph columns to distinguish branches.
-local GRAPH_COLORS = {
-	"GitflowGraphLine",
-	"GitflowBranchCurrent",
-	"GitflowDiffHunkHeader",
-	"GitflowLogHash",
-	"GitflowStashRef",
-	"GitflowAdded",
-	"GitflowRemoved",
+-- ── Graph rendering ──────────────────────────────────────────────────
+local GRAPH_NODE = "\u{25CF}" -- ●
+
+local GRAPH_LANE_GROUPS = {
+	"GitflowGraphBranch1",
+	"GitflowGraphBranch2",
+	"GitflowGraphBranch3",
+	"GitflowGraphBranch4",
+	"GitflowGraphBranch5",
+	"GitflowGraphBranch6",
+	"GitflowGraphBranch7",
+	"GitflowGraphBranch8",
 }
 
----Apply per-segment highlights to graph lines using extmarks.
----@param bufnr integer
----@param lines string[]
+---@class GitflowGraphBadge
+---@field text string
+---@field kind "ref"|"tag"
+---@field is_current boolean
+
+---@class GitflowGraphBadgeRange
+---@field text string
+---@field kind "ref"|"tag"
+---@field is_current boolean
+---@field start_col integer
+---@field end_col integer
+
+---@class GitflowGraphRenderRow
+---@field line string
+---@field lane_text string
+---@field lane_start integer
+---@field hash_start integer|nil
+---@field hash_end integer|nil
+---@field subject_start integer|nil
+---@field subject_end integer|nil
+---@field badges GitflowGraphBadgeRange[]
+
+---@param graph string
+---@return string
+local function normalize_graph_text(graph)
+	local line = graph or ""
+	line = line:gsub("%*", GRAPH_NODE)
+	line = line:gsub("|", "\u{2502}") -- │
+	line = line:gsub("/", "\u{2571}") -- ╱
+	line = line:gsub("\\", "\u{2572}") -- ╲
+	line = line:gsub("_", "\u{2500}") -- ─
+	line = line:gsub("-", "\u{2500}") -- ─
+	line = line:gsub("%.", "\u{00B7}") -- ·
+	return line
+end
+
+---@param text string
+---@param width integer
+---@return string
+local function pad_graph_text(text, width)
+	local missing = width - vim.fn.strchars(text)
+	if missing <= 0 then
+		return text
+	end
+	return text .. string.rep(" ", missing)
+end
+
+---@param decoration string|nil
+---@param current_branch string|nil
+---@return GitflowGraphBadge[]
+local function parse_graph_badges(decoration, current_branch)
+	local badges = {}
+	if not decoration or decoration == "" then
+		return badges
+	end
+
+	---@type table<string, GitflowGraphBadge>
+	local by_text = {}
+
+	for _, token in ipairs(vim.split(decoration, ",", { trimempty = true })) do
+		local raw = vim.trim(token)
+		if raw ~= "" then
+			local text = raw
+			local is_current = false
+			local head_target = raw:match("^HEAD%s*%-%>%s*(.+)$")
+			if head_target then
+				text = vim.trim(head_target)
+				is_current = true
+			elseif current_branch and raw == current_branch then
+				is_current = true
+			end
+
+			if text ~= "" then
+				local existing = by_text[text]
+				if existing then
+					existing.is_current = existing.is_current or is_current
+				else
+					local badge = {
+						text = text,
+						kind = text:find("^tag:%s*") and "tag" or "ref",
+						is_current = is_current,
+					}
+					badges[#badges + 1] = badge
+					by_text[text] = badge
+				end
+			end
+		end
+	end
+
+	return badges
+end
+
+---@param badge GitflowGraphBadge
+---@return string
+local function badge_text(badge)
+	if badge.is_current then
+		return ("[current:%s]"):format(badge.text)
+	end
+	return ("[%s]"):format(badge.text)
+end
+
+---@param text string
+---@return string
+local function lane_group_for_text(text)
+	local sum = 0
+	for i = 1, #text do
+		sum = (sum + text:byte(i)) % #GRAPH_LANE_GROUPS
+	end
+	return GRAPH_LANE_GROUPS[(sum % #GRAPH_LANE_GROUPS) + 1]
+end
+
+---@param lane_index integer
+---@return string
+local function lane_group_for_column(lane_index)
+	return GRAPH_LANE_GROUPS[((lane_index - 1) % #GRAPH_LANE_GROUPS) + 1]
+end
+
+---@param text string
+---@param char_index integer
+---@return integer
+local function str_byte_index(text, char_index)
+	local ok, idx = pcall(vim.str_byteindex, text, char_index)
+	if ok and type(idx) == "number" then
+		return idx
+	end
+	return char_index
+end
+
 ---@param graph_entries GitflowGraphLine[]
 ---@param current_branch string|nil
-local function apply_graph_highlights(bufnr, lines, graph_entries, current_branch)
+---@return GitflowGraphRenderRow[], integer
+local function build_graph_rows(graph_entries, current_branch)
+	local lane_width = 8
+	for _, entry in ipairs(graph_entries) do
+		local lane = normalize_graph_text(entry.graph or "")
+		lane_width = math.max(lane_width, vim.fn.strchars(lane))
+	end
+
+	---@type GitflowGraphRenderRow[]
+	local rows = {}
+	for _, entry in ipairs(graph_entries) do
+		local lane = normalize_graph_text(entry.graph or "")
+		if lane == "" then
+			lane = " "
+		end
+		local lane_text = pad_graph_text(lane, lane_width)
+		local line = "  " .. lane_text
+		local row = {
+			line = "",
+			lane_text = lane_text,
+			lane_start = 2,
+			hash_start = nil,
+			hash_end = nil,
+			subject_start = nil,
+			subject_end = nil,
+			badges = {},
+		}
+
+		if entry.hash and entry.hash ~= "" then
+			line = line .. "  " .. entry.hash
+			row.hash_start = #line - #entry.hash
+			row.hash_end = #line
+		end
+
+		local subject = entry.subject and vim.trim(entry.subject) or ""
+		if subject ~= "" then
+			line = line .. "  " .. subject
+			row.subject_start = #line - #subject
+			row.subject_end = #line
+		end
+
+		local badges = parse_graph_badges(entry.decoration, current_branch)
+		if #badges > 0 then
+			line = line .. "  "
+			for idx, badge in ipairs(badges) do
+				if idx > 1 then
+					line = line .. " "
+				end
+				local label = badge_text(badge)
+				local start_col = #line
+				line = line .. label
+				row.badges[#row.badges + 1] = {
+					text = badge.text,
+					kind = badge.kind,
+					is_current = badge.is_current,
+					start_col = start_col,
+					end_col = #line,
+				}
+			end
+		end
+
+		row.line = line
+		rows[#rows + 1] = row
+	end
+
+	return rows, lane_width
+end
+
+---Apply per-segment highlights to flowchart graph lines.
+---@param bufnr integer
+---@param rows GitflowGraphRenderRow[]
+---@param first_row_line integer
+local function apply_graph_highlights(bufnr, rows, first_row_line)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
 
 	vim.api.nvim_buf_clear_namespace(bufnr, GRAPH_HIGHLIGHT_NS, 0, -1)
 
-	-- Determine the header offset: lines before actual graph data starts
-	local header_offset = #lines - #graph_entries
-
-	for i, entry in ipairs(graph_entries) do
-		local line_idx = header_offset + i - 1
-		if line_idx < 0 or line_idx >= #lines then
-			goto continue
+	for i, row in ipairs(rows) do
+		local line_idx = first_row_line + i - 2
+		local lane_chars = vim.fn.strchars(row.lane_text)
+		for lane_idx = 1, lane_chars do
+			local ch = vim.fn.strcharpart(row.lane_text, lane_idx - 1, 1)
+			if ch ~= " " then
+				local start_col = row.lane_start
+					+ str_byte_index(row.lane_text, lane_idx - 1)
+				local end_col = row.lane_start
+					+ str_byte_index(row.lane_text, lane_idx)
+				local hl_group = ch == GRAPH_NODE
+					and "GitflowGraphNode"
+					or lane_group_for_column(lane_idx)
+				vim.api.nvim_buf_add_highlight(
+					bufnr,
+					GRAPH_HIGHLIGHT_NS,
+					hl_group,
+					line_idx,
+					start_col,
+					end_col
+				)
+			end
 		end
 
-		local raw = lines[line_idx + 1]
-		if not raw then
-			goto continue
-		end
-
-		-- Highlight graph prefix characters with cycling colors
-		local graph_len = #entry.graph
-		if graph_len > 0 then
-			-- Determine color based on which "column" the commit marker * is in
-			local star_col = entry.graph:find("%*")
-			local color_idx = star_col
-				and ((star_col - 1) % #GRAPH_COLORS) + 1
-				or 1
+		if row.hash_start and row.hash_end then
 			vim.api.nvim_buf_add_highlight(
-				bufnr, GRAPH_HIGHLIGHT_NS,
-				GRAPH_COLORS[color_idx],
-				line_idx, 0, graph_len
+				bufnr,
+				GRAPH_HIGHLIGHT_NS,
+				"GitflowGraphHash",
+				line_idx,
+				row.hash_start,
+				row.hash_end
 			)
 		end
 
-		-- Highlight commit hash
-		if entry.hash then
-			local hash_start = raw:find(entry.hash, graph_len + 1, true)
-			if hash_start then
-				vim.api.nvim_buf_add_highlight(
-					bufnr, GRAPH_HIGHLIGHT_NS,
-					"GitflowGraphHash",
-					line_idx,
-					hash_start - 1,
-					hash_start - 1 + #entry.hash
-				)
-			end
+		if row.subject_start and row.subject_end then
+			vim.api.nvim_buf_add_highlight(
+				bufnr,
+				GRAPH_HIGHLIGHT_NS,
+				"GitflowGraphSubject",
+				line_idx,
+				row.subject_start,
+				row.subject_end
+			)
 		end
 
-		-- Highlight decorations (branch/tag names)
-		if entry.decoration and entry.decoration ~= "" then
-			local deco_pattern = "(" .. vim.pesc(entry.decoration) .. ")"
-			local deco_start = raw:find(deco_pattern, 1, true)
-			if deco_start then
-				-- Check if current branch appears in decoration
-				local hl_group = "GitflowGraphDecoration"
-				if current_branch
-					and entry.decoration:find(current_branch, 1, true)
-				then
-					hl_group = "GitflowGraphCurrent"
-				end
-				vim.api.nvim_buf_add_highlight(
-					bufnr, GRAPH_HIGHLIGHT_NS,
-					hl_group,
-					line_idx,
-					deco_start - 1,
-					deco_start - 1 + #entry.decoration + 2 -- include parens
-				)
+		for _, badge in ipairs(row.badges) do
+			local hl_group
+			if badge.is_current then
+				hl_group = "GitflowGraphCurrent"
+			elseif badge.kind == "tag" then
+				hl_group = "GitflowGraphDecoration"
+			else
+				hl_group = lane_group_for_text(badge.text)
 			end
+			vim.api.nvim_buf_add_highlight(
+				bufnr,
+				GRAPH_HIGHLIGHT_NS,
+				hl_group,
+				line_idx,
+				badge.start_col,
+				badge.end_col
+			)
 		end
-
-		::continue::
 	end
 end
 
@@ -315,10 +512,20 @@ local function render_graph(graph_entries, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Branch Graph", render_opts)
 
-	for _, entry in ipairs(graph_entries) do
-		lines[#lines + 1] = entry.raw
+	local rows, lane_width = build_graph_rows(graph_entries, current_branch)
+	local lines = ui_render.panel_header("Branch Flowchart", render_opts)
+	local column_line = #lines + 1
+	local lane_header = pad_graph_text("Flow", lane_width)
+	lines[#lines + 1] = ("  %s  Commit    Message / Branches"):format(lane_header)
+	lines[#lines + 1] = ui_render.separator(render_opts)
+
+	local first_row_line = #lines + 1
+	for _, row in ipairs(rows) do
+		lines[#lines + 1] = row.line
+	end
+	if #rows == 0 then
+		lines[#lines + 1] = ui_render.empty("No commits to visualize")
 	end
 
 	ui.buffer.update("branch", lines)
@@ -329,11 +536,15 @@ local function render_graph(graph_entries, current_branch)
 		return
 	end
 
-	-- Apply standard panel highlights for header/separator
-	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {})
+	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {
+		entry_highlights = {
+			[column_line] = "GitflowHeader",
+		},
+	})
 
-	-- Apply graph-specific highlights
-	apply_graph_highlights(bufnr, lines, graph_entries, current_branch)
+	if #rows > 0 then
+		apply_graph_highlights(bufnr, rows, first_row_line)
+	end
 end
 
 ---@return GitflowBranchEntry|nil

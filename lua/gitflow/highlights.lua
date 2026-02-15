@@ -81,6 +81,15 @@ M.DEFAULT_GROUPS = {
 	GitflowGraphDecoration = { fg = "#C678DD", bold = true },
 	GitflowGraphCurrent = { fg = "#56B6C2", bold = true },
 	GitflowGraphSubject = { link = "Normal" },
+	GitflowGraphNode = { fg = "#DCA561", bold = true },
+	GitflowGraphBranch1 = { fg = "#56B6C2" },
+	GitflowGraphBranch2 = { fg = "#DCA561" },
+	GitflowGraphBranch3 = { fg = "#98C379" },
+	GitflowGraphBranch4 = { fg = "#E06C75" },
+	GitflowGraphBranch5 = { fg = "#61AFEF" },
+	GitflowGraphBranch6 = { fg = "#C678DD" },
+	GitflowGraphBranch7 = { fg = "#E5C07B" },
+	GitflowGraphBranch8 = { fg = "#7F848E" },
 }
 
 ---Create or retrieve a dynamic highlight group for a label hex color.

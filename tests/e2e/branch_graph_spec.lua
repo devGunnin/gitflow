@@ -264,7 +264,7 @@ T.run_suite("Branch Graph Visualization", {
 
 	-- ── Graph view rendering ────────────────────────────────────────────
 
-	["graph view renders commit graph lines"] = function()
+	["graph view renders structured flowchart lines"] = function()
 		close_panel()
 		branch_panel.open(cfg)
 		T.drain_jobs(3000)
@@ -279,23 +279,47 @@ T.run_suite("Branch Graph Visualization", {
 		)
 
 		local lines = T.buf_lines(bufnr)
-		-- Graph view should contain commit hashes and graph chars
-		local has_graph_char = false
+		local has_structured_header = false
+		local has_node_and_hash = false
+		local has_badges = false
+		local has_raw_parenthesized_refs = false
 		for _, line in ipairs(lines) do
-			if line:find("*", 1, true) and line:find("%x%x%x%x") then
-				has_graph_char = true
-				break
+			if line:find("Flow", 1, true) and line:find("Commit", 1, true) then
+				has_structured_header = true
+			end
+			if line:find("\u{25CF}", 1, true) and line:find("abc1234", 1, true) then
+				has_node_and_hash = true
+			end
+			if line:find("[current:main]", 1, true)
+				or line:find("[feature/test]", 1, true)
+			then
+				has_badges = true
+			end
+			if line:find("(HEAD ->", 1, true) then
+				has_raw_parenthesized_refs = true
 			end
 		end
 		T.assert_true(
-			has_graph_char,
-			"graph view should contain lines with * and commit hashes"
+			has_structured_header,
+			"graph view should contain flowchart column headers"
+		)
+		T.assert_true(
+			has_node_and_hash,
+			"graph view should render unicode nodes with commit hashes"
+		)
+		T.assert_true(
+			has_badges,
+			"graph view should render branch labels as badges"
+		)
+		T.assert_false(
+			has_raw_parenthesized_refs,
+			"graph view should not render raw parenthesized refs"
 		)
 
 		close_panel()
 	end,
 
-	["graph view shows Branch Graph title"] = function()
+	["graph view shows Branch Flowchart title"] = function()
 		close_panel()
 		branch_panel.open(cfg)
 		T.drain_jobs(3000)
@@ -306,8 +330,8 @@ T.run_suite("Branch Graph Visualization", {
 		local bufnr = ui.buffer.get("branch")
 		local lines = T.buf_lines(bufnr)
 		T.assert_true(
-			T.find_line(lines, "Branch Graph") ~= nil,
-			"graph view should have Branch Graph title"
+			T.find_line(lines, "Branch Flowchart") ~= nil,
+			"graph view should have Branch Flowchart title"
 		)
 
 		close_panel()
@@ -324,19 +348,19 @@ T.run_suite("Branch Graph Visualization", {
 		local bufnr = ui.buffer.get("branch")
 		local lines = T.buf_lines(bufnr)
 
-		-- Stub returns lines with (HEAD -> main), (feature/test)
+		-- Stub returns refs for main and feature/test.
 		local has_main = false
 		local has_feature = false
 		for _, line in ipairs(lines) do
-			if line:find("main", 1, true) then
+			if line:find("[current:main]", 1, true) then
 				has_main = true
 			end
-			if line:find("feature/test", 1, true) then
+			if line:find("[feature/test]", 1, true) then
 				has_feature = true
 			end
 		end
-		T.assert_true(has_main, "graph should show main branch")
-		T.assert_true(has_feature, "graph should show feature/test branch")
+		T.assert_true(has_main, "graph should show current branch badge")
+		T.assert_true(has_feature, "graph should show feature branch badge")
 
 		close_panel()
 	end,
@@ -363,6 +387,14 @@ T.run_suite("Branch Graph Visualization", {
 		T.assert_true(
 			T.hl_exists("GitflowGraphSubject"),
 			"GitflowGraphSubject should be defined"
+		)
+		T.assert_true(
+			T.hl_exists("GitflowGraphNode"),
+			"GitflowGraphNode should be defined"
+		)
+		T.assert_true(
+			T.hl_exists("GitflowGraphBranch1"),
+			"GitflowGraphBranch1 should be defined"
 		)
 	end,
 
@@ -439,7 +471,7 @@ T.run_suite("Branch Graph Visualization", {
 		local lines = T.buf_lines(bufnr)
 		local has_graph = false
 		for _, line in ipairs(lines) do
-			if line:find("*", 1, true) then
+			if line:find("\u{25CF}", 1, true) then
 				has_graph = true
 				break
 			end
