@@ -1092,6 +1092,130 @@ T.run_suite("E2E: PR Review Flow", {
 
 		cleanup_panels()
 	end,
+
+	-- ── Close guard: q with no pending comments closes ───────────
+
+	["q with no pending comments closes immediately"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		T.assert_true(
+			review_panel.is_open(),
+			"review panel should be open"
+		)
+		T.assert_equals(
+			#review_panel.state.pending_comments,
+			0,
+			"should start with no pending comments"
+		)
+
+		review_panel.close_with_guard()
+
+		T.assert_false(
+			review_panel.is_open(),
+			"review panel should close without confirmation"
+		)
+
+		cleanup_panels()
+	end,
+
+	-- ── Close guard: q with pending comments shows confirm ──────
+
+	["q with pending comments shows confirmation"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		-- Add a pending comment manually
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				hunk = "@@ -10,7 +10,9 @@",
+				line = 5,
+				body = "Draft comment",
+			},
+		}
+
+		-- Stub confirm to return true (user confirms discard)
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					T.assert_contains(
+						msg,
+						"1 comment",
+						"confirm message should mention count"
+					)
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_false(
+			review_panel.is_open(),
+			"review panel should close after user confirms"
+		)
+
+		cleanup_panels()
+	end,
+
+	-- ── Close guard: cancel keeps panel open ────────────────────
+
+	["q with pending comments cancelled keeps panel"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		-- Add two pending comments
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				hunk = "@@ -10,7 +10,9 @@",
+				line = 5,
+				body = "First draft",
+			},
+			{
+				id = 2,
+				path = "lua/gitflow/config.lua",
+				hunk = "@@ -1,3 +1,4 @@",
+				line = 10,
+				body = "Second draft",
+			},
+		}
+
+		-- Stub confirm to return false (user cancels)
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					T.assert_contains(
+						msg,
+						"2 comments",
+						"confirm should mention 2 comments"
+					)
+					return false, 2
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(
+			review_panel.is_open(),
+			"review panel should stay open after cancel"
+		)
+		T.assert_equals(
+			#review_panel.state.pending_comments,
+			2,
+			"pending comments should be preserved"
+		)
+
+		cleanup_panels()
+	end,
 })
 
 print("E2E PR review flow tests passed")

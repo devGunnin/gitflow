@@ -188,7 +188,7 @@ Buffer-local bindings active in the review panel (`:Gitflow pr review`).
 | `<leader>t` | Toggle thread collapse/expand |
 | `<leader>b` | Back to PR view |
 | `r` | Refresh |
-| `q` | Close |
+| `q` | Close (confirms if pending comments exist) |
 
 ## Conflict Resolution
 
