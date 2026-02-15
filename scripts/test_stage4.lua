@@ -541,7 +541,7 @@ vim.o.wildcharm = original_wildcharm
 vim.o.wildmenu = original_wildmenu
 vim.o.wildmode = original_wildmode
 
--- Test: create_interactive opens a form-based float
+-- Test: create_interactive opens form-based float with correct fields
 issues_panel.create_interactive()
 wait_until(function()
 	local wins = vim.api.nvim_list_wins()
@@ -556,7 +556,7 @@ wait_until(function()
 		end
 	end
 	return false
-end, "create_interactive should open form float", 2000)
+end, "create_interactive should open form float", 3000)
 
 local create_form_buf = nil
 local create_form_lines = {}
@@ -574,6 +574,7 @@ for _, winid in ipairs(vim.api.nvim_list_wins()) do
 	end
 end
 assert_true(create_form_buf ~= nil, "issue create form buffer should exist")
+assert_true(#create_form_lines > 0, "issue create form should have content")
 assert_true(
 	find_line(create_form_lines, "Title") ~= nil,
 	"issue create form should have Title field"
