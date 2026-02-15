@@ -331,20 +331,61 @@ Command palette ~
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*
 
-All highlight groups link to built-in Neovim groups by default. Override
-any group via `setup({ highlights = { ... } })`: >lua
+Override any highlight group via `setup({ highlights = { ... } })`.
+Overrides fully replace the default definition for that group (they are
+not merged). >lua
     require("gitflow").setup({
       highlights = {
         GitflowAdded = { fg = "#00ff00" },
         GitflowTitle = { bold = true, fg = "#ffffff" },
+        GitflowBorder = { link = "FloatBorder" },
       },
     })
 <
+
+                                                    *gitflow-highlights-palette*
+Accent Color Palette ~
+
+Gitflow uses a background-dependent built-in accent palette selected by
+`vim.o.background`:
+  - `dark` background -> `PALETTE_DARK`
+  - `light` background -> `PALETTE_LIGHT`
+
+Palette values are defined in `lua/gitflow/highlights.lua` and can be
+referenced from user highlight overrides:
+
+    Name                Dark         Light        Used by ~
+    accent_primary      #56B6C2      #0E7490      Border, Title, Header, Footer, icons
+    accent_secondary    #DCA561      #B5651D      Palette header bar background
+    separator_fg        #3E4452      #C8CCD4      Separator lines
+    backdrop_bg         #000000      #E8E8E8      Palette backdrop overlay
+    dark_fg             #222222      #222222      Palette header bar text
+    log_hash            #E5C07B      #986801      Log commit SHA, diff file headers
+    stash_ref           #C678DD      #A626A4      Stash ref, diff hunk headers
+
+To change the accent colors for all related groups, override each
+group individually: >lua
+    -- Example: green accent theme
+    require("gitflow").setup({
+      highlights = {
+        GitflowBorder  = { fg = "#98C379" },
+        GitflowTitle   = { fg = "#98C379", bold = true },
+        GitflowHeader  = { fg = "#98C379", bold = true },
+        GitflowFooter  = { fg = "#98C379", italic = true },
+      },
+    })
+<
+
+                                                    *gitflow-highlights-groups*
+Highlight Groups ~
+
+Link-based groups (track your colorscheme automatically):
 
     Group                           Default Link ~
     GitflowAdded                    DiffAdd
     GitflowRemoved                  DiffDelete
     GitflowModified                 DiffChange
+    GitflowDiffContext              Comment
     GitflowStaged                   DiffAdd
     GitflowUnstaged                 DiffChange
     GitflowUntracked                Comment
@@ -363,11 +404,48 @@ any group via `setup({ highlights = { ... } })`: >lua
     GitflowReviewApproved           DiagnosticOk
     GitflowReviewChangesRequested   WarningMsg
     GitflowReviewComment            Comment
-    GitflowBorder                   FloatBorder
-    GitflowTitle                    Title
-    GitflowHeader                   TabLineSel
-    GitflowFooter                   Comment
-    GitflowPaletteSelection         Visual
+    GitflowNormal                   NormalFloat
+    GitflowPaletteSelection         PmenuSel
+    GitflowPaletteHeader            Type
+    GitflowPaletteKeybind           Special
+    GitflowPaletteDescription       Comment
+    GitflowPaletteIndex             Number
+    GitflowPaletteCommand           Function
+    GitflowPaletteNormal            NormalFloat
+    GitflowResetMergeBase           WarningMsg
+    GitflowFormActiveField          CursorLine
+
+Accent-colored groups (dark-background defaults shown below; light mode uses
+`PALETTE_LIGHT` values from the table above):
+
+    Group                       Default Attrs ~
+    GitflowBorder               fg=#56B6C2
+    GitflowTitle                fg=#56B6C2, bold
+    GitflowHeader               fg=#56B6C2, bold
+    GitflowFooter               fg=#56B6C2, italic
+    GitflowSeparator            fg=#3E4452
+    GitflowFormLabel            fg=#56B6C2, bold
+    GitflowDiffFileHeader       fg=#E5C07B, bold
+    GitflowDiffHunkHeader       fg=#C678DD, bold
+    GitflowDiffLineNr           fg=#5C6370
+    GitflowLogHash              fg=#E5C07B, bold
+    GitflowStashRef             fg=#C678DD, bold
+    GitflowPaletteHeaderBar     fg=#222222, bg=#DCA561, bold
+    GitflowPaletteHeaderIcon    fg=#56B6C2, bg=#DCA561, bold
+    GitflowPaletteEntryIcon     fg=#56B6C2
+    GitflowPaletteBackdrop      bg=#000000
+
+To make these groups track your colorscheme instead of using hardcoded
+colors, override them with link-based definitions: >lua
+    require("gitflow").setup({
+      highlights = {
+        GitflowBorder = { link = "FloatBorder" },
+        GitflowTitle  = { link = "Title" },
+        GitflowHeader = { link = "TabLineSel" },
+        GitflowFooter = { link = "Comment" },
+      },
+    })
+<
 
 Sign highlights (used by sign column indicators):
 
@@ -375,6 +453,14 @@ Sign highlights (used by sign column indicators):
     GitflowSignModified             GitflowModified
     GitflowSignDeleted              GitflowRemoved
     GitflowSignConflict             GitflowConflictLocal
+
+Dynamic label highlights:
+
+    Labels from GitHub are rendered with auto-generated highlight groups
+    named `GitflowLabel_<hex>` (e.g. `GitflowLabel_d73a4a`). Foreground
+    contrast (black or white) is computed from background luminance.
+    These groups are created at runtime and cannot be overridden via
+    `config.highlights`.
 
 ==============================================================================
 9. SIGNS                                                      *gitflow-signs*
