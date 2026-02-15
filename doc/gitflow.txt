@@ -402,6 +402,7 @@ Link-based groups (track your colorscheme automatically):
     GitflowReviewComment            Comment
     GitflowNormal                   NormalFloat
     GitflowPaletteSelection         PmenuSel
+    GitflowPaletteHeader            Type
     GitflowPaletteKeybind           Special
     GitflowPaletteDescription       Comment
     GitflowPaletteIndex             Number
