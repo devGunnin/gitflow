@@ -2155,7 +2155,12 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPalette)", "<Cmd>Gitflow palette<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowReset)", "<Cmd>Gitflow reset<CR>", { silent = true })
-	vim.keymap.set("n", "<Plug>(GitflowCherryPick)", "<Cmd>Gitflow cherry-pick-panel<CR>", { silent = true })
+	vim.keymap.set(
+		"n",
+		"<Plug>(GitflowCherryPick)",
+		"<Cmd>Gitflow cherry-pick-panel<CR>",
+		{ silent = true }
+	)
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 
