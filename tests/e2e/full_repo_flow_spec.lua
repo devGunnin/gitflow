@@ -26,6 +26,7 @@ local git_conflict = require("gitflow.git.conflict")
 local git_status = require("gitflow.git.status")
 local gh_labels = require("gitflow.gh.labels")
 local form = require("gitflow.ui.form")
+local input = require("gitflow.ui.input")
 
 -- ── Helpers ────────────────────────────────────────────────────────────
 
@@ -269,9 +270,64 @@ T.run_suite("E2E: Full Repository Flow", {
 
 			local lines = T.read_file(log_path)
 			T.assert_true(
-				T.find_line(lines, "add") ~= nil,
-				"stage all should invoke git add"
+				T.find_line(lines, "add -A") ~= nil,
+				"stage all should invoke git add -A"
 			)
+		end)
+	end,
+
+	["step 2: commit flow dispatches git commit"] = function()
+		with_temp_git_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = git_status,
+					key = "fetch",
+					value = function(_, cb)
+						cb(nil, {}, {
+							staged = { { path = "tracked.txt" } },
+							unstaged = {},
+							untracked = {},
+						}, { code = 0, stdout = "", stderr = "" })
+					end,
+				},
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("Flow commit from E2E")
+					end,
+				},
+				{
+					table = input,
+					key = "confirm",
+					value = function()
+						return true, 1
+					end,
+				},
+			}, function()
+				git_status.stage_file("tracked.txt", {}, function() end)
+				T.drain_jobs(3000)
+
+				commands.dispatch({ "commit" }, cfg)
+				T.drain_jobs(3000)
+
+				local lines = T.read_file(log_path)
+				local add_idx = T.find_line(lines, "add -- tracked.txt")
+				local commit_idx = T.find_line(lines, "commit -m Flow commit from E2E")
+
+				T.assert_true(
+					add_idx ~= nil,
+					"commit flow should include stage-file git add"
+				)
+				T.assert_true(
+					commit_idx ~= nil,
+					"commit flow should invoke git commit"
+				)
+				T.assert_true(
+					add_idx < commit_idx,
+					"git add should be logged before git commit"
+				)
+			end)
 		end)
 	end,
 
@@ -394,9 +450,8 @@ T.run_suite("E2E: Full Repository Flow", {
 
 			local lines = T.read_file(log_path)
 			T.assert_true(
-				T.find_line(lines, "pr view") ~= nil
-				or T.find_line(lines, "pr") ~= nil,
-				"should invoke gh pr view"
+				T.find_line(lines, "pr view 42") ~= nil,
+				"should invoke gh pr view with PR number"
 			)
 		end)
 
@@ -830,18 +885,28 @@ T.run_suite("E2E: Full Repository Flow", {
 					"conflict panel should be open"
 				)
 
-				-- Open 3-way view
-				conflict_view.open(path, {
-					cfg = cfg,
-					on_closed = function()
-						conflict_panel.refresh()
-					end,
-				})
+				local bufnr = ui.buffer.get("conflict")
+				T.assert_true(bufnr ~= nil, "conflict buffer should exist")
+
+				local line_no = T.buf_find_line(bufnr, path)
+				T.assert_true(
+					line_no ~= nil,
+					"conflict panel should render the conflicted file row"
+				)
+
+				local winid = conflict_panel.state.winid
+				T.assert_true(
+					winid ~= nil and vim.api.nvim_win_is_valid(winid),
+					"conflict panel window should be valid"
+				)
+				vim.api.nvim_set_current_win(winid)
+				vim.api.nvim_win_set_cursor(winid, { line_no, 0 })
+				T.feedkeys("<CR>")
 				T.drain_jobs(3000)
 
 				T.assert_true(
 					conflict_view.is_open(),
-					"3-way view should be open"
+					"3-way view should open from conflict panel <CR>"
 				)
 
 				-- Close 3-way view

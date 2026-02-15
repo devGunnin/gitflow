@@ -372,13 +372,34 @@ T.run_suite("E2E: Conflict Resolution UI", {
 				end,
 			},
 		}, function()
-			conflict_view.open(path, { cfg = cfg })
-			T.drain_jobs(3000)
+			with_conflicts(path, function()
+				conflict_panel.open(cfg)
+				T.drain_jobs(3000)
+
+				local bufnr = ui.buffer.get("conflict")
+				T.assert_true(bufnr ~= nil, "conflict buffer should exist")
+
+				local line_no = T.buf_find_line(bufnr, path)
+				T.assert_true(
+					line_no ~= nil,
+					"conflict panel should render selected conflicted file"
+				)
+
+				local winid = conflict_panel.state.winid
+				T.assert_true(
+					winid ~= nil and vim.api.nvim_win_is_valid(winid),
+					"conflict panel window should be valid"
+				)
+				vim.api.nvim_set_current_win(winid)
+				vim.api.nvim_win_set_cursor(winid, { line_no, 0 })
+				T.feedkeys("<CR>")
+				T.drain_jobs(3000)
+			end)
 		end)
 
 		T.assert_true(
 			conflict_view.is_open(),
-			"3-way conflict view should be open"
+			"3-way conflict view should open from conflict panel <CR>"
 		)
 		T.assert_true(
 			conflict_view.state.active,

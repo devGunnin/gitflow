@@ -264,6 +264,16 @@ DIFF
     # add produces no stdout on success
     ;;
 
+  # ── commit ────────────────────────────────────────────────────────────
+  commit)
+    if [ "$fail_cmd" = "commit" ]; then
+      echo "error: commit failed" >&2
+      exit 1
+    fi
+    printf '[main abc1234] Test commit\n'
+    printf ' 1 file changed, 1 insertion(+)\n'
+    ;;
+
   # ── reset ─────────────────────────────────────────────────────────────
   reset)
     if [ "$fail_cmd" = "reset" ]; then
