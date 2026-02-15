@@ -100,6 +100,9 @@ local function build_default_groups(palette)
 		GitflowPaletteBackdrop = { bg = palette.backdrop_bg },
 		-- Reset
 		GitflowResetMergeBase = { link = "WarningMsg" },
+		-- Cherry Pick
+		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
+		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },
 		-- Form
 		GitflowFormLabel = { fg = palette.accent_primary, bold = true },
 		GitflowFormActiveField = { link = "CursorLine" },

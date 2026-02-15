@@ -200,14 +200,14 @@ assert_equals(
 
 highlights.setup({})
 local border_restored = get_highlight("GitflowBorder", { link = false })
-local restored_accent_primary_num = tonumber(
+local active_accent_primary_num = tonumber(
 	highlights.PALETTE.accent_primary:gsub("^#", ""),
 	16
 )
 assert_equals(
 	border_restored.fg,
-	restored_accent_primary_num,
-	"GitflowBorder should restore PALETTE.accent_primary after reset"
+	active_accent_primary_num,
+	"GitflowBorder should restore active PALETTE.accent_primary after reset"
 )
 
 local gh = require("gitflow.gh")
