@@ -72,6 +72,9 @@ M.DEFAULT_GROUPS = {
 	GitflowPaletteBackdrop = { bg = "#000000" },
 	-- Reset
 	GitflowResetMergeBase = { link = "WarningMsg" },
+	-- Cherry Pick
+	GitflowCherryPickBranch = { fg = "#C678DD", bold = true },
+	GitflowCherryPickHash = { fg = "#E5C07B", bold = true },
 	-- Form
 	GitflowFormLabel = { fg = "#56B6C2", bold = true },
 	GitflowFormActiveField = { link = "CursorLine" },

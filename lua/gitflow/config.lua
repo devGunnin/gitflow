@@ -85,6 +85,7 @@ function M.defaults()
 			issue = "<leader>gi",
 			pr = "<leader>gr",
 			reset = "gR",
+			cherry_pick = "gC",
 			conflict = "<leader>gm",
 			palette = "<leader>go",
 		},
