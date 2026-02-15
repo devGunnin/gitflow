@@ -4,23 +4,7 @@ local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
 local gh_prs = require("gitflow.gh.prs")
 local icons = require("gitflow.icons")
-
----@class GitflowPrReviewFileMarker
----@field line integer
----@field path string
----@field status string|nil
-
----@class GitflowPrReviewHunkMarker
----@field line integer
----@field path string|nil
----@field header string
-
----@class GitflowPrReviewLineContext
----@field path string|nil
----@field hunk string|nil
----@field diff_line integer|nil
----@field old_line integer|nil
----@field new_line integer|nil
+local git_diff = require("gitflow.git.diff")
 
 ---@class GitflowPrReviewDraftThread
 ---@field id integer
@@ -56,9 +40,9 @@ local icons = require("gitflow.icons")
 ---@field prev_winid integer|nil
 ---@field cfg GitflowConfig|nil
 ---@field pr_number integer|nil
----@field file_markers GitflowPrReviewFileMarker[]
----@field hunk_markers GitflowPrReviewHunkMarker[]
----@field line_context table<integer, GitflowPrReviewLineContext>
+---@field file_markers GitflowDiffFileMarker[]
+---@field hunk_markers GitflowDiffHunkMarker[]
+---@field line_context table<integer, GitflowDiffLineContext>
 ---@field comment_threads GitflowPrReviewCommentThread[]
 ---@field thread_line_map table<integer, integer>
 ---@field pending_comments GitflowPrReviewDraftThread[]
@@ -204,132 +188,8 @@ local function split_lines(text)
 	return vim.split(value, "\n", { plain = true, trimempty = false })
 end
 
----@param header string
----@return integer|nil, integer|nil
-local function parse_hunk_header(header)
-	local old_start = header:match("^@@ %-(%d+)")
-	local new_start = header:match("^@@ %-%d+,?%d* %+(%d+)")
-	return tonumber(old_start), tonumber(new_start)
-end
-
----@param diff_line string
----@return string
-local function detect_file_status(diff_line)
-	if diff_line:match("^new file mode") then
-		return "A"
-	elseif diff_line:match("^deleted file mode") then
-		return "D"
-	elseif diff_line:match("^rename from") or diff_line:match("^similarity index") then
-		return "R"
-	end
-	return "M"
-end
-
----@param lines string[]
----@param start_line integer
----@return GitflowPrReviewFileMarker[], GitflowPrReviewHunkMarker[]
----@return table<integer, GitflowPrReviewLineContext>
-local function collect_markers(lines, start_line)
-	local files = {}
-	local hunks = {}
-	local line_context = {}
-	local current_file = nil
-	local current_hunk = nil
-	local old_line = nil
-	local new_line = nil
-	local current_status = "M"
-
-	for index, line in ipairs(lines) do
-		local line_no = start_line + index - 1
-		local old_path, new_path =
-			line:match("^diff %-%-git a/(.+) b/(.+)$")
-		if old_path and new_path then
-			current_file = new_path
-			current_hunk = nil
-			old_line = nil
-			new_line = nil
-			current_status = "M"
-			files[#files + 1] = {
-				line = line_no,
-				path = new_path,
-				status = nil,
-			}
-		elseif current_file and #files > 0 and not files[#files].status then
-			-- N2: detect file status from metadata lines
-			local status = detect_file_status(line)
-			if status ~= "M" then
-				files[#files].status = status
-				current_status = status
-			end
-		end
-
-		if vim.startswith(line, "@@") then
-			current_hunk = line
-			local os, ns = parse_hunk_header(line)
-			old_line = os
-			new_line = ns
-			hunks[#hunks + 1] = {
-				line = line_no,
-				path = current_file,
-				header = line,
-			}
-			line_context[line_no] = {
-				path = current_file,
-				hunk = current_hunk,
-			}
-		elseif old_line and new_line then
-			-- N3: track old/new line numbers
-			if vim.startswith(line, "+") then
-				line_context[line_no] = {
-					path = current_file,
-					hunk = current_hunk,
-					diff_line = new_line,
-					old_line = nil,
-					new_line = new_line,
-				}
-				new_line = new_line + 1
-			elseif vim.startswith(line, "-") then
-				line_context[line_no] = {
-					path = current_file,
-					hunk = current_hunk,
-					diff_line = old_line,
-					old_line = old_line,
-					new_line = nil,
-				}
-				old_line = old_line + 1
-			elseif vim.startswith(line, " ") then
-				line_context[line_no] = {
-					path = current_file,
-					hunk = current_hunk,
-					diff_line = new_line,
-					old_line = old_line,
-					new_line = new_line,
-				}
-				old_line = old_line + 1
-				new_line = new_line + 1
-			else
-				line_context[line_no] = {
-					path = current_file,
-					hunk = current_hunk,
-				}
-			end
-		else
-			line_context[line_no] = {
-				path = current_file,
-				hunk = current_hunk,
-			}
-		end
-	end
-
-	-- Fill nil status for files that didn't get a special marker
-	for _, f in ipairs(files) do
-		if not f.status then
-			f.status = "M"
-		end
-	end
-
-	return files, hunks, line_context
-end
+-- collect_markers / parse_hunk_header / detect_file_status are now
+-- shared via git_diff.collect_markers / git_diff.parse_hunk_header
 
 ---@param number integer|string|nil
 ---@return string
@@ -500,7 +360,7 @@ local function render_review(
 	ui.buffer.update("review", lines)
 
 	M.state.file_markers, M.state.hunk_markers, M.state.line_context =
-		collect_markers(diff_lines, diff_start_line)
+		git_diff.collect_markers(diff_lines, diff_start_line)
 	M.state.comment_threads = comment_threads
 	M.state.thread_line_map = thread_line_map
 
@@ -552,12 +412,28 @@ local function render_review(
 
 		for idx, line in ipairs(diff_lines) do
 			local group = nil
-			if vim.startswith(line, "@@") then
-				group = "GitflowModified"
-			elseif vim.startswith(line, "+") and not vim.startswith(line, "+++") then
+			if vim.startswith(line, "diff --git")
+				or vim.startswith(line, "index ")
+				or vim.startswith(line, "--- ")
+				or vim.startswith(line, "+++ ")
+				or vim.startswith(line, "new file mode")
+				or vim.startswith(line, "deleted file mode")
+				or vim.startswith(line, "rename from")
+				or vim.startswith(line, "rename to")
+				or vim.startswith(line, "similarity index")
+				or vim.startswith(line, "old mode")
+				or vim.startswith(line, "new mode") then
+				group = "GitflowDiffFileHeader"
+			elseif vim.startswith(line, "@@") then
+				group = "GitflowDiffHunkHeader"
+			elseif vim.startswith(line, "+")
+				and not vim.startswith(line, "+++") then
 				group = "GitflowAdded"
-			elseif vim.startswith(line, "-") and not vim.startswith(line, "---") then
+			elseif vim.startswith(line, "-")
+				and not vim.startswith(line, "---") then
 				group = "GitflowRemoved"
+			elseif vim.startswith(line, " ") then
+				group = "GitflowDiffContext"
 			end
 			if group then
 				vim.api.nvim_buf_add_highlight(
@@ -586,7 +462,7 @@ local function render_review(
 				pcall(
 					vim.api.nvim_buf_set_extmark,
 					M.state.bufnr, ns, line_no - 1, 0,
-					{ virt_text = { { label, "GitflowReviewComment" } },
+					{ virt_text = { { label, "GitflowDiffLineNr" } },
 						virt_text_pos = "right_align" }
 				)
 			end
@@ -1198,7 +1074,7 @@ function M.refresh()
 
 					local preview_lines = split_lines(diff_text)
 					local files, hunks =
-						collect_markers(preview_lines, 1)
+						git_diff.collect_markers(preview_lines, 1)
 					render_review(
 						title, diff_text or "",
 						files, hunks, comment_threads
