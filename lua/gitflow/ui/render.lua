@@ -48,16 +48,37 @@ local function should_render_inline_title(opts)
 	return config.relative == nil or config.relative == ""
 end
 
+---Resolve the static fallback width.
+---Priority: opts.fallback → config ui.separator_width → vim.o.columns → 50.
+---@param explicit_fallback number|nil  caller-provided fallback
+---@return integer
+local function resolve_fallback(explicit_fallback)
+	if explicit_fallback then
+		return math.floor(explicit_fallback)
+	end
+	local ok, cfg = pcall(require, "gitflow.config")
+	if ok and cfg and cfg.current and cfg.current.ui then
+		local cw = tonumber(cfg.current.ui.separator_width)
+		if cw and cw >= 1 then
+			return math.floor(cw)
+		end
+	end
+	local columns = vim.o.columns
+	if columns and columns > 0 then
+		return columns
+	end
+	return DEFAULT_SEPARATOR_WIDTH
+end
+
 ---Resolve content width for a panel buffer/window.
 ---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
 ---@return integer
 function M.content_width(opts)
 	local options = opts or {}
-	local fallback = tonumber(options.fallback) or DEFAULT_SEPARATOR_WIDTH
 	local min_width = tonumber(options.min_width) or MIN_SEPARATOR_WIDTH
 	local winid = resolve_window_id(options)
 	if not winid then
-		return fallback
+		return math.max(min_width, resolve_fallback(tonumber(options.fallback)))
 	end
 
 	local width = vim.api.nvim_win_get_width(winid)
@@ -71,7 +92,7 @@ function M.content_width(opts)
 end
 
 ---Build a separator line of the given width.
----@param width integer|table|nil  fill width or context opts (defaults to 50)
+---@param width integer|table|nil  fill width or context opts (defaults adaptive)
 ---@return string
 function M.separator(width)
 	local resolved = width
@@ -79,7 +100,7 @@ function M.separator(width)
 		resolved = M.content_width(width)
 	end
 
-	local sep_width = tonumber(resolved) or DEFAULT_SEPARATOR_WIDTH
+	local sep_width = tonumber(resolved) or resolve_fallback(nil)
 	sep_width = math.max(1, math.floor(sep_width))
 	return string.rep(SEPARATOR_CHAR, sep_width)
 end
