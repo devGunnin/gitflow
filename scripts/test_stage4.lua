@@ -373,8 +373,8 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	for _, l in ipairs(lines) do
-		if l:find("#1", 1, true) and l:find("Stage4 issue", 1, true) then
+	for _, line in ipairs(lines) do
+		if line:find("#1", 1, true) and line:find("Stage4 issue", 1, true) then
 			return true
 		end
 	end
@@ -547,39 +547,50 @@ vim.o.wildmenu = original_wildmenu
 vim.o.wildmode = original_wildmode
 
 -- Test: create_interactive opens a form-based float
-local form = require("gitflow.ui.form")
 issues_panel.create_interactive()
-
--- Wait for the form buffer to appear
-local form_bufnr
 wait_until(function()
-	for _, b in ipairs(vim.api.nvim_list_bufs()) do
-		if vim.api.nvim_buf_is_valid(b)
-			and vim.bo[b].filetype == "gitflow-form" then
-			form_bufnr = b
-			return true
+	local wins = vim.api.nvim_list_wins()
+	for _, winid in ipairs(wins) do
+		local ok_w, wconfig = pcall(vim.api.nvim_win_get_config, winid)
+		if ok_w and wconfig.relative and wconfig.relative ~= "" then
+			local wbuf = vim.api.nvim_win_get_buf(winid)
+			local ft = vim.api.nvim_get_option_value("filetype", { buf = wbuf })
+			if ft == "gitflow-form" then
+				return true
+			end
 		end
 	end
 	return false
-end, "create_interactive should open a form float")
+end, "create_interactive should open form float", 2000)
 
--- Verify the form has a Title field
-local form_lines = vim.api.nvim_buf_get_lines(form_bufnr, 0, -1, false)
-assert_true(
-	find_line(form_lines, "Title") ~= nil,
-	"issue create form should have Title field"
-)
-
--- Close the form without submitting (press q)
-for _, w in ipairs(vim.api.nvim_list_wins()) do
-	if vim.api.nvim_win_is_valid(w)
-		and vim.api.nvim_win_get_buf(w) == form_bufnr then
-		vim.api.nvim_set_current_win(w)
-		break
+local create_form_buf = nil
+local create_form_lines = {}
+for _, winid in ipairs(vim.api.nvim_list_wins()) do
+	local ok_w, wconfig = pcall(vim.api.nvim_win_get_config, winid)
+	if ok_w and wconfig.relative and wconfig.relative ~= "" then
+		local wbuf = vim.api.nvim_win_get_buf(winid)
+		local ft = vim.api.nvim_get_option_value("filetype", { buf = wbuf })
+		if ft == "gitflow-form" then
+			create_form_buf = wbuf
+			create_form_lines = vim.api.nvim_buf_get_lines(wbuf, 0, -1, false)
+			pcall(vim.api.nvim_win_close, winid, true)
+			break
+		end
 	end
 end
-local esc = vim.api.nvim_replace_termcodes("q", true, false, true)
-vim.api.nvim_feedkeys(esc, "x", false)
+assert_true(create_form_buf ~= nil, "issue create form buffer should exist")
+assert_true(
+	find_line(create_form_lines, "Title") ~= nil,
+	"issue create form should have Title field"
+)
+assert_true(
+	find_line(create_form_lines, "Body") ~= nil,
+	"issue create form should have Body field"
+)
+assert_true(
+	find_line(create_form_lines, "Labels") ~= nil,
+	"issue create form should have Labels field"
+)
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -597,8 +608,8 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	for _, l in ipairs(lines) do
-		if l:find("#7", 1, true) and l:find("Stage4 PR", 1, true) then
+	for _, line in ipairs(lines) do
+		if line:find("#7", 1, true) and line:find("Stage4 PR", 1, true) then
 			return true
 		end
 	end
@@ -612,8 +623,8 @@ assert_keymap_absent(pr_buf, "l")
 
 local pr_lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
 local pr_line
-for i, l in ipairs(pr_lines) do
-	if l:find("#7", 1, true) and l:find("Stage4 PR", 1, true) then
+for i, line in ipairs(pr_lines) do
+	if line:find("#7", 1, true) and line:find("Stage4 PR", 1, true) then
 		pr_line = i
 		break
 	end
@@ -745,8 +756,8 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	for _, l in ipairs(lines) do
-		if l:find("#7", 1, true) and l:find("Stage4 PR", 1, true) then
+	for _, line in ipairs(lines) do
+		if line:find("#7", 1, true) and line:find("Stage4 PR", 1, true) then
 			return true
 		end
 	end

@@ -15,6 +15,7 @@ local utils = require("gitflow.utils")
 
 ---@class GitflowUiConfig
 ---@field default_layout "split"|"float"
+---@field separator_width integer|nil
 ---@field split GitflowSplitConfig
 ---@field float GitflowFloatConfig
 
@@ -163,6 +164,16 @@ local function validate_ui(config)
 	local layout = config.ui.default_layout
 	if layout ~= "split" and layout ~= "float" then
 		error("gitflow config error: ui.default_layout must be 'split' or 'float'", 3)
+	end
+
+	if config.ui.separator_width ~= nil then
+		if type(config.ui.separator_width) ~= "number"
+			or config.ui.separator_width < 1 then
+			error(
+				"gitflow config error: ui.separator_width must be a positive number",
+				3
+			)
+		end
 	end
 
 	local split = config.ui.split

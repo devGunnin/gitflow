@@ -193,10 +193,10 @@ end, "branch panel should open")
 
 local branch_lines = vim.api.nvim_buf_get_lines(branch_panel.state.bufnr, 0, -1, false)
 assert_true(find_line(branch_lines, "Remote") ~= nil, "branch panel should render remote section")
-local cur = current_branch(repo_dir)
+local current_name = current_branch(repo_dir)
 local current_found = false
-for _, bl in ipairs(branch_lines) do
-	if bl:find(cur, 1, true) and bl:find("(current)", 1, true) then
+for _, line in ipairs(branch_lines) do
+	if line:find(current_name, 1, true) and line:find("(current)", 1, true) then
 		current_found = true
 		break
 	end
