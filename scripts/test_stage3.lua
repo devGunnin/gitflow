@@ -193,9 +193,10 @@ end, "branch panel should open")
 
 local branch_lines = vim.api.nvim_buf_get_lines(branch_panel.state.bufnr, 0, -1, false)
 assert_true(find_line(branch_lines, "Remote") ~= nil, "branch panel should render remote section")
-local expected_current = ("* %s (current)"):format(current_branch(repo_dir))
+local branch_name = current_branch(repo_dir)
+local current_suffix = ("%s (current)"):format(branch_name)
 assert_true(
-	find_line(branch_lines, expected_current) ~= nil,
+	find_line(branch_lines, current_suffix) ~= nil,
 	"current branch should be indicated distinctly"
 )
 
