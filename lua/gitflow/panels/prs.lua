@@ -678,6 +678,11 @@ function M.create_interactive()
 						or "Pull request created"
 					utils.notify(message, vim.log.levels.INFO)
 					M.refresh()
+					if M.state.winid
+						and vim.api.nvim_win_is_valid(M.state.winid)
+					then
+						vim.api.nvim_set_current_win(M.state.winid)
+					end
 				end)
 			end,
 		})
