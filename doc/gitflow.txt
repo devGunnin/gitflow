@@ -105,7 +105,7 @@ Default keybindings:
     stash_pop       gX                  <Plug>(GitflowStashPop)
     branch          <leader>gb          <Plug>(GitflowBranch)
     issue           <leader>gI          <Plug>(GitflowIssue)
-    pr              <leader>gR          <Plug>(GitflowPr)
+    pr              <leader>gr          <Plug>(GitflowPr)
     label           <leader>gL          <Plug>(GitflowLabel)
     conflict        <leader>gm          <Plug>(GitflowConflicts)
     palette         <leader>gp          <Plug>(GitflowPalette)
