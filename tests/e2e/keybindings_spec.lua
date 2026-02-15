@@ -241,7 +241,7 @@ T.run_suite("E2E: Keybinding Verification", {
 		local bufnr = ui.buffer.get("branch")
 		T.assert_true(bufnr ~= nil, "branch buffer should exist")
 
-		T.assert_keymaps(bufnr, { "q", "r" })
+		T.assert_keymaps(bufnr, { "q", "r", "m" })
 
 		cleanup_panels()
 	end,
