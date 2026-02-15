@@ -286,10 +286,10 @@ T.run_suite("E2E: Full Repository Flow", {
 		local has_separate_outgoing = false
 		local has_separate_incoming = false
 		for _, line in ipairs(lines) do
-			if line:find("Outgoing %(oldest", 1, true) then
+			if line:find("Outgoing (oldest", 1, true) then
 				has_separate_outgoing = true
 			end
-			if line:find("Incoming %(oldest", 1, true) then
+			if line:find("Incoming (oldest", 1, true) then
 				has_separate_incoming = true
 			end
 		end
