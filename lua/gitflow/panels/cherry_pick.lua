@@ -575,61 +575,90 @@ local function show_target_branch_picker(entry)
 						vim.log.levels.INFO
 					)
 
-					git_cherry_pick
-						.create_branch_and_cherry_pick(
-						entry.sha, target, source, {},
-						function(cp_err, _, branch_name)
-							if cp_err then
-								local output = cp_err
-								local parsed =
-									git_conflict
-									.parse_conflicted_paths_from_output(
-										output
-									)
-								if #parsed > 0 then
-									utils.notify(
-										("Cherry-pick on"
-											.. " %s has"
-											.. " conflicts"
-											):format(
-											branch_name
-										),
-										vim.log.levels
-											.ERROR
-									)
-									local cp =
-										require(
-											"gitflow"
-											.. ".panels"
-											.. ".conflict"
+						git_cherry_pick.create_branch_and_cherry_pick(
+							entry.sha,
+							target,
+							source,
+							{},
+							function(cp_err, cp_result, branch_name)
+								if cp_err then
+									local output =
+										git.output(cp_result) or cp_err
+									local parsed =
+										git_conflict
+										.parse_conflicted_paths_from_output(
+											output
 										)
-									refresh_status_panel_if_open()
-									cp.open(cfg)
-								else
-									utils.notify(
-										cp_err,
-										vim.log.levels
-											.ERROR
-									)
+									if #parsed > 0 then
+										utils.notify(
+											("Cherry-pick on"
+												.. " %s has"
+												.. " conflicts"):format(
+													branch_name
+												),
+											vim.log.levels.ERROR
+										)
+										local cp =
+											require(
+												"gitflow.panels.conflict"
+											)
+										refresh_status_panel_if_open()
+										cp.open(cfg)
+									else
+										git_conflict.list(
+											{},
+											function(c_err, conflicted)
+												if c_err
+													or #(
+														conflicted
+														or {}
+													) == 0
+												then
+													utils.notify(
+														cp_err,
+														vim.log.levels.ERROR
+													)
+													return
+												end
+												utils.notify(
+													("Cherry-pick on"
+														.. " %s has"
+														.. " conflicts:\n%s")
+														:format(
+															branch_name,
+															table.concat(
+																conflicted,
+																"\n"
+															)
+														),
+													vim.log.levels.ERROR
+												)
+												local cp =
+													require(
+														"gitflow.panels.conflict"
+													)
+												refresh_status_panel_if_open()
+												cp.open(cfg)
+											end
+										)
+									end
+									return
 								end
-								return
-							end
 
-							utils.notify(
-								("Cherry-picked"
-									.. " %s into new"
-									.. " branch %s"
-									):format(
-									entry.short_sha,
-									branch_name
-								),
-								vim.log.levels.INFO
-							)
-							refresh_status_panel_if_open()
-							emit_post_operation()
-							M.refresh()
-						end
-					)
+								utils.notify(
+									("Cherry-picked"
+										.. " %s into new"
+										.. " branch %s"):format(
+										entry.short_sha,
+										branch_name
+									),
+									vim.log.levels.INFO
+								)
+								refresh_status_panel_if_open()
+								emit_post_operation()
+								M.refresh()
+							end
+						)
 				end,
 				on_cancel = function() end,
 			})
