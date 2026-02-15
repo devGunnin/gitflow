@@ -69,6 +69,7 @@ Buffer-local bindings active in the branch panel (`:Gitflow branch`).
 | `c` | Create new branch |
 | `d` | Delete branch |
 | `D` | Force delete branch |
+| `m` | Merge branch into current |
 | `r` | Rename branch |
 | `R` | Refresh branch list |
 | `f` | Fetch remote branches |
