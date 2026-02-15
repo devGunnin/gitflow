@@ -68,7 +68,15 @@ case "$subcmd" in
       echo "fatal: diff failed" >&2
       exit 1
     fi
-    cat <<'DIFF'
+    case "$*" in
+      *--name-only*--diff-filter=U*)
+        # conflict list: return conflicted file paths
+        if [ -n "${GITFLOW_GIT_CONFLICTS:-}" ]; then
+          printf '%s\n' "$GITFLOW_GIT_CONFLICTS"
+        fi
+        ;;
+      *)
+        cat <<'DIFF'
 diff --git a/tracked.txt b/tracked.txt
 index 1234567..abcdefg 100644
 --- a/tracked.txt
@@ -78,6 +86,8 @@ index 1234567..abcdefg 100644
  beta
 +gamma
 DIFF
+        ;;
+    esac
     ;;
 
   # ── log ───────────────────────────────────────────────────────────────
@@ -117,7 +127,17 @@ DIFF
       echo "CONFLICT (content): Merge conflict in file.txt" >&2
       exit 1
     fi
-    printf 'Already up to date.\n'
+    case "$1" in
+      --continue)
+        printf 'merge --continue completed\n'
+        ;;
+      --abort)
+        printf 'merge --abort completed\n'
+        ;;
+      *)
+        printf 'Already up to date.\n'
+        ;;
+    esac
     ;;
 
   # ── rev-parse ─────────────────────────────────────────────────────────
@@ -129,6 +149,12 @@ DIFF
     case "$*" in
       *--show-toplevel*)
         pwd
+        ;;
+      *--git-dir*)
+        printf '%s/.git\n' "$(pwd)"
+        ;;
+      *--abbrev-ref*@\{upstream\}*|*--symbolic-full-name*@\{upstream\}*)
+        printf 'origin/main\n'
         ;;
       *--abbrev-ref*)
         printf 'main\n'
@@ -197,7 +223,17 @@ DIFF
       echo "CONFLICT (content): Merge conflict in file.txt" >&2
       exit 1
     fi
-    printf 'Current branch main is up to date.\n'
+    case "$1" in
+      --continue)
+        printf 'rebase --continue completed\n'
+        ;;
+      --abort)
+        printf 'rebase --abort completed\n'
+        ;;
+      *)
+        printf 'Current branch main is up to date.\n'
+        ;;
+    esac
     ;;
 
   # ── cherry-pick ───────────────────────────────────────────────────────
@@ -206,7 +242,17 @@ DIFF
       echo "error: cherry-pick failed" >&2
       exit 1
     fi
-    printf '[main abc1234] Cherry-picked commit\n'
+    case "$1" in
+      --continue)
+        printf 'cherry-pick --continue completed\n'
+        ;;
+      --abort)
+        printf 'cherry-pick --abort completed\n'
+        ;;
+      *)
+        printf '[main abc1234] Cherry-picked commit\n'
+        ;;
+    esac
     ;;
 
   # ── add ───────────────────────────────────────────────────────────────
@@ -216,6 +262,16 @@ DIFF
       exit 1
     fi
     # add produces no stdout on success
+    ;;
+
+  # ── commit ────────────────────────────────────────────────────────────
+  commit)
+    if [ "$fail_cmd" = "commit" ]; then
+      echo "error: commit failed" >&2
+      exit 1
+    fi
+    printf '[main abc1234] Test commit\n'
+    printf ' 1 file changed, 1 insertion(+)\n'
     ;;
 
   # ── reset ─────────────────────────────────────────────────────────────
@@ -233,7 +289,23 @@ DIFF
       echo "fatal: show failed" >&2
       exit 1
     fi
-    printf 'commit abc1234567890\nAuthor: Test <test@example.com>\n\n    Initial commit\n'
+    case "$1" in
+      :1:*)
+        # base version of conflicted file
+        printf 'line one\nline two\nbase content\nline four\n'
+        ;;
+      :2:*)
+        # local/ours version of conflicted file
+        printf 'line one\nline two\nlocal content\nline four\n'
+        ;;
+      :3:*)
+        # remote/theirs version of conflicted file
+        printf 'line one\nline two\nremote content\nline four\n'
+        ;;
+      *)
+        printf 'commit abc1234567890\nAuthor: Test <test@example.com>\n\n    Initial commit\n'
+        ;;
+    esac
     ;;
 
   # ── config ────────────────────────────────────────────────────────────
