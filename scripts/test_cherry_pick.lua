@@ -446,6 +446,28 @@ test("list_branches returns branches excluding current", function()
 	)
 end)
 
+test("list_target_branches includes current branch", function()
+	local git_cp = require("gitflow.git.cherry_pick")
+	local err, branches = wait_async(function(done)
+		git_cp.list_target_branches({}, function(e, b)
+			done(e, b)
+		end)
+	end)
+
+	assert_true(
+		err == nil,
+		"list_target_branches should not error"
+	)
+	assert_true(
+		type(branches) == "table" and #branches > 0,
+		"should return at least one branch"
+	)
+	assert_true(
+		contains(branches, "main"),
+		"current branch (main) should be included for target selection"
+	)
+end)
+
 test("list_unique_commits returns unique commits", function()
 	local git_cp = require("gitflow.git.cherry_pick")
 	local err, entries = wait_async(function(done)
@@ -1308,6 +1330,97 @@ test(
 )
 
 test(
+	"cherry_pick_into_branch allows selecting current branch as target",
+	function()
+		local cp_panel = require("gitflow.panels.cherry_pick")
+		local git_cp = require("gitflow.git.cherry_pick")
+		local list_picker = require("gitflow.ui.list_picker")
+		local ui_mod = require("gitflow.ui")
+		local original_picker_open = list_picker.open
+		local original_create = git_cp.create_branch_and_cherry_pick
+		local original_refresh = cp_panel.refresh
+		local picker_open_calls = 0
+		local selected_target = nil
+
+		local ok, err = pcall(function()
+			cp_panel.close()
+			cp_panel.state.cfg = cfg
+			cp_panel.state.source_branch = "feature-a"
+			cp_panel.state.stage = "commits"
+			cp_panel.state.line_entries = {
+				[1] = {
+					sha = "abababababababababababababababababababab",
+					short_sha = "abababa",
+					summary = "feature-a commit for target picker",
+				},
+			}
+
+			local bufnr = ui_mod.buffer.create("cherry_pick", {
+				filetype = "gitflowcherrypick",
+				lines = { "pick line" },
+			})
+			cp_panel.state.bufnr = bufnr
+			cp_panel.state.winid = ui_mod.window.open_split({
+				name = "cherry_pick",
+				bufnr = bufnr,
+				orientation = cfg.ui.split.orientation,
+				size = cfg.ui.split.size,
+				on_close = function()
+					cp_panel.state.winid = nil
+				end,
+			})
+			vim.api.nvim_set_current_win(cp_panel.state.winid)
+			vim.api.nvim_win_set_cursor(cp_panel.state.winid, { 1, 0 })
+
+			list_picker.open = function(opts)
+				picker_open_calls = picker_open_calls + 1
+				local has_main = false
+				for _, item in ipairs(opts.items or {}) do
+					if item.name == "main" then
+						has_main = true
+						break
+					end
+				end
+				assert_true(
+					has_main,
+					"target picker should include current branch"
+				)
+				opts.on_submit({ "main" })
+				return {}
+			end
+			cp_panel.refresh = function() end
+			git_cp.create_branch_and_cherry_pick = function(_, target, _, _, cb)
+				selected_target = target
+				cb(nil, { stdout = "", stderr = "", code = 0 }, "main-feature-a")
+			end
+
+			cp_panel.cherry_pick_into_branch()
+
+			local completed = vim.wait(1000, function()
+				return picker_open_calls > 0 and selected_target ~= nil
+			end, 20)
+			assert_true(
+				completed,
+				"target selection should invoke create flow"
+			)
+			assert_equals(
+				selected_target, "main",
+				"should allow selecting current branch as target"
+			)
+		end)
+
+		list_picker.open = original_picker_open
+		git_cp.create_branch_and_cherry_pick = original_create
+		cp_panel.refresh = original_refresh
+		cp_panel.close()
+
+		if not ok then
+			error(err, 0)
+		end
+	end
+)
+
+test(
 	"cherry_pick_into_branch conflict fallback opens conflict panel",
 	function()
 		local cp_panel = require("gitflow.panels.cherry_pick")
@@ -1316,7 +1429,8 @@ test(
 		local list_picker = require("gitflow.ui.list_picker")
 		local conflict_panel = require("gitflow.panels.conflict")
 		local ui_mod = require("gitflow.ui")
-		local original_list_branches = git_cp.list_branches
+		local original_list_target_branches =
+			git_cp.list_target_branches
 		local original_create = git_cp.create_branch_and_cherry_pick
 		local original_parse =
 			git_conflict.parse_conflicted_paths_from_output
@@ -1357,7 +1471,7 @@ test(
 			vim.api.nvim_set_current_win(cp_panel.state.winid)
 			vim.api.nvim_win_set_cursor(cp_panel.state.winid, { 1, 0 })
 
-			git_cp.list_branches = function(_, cb)
+			git_cp.list_target_branches = function(_, cb)
 				cb(nil, { "main" })
 			end
 			list_picker.open = function(opts)
@@ -1405,7 +1519,8 @@ test(
 			)
 		end)
 
-		git_cp.list_branches = original_list_branches
+		git_cp.list_target_branches =
+			original_list_target_branches
 		git_cp.create_branch_and_cherry_pick = original_create
 		git_conflict.parse_conflicted_paths_from_output =
 			original_parse
@@ -1428,7 +1543,8 @@ test(
 		local git_conflict = require("gitflow.git.conflict")
 		local list_picker = require("gitflow.ui.list_picker")
 		local ui_mod = require("gitflow.ui")
-		local original_list_branches = git_cp.list_branches
+		local original_list_target_branches =
+			git_cp.list_target_branches
 		local original_create = git_cp.create_branch_and_cherry_pick
 		local original_parse =
 			git_conflict.parse_conflicted_paths_from_output
@@ -1476,7 +1592,7 @@ test(
 					level = level,
 				}
 			end
-			git_cp.list_branches = function(_, cb)
+			git_cp.list_target_branches = function(_, cb)
 				cb(nil, { "main" })
 			end
 			list_picker.open = function(opts)
@@ -1514,7 +1630,8 @@ test(
 			)
 		end)
 
-		git_cp.list_branches = original_list_branches
+		git_cp.list_target_branches =
+			original_list_target_branches
 		git_cp.create_branch_and_cherry_pick = original_create
 		git_conflict.parse_conflicted_paths_from_output =
 			original_parse

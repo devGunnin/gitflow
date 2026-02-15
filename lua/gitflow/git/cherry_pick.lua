@@ -50,6 +50,26 @@ function M.list_branches(opts, cb)
 	end)
 end
 
+---List local and remote branches for cherry-pick targets, including current.
+---@param opts table|nil
+---@param cb fun(err: string|nil, branches: string[]|nil)
+function M.list_target_branches(opts, cb)
+	git_branch.list(opts, function(err, entries)
+		if err then
+			cb(err, nil)
+			return
+		end
+
+		local branches = {}
+		for _, entry in ipairs(entries or {}) do
+			if not entry.name:match("/HEAD$") then
+				branches[#branches + 1] = entry.name
+			end
+		end
+		cb(nil, branches)
+	end)
+end
+
 ---Parse branch names from raw git output.
 ---@param output string
 ---@param current_branch string|nil

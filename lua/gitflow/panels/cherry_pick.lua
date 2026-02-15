@@ -518,7 +518,7 @@ local function show_target_branch_picker(entry)
 	end
 
 	local request_id = next_picker_request_id()
-	git_cherry_pick.list_branches({}, function(err, branches)
+	git_cherry_pick.list_target_branches({}, function(err, branches)
 		if not is_active_picker_request(request_id) then
 			return
 		end
