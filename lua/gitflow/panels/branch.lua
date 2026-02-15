@@ -13,6 +13,7 @@ local ui_render = require("gitflow.ui.render")
 ---@field view_mode "list"|"graph"
 ---@field graph_lines GitflowGraphLine[]|nil
 ---@field graph_current string|nil
+---@field refresh_token integer
 
 local M = {}
 local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
@@ -33,6 +34,7 @@ M.state = {
 	view_mode = "list",
 	graph_lines = nil,
 	graph_current = nil,
+	refresh_token = 0,
 }
 
 ---@param result GitflowGitResult
@@ -60,6 +62,26 @@ local function clear_graph_highlights(bufnr)
 		return
 	end
 	vim.api.nvim_buf_clear_namespace(bufnr, GRAPH_HIGHLIGHT_NS, 0, -1)
+end
+
+---@return integer
+local function next_refresh_token()
+	M.state.refresh_token = (M.state.refresh_token or 0) + 1
+	return M.state.refresh_token
+end
+
+---@param token integer
+---@param expected_view "list"|"graph"
+---@return boolean
+local function is_current_refresh(token, expected_view)
+	if token ~= M.state.refresh_token then
+		return false
+	end
+	if M.state.view_mode ~= expected_view then
+		return false
+	end
+	local bufnr = M.state.bufnr
+	return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
 end
 
 ---@param cfg GitflowConfig
@@ -576,7 +598,11 @@ function M.refresh()
 		M.refresh_graph()
 		return
 	end
+	local refresh_token = next_refresh_token()
 	git_branch.list({}, function(err, entries)
+		if not is_current_refresh(refresh_token, "list") then
+			return
+		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
@@ -586,7 +612,11 @@ function M.refresh()
 end
 
 function M.refresh_graph()
+	local refresh_token = next_refresh_token()
 	git_branch.graph({}, function(err, graph_entries, current_branch)
+		if not is_current_refresh(refresh_token, "graph") then
+			return
+		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
@@ -883,6 +913,7 @@ function M.close()
 	M.state.view_mode = "list"
 	M.state.graph_lines = nil
 	M.state.graph_current = nil
+	M.state.refresh_token = (M.state.refresh_token or 0) + 1
 end
 
 ---@return boolean

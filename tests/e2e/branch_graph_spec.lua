@@ -14,6 +14,27 @@ local function close_panel()
 	end)
 end
 
+---@param patches table[]
+---@param fn fun()
+local function with_temporary_patches(patches, fn)
+	local originals = {}
+	for index, patch in ipairs(patches) do
+		originals[index] = patch.table[patch.key]
+		patch.table[patch.key] = patch.value
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+
+	for index = #patches, 1, -1 do
+		local patch = patches[index]
+		patch.table[patch.key] = originals[index]
+	end
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
 ---@param fn fun(log_path: string)
 local function with_temp_git_log(fn)
 	local log_path = vim.fn.tempname()
@@ -260,6 +281,60 @@ T.run_suite("Branch Graph Visualization", {
 		)
 
 		close_panel()
+	end,
+
+	["rapid toggle keeps list rendering when delayed graph callback completes"] = function()
+		local original_graph = git_branch.graph
+		with_temporary_patches({
+			{
+				table = git_branch,
+				key = "graph",
+				value = function(opts, cb)
+					return original_graph(opts, function(err, entries, current)
+						vim.defer_fn(function()
+							cb(err, entries, current)
+						end, 250)
+					end)
+				end,
+			},
+		}, function()
+			close_panel()
+			branch_panel.open(cfg)
+			T.drain_jobs(3000)
+
+			branch_panel.toggle_view()
+			branch_panel.toggle_view()
+			T.drain_jobs(4000)
+
+			T.assert_equals(
+				branch_panel.state.view_mode, "list",
+				"view mode should remain list after rapid graph->list toggle"
+			)
+
+			local bufnr = ui.buffer.get("branch")
+			local lines = T.buf_lines(bufnr)
+			local has_local_section = false
+			local has_graph_header = false
+			for _, line in ipairs(lines) do
+				if line == "Local" then
+					has_local_section = true
+				end
+				if line:find("Flow", 1, true) and line:find("Commit", 1, true) then
+					has_graph_header = true
+				end
+			end
+
+			T.assert_true(
+				has_local_section,
+				"list view content should be rendered after rapid toggle"
+			)
+			T.assert_false(
+				has_graph_header,
+				"delayed graph callback should not overwrite list content"
+			)
+
+			close_panel()
+		end)
 	end,
 
 	-- ── Graph view rendering ────────────────────────────────────────────
