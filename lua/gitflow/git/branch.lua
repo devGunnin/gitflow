@@ -349,4 +349,95 @@ function M.rename(old_name, new_name, opts, cb)
 	run_branch_cmd({ "branch", "-m", old_name, new_name }, opts, "branch -m", cb)
 end
 
+---@class GitflowGraphLine
+---@field graph string  graph drawing characters (e.g. "* ", "| ", "|/")
+---@field hash string|nil  short commit hash
+---@field decoration string|nil  branch/tag decoration text
+---@field subject string|nil  commit subject
+---@field raw string  full raw line
+
+---@param output string
+---@param current_branch string|nil
+---@return GitflowGraphLine[]
+function M.parse_graph(output, current_branch)
+	local entries = {}
+	for _, raw_line in ipairs(split_lines(output)) do
+		local graph_part = ""
+		local hash = nil
+		local decoration = nil
+		local subject = nil
+
+		-- Keep connector-only rows entirely in the flow column.
+		-- Without this guard, the split regex can backtrack and leak the last
+		-- connector glyph into subject text.
+		if raw_line:match("^[%s%*|/\\_%.]+$") then
+			graph_part = raw_line
+		else
+			-- Split graph prefix from commit data.
+			-- Graph chars: *, |, /, \, _, space, and box-drawing variants.
+			local g, rest = raw_line:match("^([%s%*|/\\_%.]+)(%S.*)$")
+			if g and rest then
+				graph_part = g
+				-- Try to match: <hash> (<decorations>) <subject>
+				local h, d, s = rest:match("^(%x+)%s+%((.-)%)%s+(.*)$")
+				if h then
+					hash = h
+					decoration = d
+					subject = s
+				else
+					-- Try: <hash> <subject>
+					h, s = rest:match("^(%x+)%s+(.*)$")
+					if h then
+						hash = h
+						subject = s
+					else
+						-- Bare hash or continuation
+						h = rest:match("^(%x+)$")
+						if h then
+							hash = h
+						else
+							subject = rest
+						end
+					end
+				end
+			else
+				-- Entire line is graph drawing (e.g. "| |", "| * ")
+				graph_part = raw_line
+			end
+		end
+
+		entries[#entries + 1] = {
+			graph = graph_part,
+			hash = hash,
+			decoration = decoration,
+			subject = subject,
+			raw = raw_line,
+		}
+	end
+	return entries
+end
+
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, lines: GitflowGraphLine[]|nil,
+---  current: string|nil, result: GitflowGitResult)
+function M.graph(opts, cb)
+	M.current(opts, function(cur_err, current_branch)
+		if cur_err then
+			current_branch = nil
+		end
+
+		git.git({
+			"log", "--all", "--graph", "--oneline",
+			"--decorate=short", "-n100",
+		}, opts, function(result)
+			if result.code ~= 0 then
+				cb(error_from_result(result, "log --graph"), nil, nil, result)
+				return
+			end
+			local parsed = M.parse_graph(result.stdout or "", current_branch)
+			cb(nil, parsed, current_branch, result)
+		end)
+	end)
+end
+
 return M

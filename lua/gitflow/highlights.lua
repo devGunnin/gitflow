@@ -103,6 +103,21 @@ local function build_default_groups(palette)
 		-- Form
 		GitflowFormLabel = { fg = palette.accent_primary, bold = true },
 		GitflowFormActiveField = { link = "CursorLine" },
+		-- Branch graph
+		GitflowGraphLine = { fg = palette.accent_primary },
+		GitflowGraphHash = { fg = palette.log_hash, bold = true },
+		GitflowGraphDecoration = { fg = palette.stash_ref, bold = true },
+		GitflowGraphCurrent = { fg = palette.accent_primary, bold = true },
+		GitflowGraphSubject = { link = "Normal" },
+		GitflowGraphNode = { fg = palette.accent_secondary, bold = true },
+		GitflowGraphBranch1 = { fg = palette.accent_primary },
+		GitflowGraphBranch2 = { fg = palette.accent_secondary },
+		GitflowGraphBranch3 = { fg = "#98C379" },
+		GitflowGraphBranch4 = { fg = "#E06C75" },
+		GitflowGraphBranch5 = { fg = "#61AFEF" },
+		GitflowGraphBranch6 = { fg = "#C678DD" },
+		GitflowGraphBranch7 = { fg = "#E5C07B" },
+		GitflowGraphBranch8 = { fg = "#7F848E" },
 	}
 end
 
