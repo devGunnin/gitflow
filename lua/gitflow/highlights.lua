@@ -55,6 +55,8 @@ M.DEFAULT_GROUPS = {
 	},
 	GitflowPaletteEntryIcon = { fg = "#56B6C2" },
 	GitflowPaletteBackdrop = { bg = "#000000" },
+	-- Reset
+	GitflowResetMergeBase = { link = "WarningMsg" },
 	-- Form
 	GitflowFormLabel = { fg = "#56B6C2", bold = true },
 	GitflowFormActiveField = { link = "CursorLine" },
