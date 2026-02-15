@@ -421,6 +421,38 @@ T.run_suite("Branch Graph Visualization", {
 		close_panel()
 	end,
 
+	["graph extmarks clear after toggling back to list view"] = function()
+		close_panel()
+		branch_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		branch_panel.toggle_view()
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("branch")
+		T.assert_true(
+			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+			"buffer should exist"
+		)
+
+		local graph_marks = T.get_extmarks(bufnr, "gitflow_branch_graph_hl")
+		T.assert_true(
+			#graph_marks > 0,
+			"graph view should have graph extmarks before returning to list"
+		)
+
+		branch_panel.toggle_view()
+		T.drain_jobs(3000)
+
+		local list_marks = T.get_extmarks(bufnr, "gitflow_branch_graph_hl")
+		T.assert_equals(
+			#list_marks, 0,
+			"list view should clear graph extmarks after toggle back"
+		)
+
+		close_panel()
+	end,
+
 	-- ── Keymaps ─────────────────────────────────────────────────────────
 
 	["branch panel has G keymap for toggle"] = function()

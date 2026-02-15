@@ -54,6 +54,14 @@ local function current_footer()
 	return LIST_FOOTER
 end
 
+---@param bufnr integer|nil
+local function clear_graph_highlights(bufnr)
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	vim.api.nvim_buf_clear_namespace(bufnr, GRAPH_HIGHLIGHT_NS, 0, -1)
+end
+
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
@@ -192,6 +200,7 @@ local function render_list(entries)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
+	clear_graph_highlights(bufnr)
 
 	local entry_highlights = {}
 
@@ -535,6 +544,7 @@ local function render_graph(graph_entries, current_branch)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
+	clear_graph_highlights(bufnr)
 
 	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {
 		entry_highlights = {
