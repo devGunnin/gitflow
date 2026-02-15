@@ -262,8 +262,31 @@ require("lualine").setup({
 
 ## Highlight Groups
 
-All highlight groups can be overridden via `setup({ highlights = { ... } })`.
-See `:help gitflow-highlights` for the full list.
+Gitflow defines two kinds of highlight groups:
+
+- **Link-based** groups (e.g. `GitflowAdded → DiffAdd`) that follow your
+  colorscheme automatically.
+- **Accent-colored** groups (e.g. `GitflowBorder`, `GitflowTitle`,
+  `GitflowDiffFileHeader`) that use hardcoded hex colors from a built-in
+  palette (cyan `#56B6C2`, gold `#DCA561`, purple `#C678DD`).
+
+Override any group via `setup({ highlights = { ... } })`. Each override
+fully replaces that group's default:
+
+```lua
+require("gitflow").setup({
+  highlights = {
+    -- Change accent colors
+    GitflowBorder = { fg = "#98C379" },
+    GitflowTitle  = { fg = "#98C379", bold = true },
+    -- Or switch accent groups to colorscheme links
+    GitflowHeader = { link = "TabLineSel" },
+    GitflowFooter = { link = "Comment" },
+  },
+})
+```
+
+See `:help gitflow-highlights` for the full group list and palette reference.
 
 ## License
 
