@@ -97,6 +97,13 @@ DIFF
       exit 1
     fi
     case " $* " in
+      *" --graph "*)
+        # graph output for branch flowchart visualization
+        printf '* abc1234 (HEAD -> main, origin/main) Initial commit\n'
+        printf '| * def5678 (feature/test) Add feature\n'
+        printf '|/\n'
+        printf '* fed9012 (bugfix/login) Fix bug\n'
+        ;;
       *" --pretty=format:"*)
         # parser-compatible shape for gitflow.git.log.parse():
         # <full_sha><TAB><summary>
@@ -332,6 +339,42 @@ DIFF
       echo "error: clean failed" >&2
       exit 1
     fi
+    ;;
+
+  # ── for-each-ref ──────────────────────────────────────────────────────
+  for-each-ref)
+    if [ "$fail_cmd" = "for-each-ref" ]; then
+      echo "fatal: for-each-ref failed" >&2
+      exit 1
+    fi
+    case "$*" in
+      *--format=*)
+        printf '*\tmain\trefs/heads/main\n'
+        printf ' \tfeature/test\trefs/heads/feature/test\n'
+        printf ' \tbugfix/login\trefs/heads/bugfix/login\n'
+        printf ' \torigin/main\trefs/remotes/origin/main\n'
+        printf ' \torigin/feature/test\trefs/remotes/origin/feature/test\n'
+        ;;
+      *)
+        printf 'main\n'
+        printf 'feature/test\n'
+        printf 'bugfix/login\n'
+        ;;
+    esac
+    ;;
+
+  # ── switch ───────────────────────────────────────────────────────────
+  switch)
+    if [ "$fail_cmd" = "switch" ]; then
+      echo "error: switch failed" >&2
+      exit 1
+    fi
+    printf "Switched to branch '%s'\n" "${1:-main}"
+    ;;
+
+  # ── rev-list ─────────────────────────────────────────────────────────
+  rev-list)
+    printf '0\n'
     ;;
 
   # ── Unknown command ───────────────────────────────────────────────────

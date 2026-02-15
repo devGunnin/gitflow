@@ -75,6 +75,12 @@ M.DEFAULT_GROUPS = {
 	-- Form
 	GitflowFormLabel = { fg = "#56B6C2", bold = true },
 	GitflowFormActiveField = { link = "CursorLine" },
+	-- Branch graph
+	GitflowGraphLine = { fg = "#56B6C2" },
+	GitflowGraphHash = { fg = "#E5C07B", bold = true },
+	GitflowGraphDecoration = { fg = "#C678DD", bold = true },
+	GitflowGraphCurrent = { fg = "#56B6C2", bold = true },
+	GitflowGraphSubject = { link = "Normal" },
 }
 
 ---Create or retrieve a dynamic highlight group for a label hex color.
