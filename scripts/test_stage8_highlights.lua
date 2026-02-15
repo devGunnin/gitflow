@@ -79,6 +79,14 @@ assert_equals(
 	"palette selection highlight should remain defined"
 )
 
+-- Light background should use light palette colors
+local light_sep = get_highlight("GitflowSeparator", { link = false })
+assert_equals(
+	light_sep.fg,
+	tonumber(highlights.PALETTE_LIGHT.separator_fg:sub(2), 16),
+	"light background should apply light separator color"
+)
+
 highlights.setup({
 	GitflowAdded = { fg = "#00ff00", bold = true },
 })

@@ -45,6 +45,9 @@ local expected_keys = {
 	"dark_fg",
 	"log_hash",
 	"stash_ref",
+	"diff_file_header",
+	"diff_hunk_header",
+	"diff_line_nr",
 }
 
 for _, key in ipairs(expected_keys) do
@@ -231,6 +234,97 @@ assert_equals(
 	highlights.PALETTE.backdrop_bg,
 	"GitflowPaletteBackdrop bg should match PALETTE.backdrop_bg"
 )
+
+-- ── 7. Light palette switching ───────────────────────────────────
+
+-- PALETTE_DARK and PALETTE_LIGHT should both be exported
+assert_true(
+	type(highlights.PALETTE_DARK) == "table",
+	"highlights should export PALETTE_DARK table"
+)
+assert_true(
+	type(highlights.PALETTE_LIGHT) == "table",
+	"highlights should export PALETTE_LIGHT table"
+)
+
+-- Light palette should have same keys as dark palette
+for _, key in ipairs(expected_keys) do
+	assert_true(
+		type(highlights.PALETTE_DARK[key]) == "string",
+		("PALETTE_DARK.%s should be a string"):format(key)
+	)
+	assert_true(
+		type(highlights.PALETTE_LIGHT[key]) == "string",
+		("PALETTE_LIGHT.%s should be a string"):format(key)
+	)
+end
+
+-- Light separator should differ from dark separator
+assert_true(
+	highlights.PALETTE_LIGHT.separator_fg
+		~= highlights.PALETTE_DARK.separator_fg,
+	"light separator_fg should differ from dark separator_fg"
+)
+
+-- Setup with light background should switch palette
+local original_bg = vim.o.background
+vim.o.background = "light"
+highlights.setup({})
+
+assert_equals(
+	highlights.PALETTE.separator_fg,
+	highlights.PALETTE_LIGHT.separator_fg,
+	"PALETTE.separator_fg should match light palette after light setup"
+)
+assert_equals(
+	highlights.DEFAULT_GROUPS.GitflowSeparator.fg,
+	highlights.PALETTE_LIGHT.separator_fg,
+	"GitflowSeparator fg should use light separator after light setup"
+)
+assert_equals(
+	highlights.PALETTE.accent_primary,
+	highlights.PALETTE_LIGHT.accent_primary,
+	"PALETTE.accent_primary should match light palette after light setup"
+)
+
+-- Verify actual applied highlight uses light palette
+local sep_hl = get_hl("GitflowSeparator")
+assert_equals(
+	sep_hl.fg,
+	tonumber(highlights.PALETTE_LIGHT.separator_fg:sub(2), 16),
+	"applied GitflowSeparator fg should use light palette value"
+)
+
+-- Switch back to dark and verify palette reverts
+vim.o.background = "dark"
+highlights.setup({})
+
+assert_equals(
+	highlights.PALETTE.separator_fg,
+	highlights.PALETTE_DARK.separator_fg,
+	"PALETTE.separator_fg should revert to dark after dark setup"
+)
+assert_equals(
+	highlights.DEFAULT_GROUPS.GitflowSeparator.fg,
+	highlights.PALETTE_DARK.separator_fg,
+	"GitflowSeparator fg should revert to dark separator after dark setup"
+)
+
+-- User overrides should still take precedence over palette
+vim.o.background = "light"
+highlights.setup({
+	GitflowSeparator = { fg = "#FF0000" },
+})
+local override_hl = get_hl("GitflowSeparator")
+assert_equals(
+	override_hl.fg,
+	tonumber("FF0000", 16),
+	"user override should take precedence over light palette"
+)
+
+-- Restore
+vim.o.background = original_bg
+highlights.setup({})
 
 print(
 	("Palette accent parity tests passed (%d/%d assertions)")
