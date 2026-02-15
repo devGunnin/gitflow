@@ -97,7 +97,11 @@ local float_win = vim.api.nvim_open_win(float_buf, false, {
 })
 
 local w_float = ui_render.content_width({ winid = float_win })
-assert_equals(w_float, 72, "content_width with minimal float (no textoff) should return window width")
+assert_equals(
+	w_float,
+	72,
+	"content_width with minimal float (no textoff) should return window width"
+)
 
 vim.api.nvim_win_close(float_win, true)
 vim.api.nvim_buf_delete(float_buf, { force = true })
