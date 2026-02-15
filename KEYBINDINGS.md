@@ -23,6 +23,7 @@ Normal-mode mappings available in any buffer. Configured via
 | `gl` | Open log panel | `log` |
 | `gS` | Open stash list | `stash` |
 | `gZ` | Stash push (with prompt) | `stash_push` |
+| `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
 | `<leader>gI` | Open issue list | `issue` |
 | `<leader>gR` | Open PR list | `pr` |
