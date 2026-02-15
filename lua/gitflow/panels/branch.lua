@@ -667,7 +667,12 @@ function M.toggle_view()
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
 		local ok, win_cfg = pcall(vim.api.nvim_win_get_config, M.state.winid)
 		if ok and win_cfg and win_cfg.relative and win_cfg.relative ~= "" then
-			if vim.fn.has("nvim-0.10") == 1 then
+			local cfg = M.state.cfg
+			local footer_enabled = cfg
+				and cfg.ui
+				and cfg.ui.float
+				and cfg.ui.float.footer
+			if footer_enabled and vim.fn.has("nvim-0.10") == 1 then
 				pcall(vim.api.nvim_win_set_config, M.state.winid, {
 					footer = current_footer(),
 				})

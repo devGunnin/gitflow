@@ -283,6 +283,54 @@ T.run_suite("Branch Graph Visualization", {
 		close_panel()
 	end,
 
+	["float layout keeps footer unset after G toggles when footer is disabled"] = function()
+		if vim.fn.has("nvim-0.10") ~= 1 then
+			return
+		end
+
+		local float_cfg = vim.deepcopy(cfg)
+		float_cfg.ui.default_layout = "float"
+		float_cfg.ui.float.footer = false
+
+		close_panel()
+		branch_panel.open(float_cfg)
+		T.drain_jobs(3000)
+
+		local winid = branch_panel.state.winid
+		T.assert_true(
+			winid ~= nil and vim.api.nvim_win_is_valid(winid),
+			"branch panel float window should be valid"
+		)
+
+		local win_cfg = vim.api.nvim_win_get_config(winid)
+		T.assert_true(
+			win_cfg.relative ~= nil and win_cfg.relative ~= "",
+			"branch panel should open in float layout"
+		)
+		T.assert_true(
+			win_cfg.footer == nil,
+			"float footer should be unset before toggling when disabled"
+		)
+
+		branch_panel.toggle_view()
+		T.drain_jobs(3000)
+		win_cfg = vim.api.nvim_win_get_config(winid)
+		T.assert_true(
+			win_cfg.footer == nil,
+			"float footer should remain unset after toggling to graph"
+		)
+
+		branch_panel.toggle_view()
+		T.drain_jobs(3000)
+		win_cfg = vim.api.nvim_win_get_config(winid)
+		T.assert_true(
+			win_cfg.footer == nil,
+			"float footer should remain unset after toggling back to list"
+		)
+
+		close_panel()
+	end,
+
 	["rapid toggle keeps list rendering when delayed graph callback completes"] = function()
 		local original_graph = git_branch.graph
 		with_temporary_patches({
