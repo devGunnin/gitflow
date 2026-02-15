@@ -20,8 +20,8 @@ local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
 local GRAPH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_graph_hl")
 local BRANCH_FLOAT_TITLE = "Gitflow Branches"
 local LIST_FOOTER =
-	"<CR> switch  c create  d delete  D force delete  r rename"
-	.. "  m merge  R refresh  f fetch  G graph  q close"
+	"<CR> switch  c create  d delete  D force delete  m merge"
+	.. "  r rename  R refresh  f fetch  G graph  q close"
 local GRAPH_FOOTER =
 	"R refresh  f fetch  G list  q close"
 
