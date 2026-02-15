@@ -15,8 +15,8 @@ local M = {}
 local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
 local BRANCH_FLOAT_TITLE = "Gitflow Branches"
 local BRANCH_FLOAT_FOOTER =
-	"<CR> switch  c create  d delete  D force delete  r rename"
-	.. "  R refresh  f fetch  q close"
+	"<CR> switch  c create  d delete  D force delete  m merge"
+	.. "  r rename  R refresh  f fetch  q close"
 
 ---@type GitflowBranchPanelState
 M.state = {
@@ -108,6 +108,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "f", function()
 		M.fetch_remotes()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "m", function()
+		M.merge_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "q", function()
@@ -405,6 +409,32 @@ function M.rename_under_cursor()
 			)
 			M.refresh()
 		end)
+	end)
+end
+
+function M.merge_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
+		utils.notify("No branch selected", vim.log.levels.WARN)
+		return
+	end
+
+	if entry.is_current then
+		utils.notify("Cannot merge branch into itself", vim.log.levels.WARN)
+		return
+	end
+
+	local confirmed = ui.input.confirm(
+		("Merge '%s' into current branch?"):format(entry.name),
+		{ choices = { "&Merge", "&Cancel" }, default_choice = 2 }
+	)
+	if not confirmed then
+		return
+	end
+
+	vim.cmd({ cmd = "Gitflow", args = { "merge", entry.name } })
+	vim.schedule(function()
+		M.refresh()
 	end)
 end
 
