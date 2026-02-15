@@ -8,6 +8,7 @@ local gh_labels = require("gitflow.gh.labels")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local label_picker = require("gitflow.ui.label_picker")
+local list_picker = require("gitflow.ui.list_picker")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
 
@@ -502,7 +503,7 @@ function M.create_interactive()
 		return
 	end
 
-	local function open_form(available_labels)
+	local function open_form(available_labels, assignee_items)
 		form.open({
 			title = "Create Issue",
 			fields = {
@@ -517,12 +518,30 @@ function M.create_interactive()
 							labels = available_labels,
 							selected = parse_csv_input(ctx.value),
 							on_submit = function(selected_labels)
-								ctx.set_value(table.concat(selected_labels, ","))
+								ctx.set_value(
+									table.concat(selected_labels, ",")
+								)
 							end,
 						})
 					end,
 				},
-				{ name = "Assignees (comma-separated)", key = "assignees" },
+				{
+					name = "Assignees",
+					key = "assignees",
+					picker = function(ctx)
+						list_picker.open({
+							title = "Select Assignees",
+							items = assignee_items,
+							selected = parse_csv_input(ctx.value),
+							multi_select = true,
+							on_submit = function(selected)
+								ctx.set_value(
+									table.concat(selected, ",")
+								)
+							end,
+						})
+					end,
+				},
 			},
 			on_submit = function(values)
 				gh_issues.create({
@@ -545,13 +564,39 @@ function M.create_interactive()
 		})
 	end
 
-	gh_labels.list({}, function(err, labels)
-		if err then
-			utils.notify(("Failed to load labels: %s"):format(err), vim.log.levels.WARN)
-			open_form({})
+	local loaded = { labels = nil, assignees = nil }
+	local pending = 2
+
+	local function try_open()
+		pending = pending - 1
+		if pending > 0 then
 			return
 		end
-		open_form(type(labels) == "table" and labels or {})
+		vim.schedule(function()
+			open_form(loaded.labels or {}, loaded.assignees or {})
+		end)
+	end
+
+	gh_labels.list({}, function(err, labels)
+		if err then
+			utils.notify(
+				("Failed to load labels: %s"):format(err),
+				vim.log.levels.WARN
+			)
+		end
+		loaded.labels = type(labels) == "table" and labels or {}
+		try_open()
+	end)
+
+	local assignee_comp = require("gitflow.completion.assignees")
+	vim.schedule(function()
+		local names = assignee_comp.list_repo_assignee_candidates()
+		local items = {}
+		for _, name in ipairs(names) do
+			items[#items + 1] = { name = name }
+		end
+		loaded.assignees = items
+		try_open()
 	end)
 end
 

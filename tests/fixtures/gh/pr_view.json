@@ -1,0 +1,23 @@
+{
+  "number": 42,
+  "title": "Add dark mode support",
+  "body": "This PR adds dark mode theming to all panels.",
+  "state": "OPEN",
+  "isDraft": false,
+  "author": {"login": "octocat"},
+  "headRefName": "feature/dark-mode",
+  "baseRefName": "main",
+  "labels": [{"name": "enhancement", "color": "a2eeef"}],
+  "reviewRequests": [{"login": "reviewer1"}],
+  "reviews": [{"author": {"login": "reviewer1"}, "state": "APPROVED", "body": "LGTM"}],
+  "comments": [
+    {"body": "Looks great!", "author": {"login": "reviewer1"}},
+    {"body": "Can you add tests?", "author": {"login": "reviewer2"}}
+  ],
+  "files": [
+    {"path": "lua/gitflow/highlights.lua"},
+    {"path": "lua/gitflow/config.lua"}
+  ],
+  "updatedAt": "2026-02-10T12:00:00Z",
+  "mergedAt": null
+}

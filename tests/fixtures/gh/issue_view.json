@@ -1,0 +1,13 @@
+{
+  "number": 1,
+  "title": "Setup CI pipeline",
+  "body": "We need to configure GitHub Actions for automated testing.",
+  "state": "OPEN",
+  "labels": [{"name": "enhancement", "color": "a2eeef"}],
+  "assignees": [{"login": "octocat"}],
+  "author": {"login": "devGunnin"},
+  "comments": [
+    {"body": "I can take this on.", "author": {"login": "octocat"}},
+    {"body": "Great, assigned to you.", "author": {"login": "devGunnin"}}
+  ]
+}

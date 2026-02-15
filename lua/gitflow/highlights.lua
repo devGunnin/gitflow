@@ -17,6 +17,11 @@ M.DEFAULT_GROUPS = {
 	GitflowAdded = { link = "DiffAdd" },
 	GitflowRemoved = { link = "DiffDelete" },
 	GitflowModified = { link = "DiffChange" },
+	-- Diff view — distinct styling for file headers, hunk headers, context
+	GitflowDiffFileHeader = { fg = "#E5C07B", bold = true },
+	GitflowDiffHunkHeader = { fg = "#C678DD", bold = true },
+	GitflowDiffContext = { link = "Comment" },
+	GitflowDiffLineNr = { fg = "#5C6370" },
 	GitflowStaged = { link = "DiffAdd" },
 	GitflowUnstaged = { link = "DiffChange" },
 	GitflowUntracked = { link = "Comment" },
