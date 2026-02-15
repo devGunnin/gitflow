@@ -38,12 +38,20 @@ local ui_render = require("gitflow.ui.render")
 -- ── 1. Fallback: no opts ─────────────────────────────────────────────
 
 local w_nil = ui_render.content_width()
-assert_equals(w_nil, 50, "content_width() with no args should return default fallback (50)")
+assert_equals(
+	w_nil,
+	vim.o.columns,
+	"content_width() with no args should return vim.o.columns fallback"
+)
 
 -- ── 2. Fallback: empty opts ──────────────────────────────────────────
 
 local w_empty = ui_render.content_width({})
-assert_equals(w_empty, 50, "content_width({}) should return default fallback (50)")
+assert_equals(
+	w_empty,
+	vim.o.columns,
+	"content_width({}) should return vim.o.columns fallback"
+)
 
 -- ── 3. Custom fallback ───────────────────────────────────────────────
 
