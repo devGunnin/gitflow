@@ -191,7 +191,7 @@ for _, group in ipairs(chrome_groups) do
 	)
 end
 
--- Open issue/PR rows should be palette-aligned (not DiagnosticOk green)
+-- Open issue/PR rows should preserve the requested DiagnosticOk green
 local open_state_groups = {
 	"GitflowIssueOpen",
 	"GitflowPROpen",
@@ -200,13 +200,9 @@ for _, group in ipairs(open_state_groups) do
 	local attrs = highlights.DEFAULT_GROUPS[group]
 	assert_true(attrs ~= nil, ("%s should exist"):format(group))
 	assert_equals(
-		attrs.fg,
-		highlights.PALETTE.accent_primary,
-		("%s fg should match PALETTE.accent_primary"):format(group)
-	)
-	assert_true(
-		attrs.bold == true,
-		("%s should be bold for themed emphasis"):format(group)
+		attrs.link,
+		"DiagnosticOk",
+		("%s should link to DiagnosticOk"):format(group)
 	)
 end
 
