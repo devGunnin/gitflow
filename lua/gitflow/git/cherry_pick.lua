@@ -83,7 +83,7 @@ function M.list_unique_commits(source_branch, opts, cb)
 		"--cherry-pick",
 		"--right-only",
 		"--no-merges",
-		("--pretty=format:%%H%%x09%%h %%s"):format(),
+		"--pretty=format:%H%x09%s",
 	}
 	if count > 0 then
 		args[#args + 1] = ("-n%d"):format(count)

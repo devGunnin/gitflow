@@ -756,87 +756,91 @@ test("out-of-order refresh callbacks ignore stale branch responses", function()
 	end
 end)
 
-test("cherry_pick panel renders commits for a source branch", function()
-	local cp_panel = require("gitflow.panels.cherry_pick")
-	cp_panel.state.cfg = cfg
-	cp_panel.state.source_branch = "feature-a"
-	cp_panel.state.stage = "commits"
+test(
+	"cherry_pick panel renders one short SHA per row with core.abbrev=10",
+	function()
+		local cp_panel = require("gitflow.panels.cherry_pick")
+		run_git(repo_dir, { "config", "core.abbrev", "10" })
+		cp_panel.state.cfg = cfg
+		cp_panel.state.source_branch = "feature-a"
+		cp_panel.state.stage = "commits"
 
-	-- Create window/buffer manually for rendering test
-	local ui_mod = require("gitflow.ui")
-	local bufnr = ui_mod.buffer.create("cherry_pick", {
-		filetype = "gitflowcherrypick",
-		lines = { "Loading..." },
-	})
-	cp_panel.state.bufnr = bufnr
-	cp_panel.state.winid = ui_mod.window.open_split({
-		name = "cherry_pick",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			cp_panel.state.winid = nil
-		end,
-	})
+		-- Create window/buffer manually for rendering test
+		local ui_mod = require("gitflow.ui")
+		local bufnr = ui_mod.buffer.create("cherry_pick", {
+			filetype = "gitflowcherrypick",
+			lines = { "Loading..." },
+		})
+		cp_panel.state.bufnr = bufnr
+		cp_panel.state.winid = ui_mod.window.open_split({
+			name = "cherry_pick",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				cp_panel.state.winid = nil
+			end,
+		})
 
-	cp_panel.refresh()
+		cp_panel.refresh()
 
-	vim.wait(3000, function()
-		if not cp_panel.state.bufnr then
-			return false
-		end
-		if not vim.api.nvim_buf_is_valid(cp_panel.state.bufnr) then
-			return false
-		end
+		vim.wait(3000, function()
+			if not cp_panel.state.bufnr then
+				return false
+			end
+			if not vim.api.nvim_buf_is_valid(cp_panel.state.bufnr) then
+				return false
+			end
+			local lines = vim.api.nvim_buf_get_lines(
+				cp_panel.state.bufnr, 0, -1, false
+			)
+			return #lines > 1 and not lines[1]:find("Loading", 1, true)
+		end, 50)
+
 		local lines = vim.api.nvim_buf_get_lines(
 			cp_panel.state.bufnr, 0, -1, false
 		)
-		return #lines > 1 and not lines[1]:find("Loading", 1, true)
-	end, 50)
+		assert_true(#lines > 2, "should have rendered content lines")
 
-	local lines = vim.api.nvim_buf_get_lines(
-		cp_panel.state.bufnr, 0, -1, false
-	)
-	assert_true(#lines > 2, "should have rendered content lines")
-
-	-- Check source branch header
-	local has_source = false
-	for _, line in ipairs(lines) do
-		if line:find("feature%-a", 1, false) then
-			has_source = true
-			break
+		-- Check source branch header
+		local has_source = false
+		for _, line in ipairs(lines) do
+			if line:find("feature%-a", 1, false) then
+				has_source = true
+				break
+			end
 		end
-	end
-	assert_true(
-		has_source,
-		"should display source branch name"
-	)
-
-	-- Check that feature-a commits appear
-	local has_commit = false
-	for _, line in ipairs(lines) do
-		if line:find("feature%-a commit", 1, false) then
-			has_commit = true
-			break
-		end
-	end
-	assert_true(
-		has_commit,
-		"should display feature-a commits"
-	)
-
-	for line_no, entry in pairs(cp_panel.state.line_entries) do
-		local line_text = lines[line_no] or ""
-		local sha_count =
-			count_occurrences(line_text, entry.short_sha)
-		assert_equals(
-			sha_count, 1,
-			"commit row should render short SHA exactly once"
+		assert_true(
+			has_source,
+			"should display source branch name"
 		)
-	end
 
-	cp_panel.close()
-end)
+		-- Check that feature-a commits appear
+		local has_commit = false
+		for _, line in ipairs(lines) do
+			if line:find("feature%-a commit", 1, false) then
+				has_commit = true
+				break
+			end
+		end
+		assert_true(
+			has_commit,
+			"should display feature-a commits"
+		)
+
+		for line_no, entry in pairs(cp_panel.state.line_entries) do
+			local line_text = lines[line_no] or ""
+			local sha_count =
+				count_occurrences(line_text, entry.short_sha)
+			assert_equals(
+				sha_count, 1,
+				"commit row should render short SHA exactly once"
+			)
+		end
+
+		cp_panel.close()
+	end
+)
 
 test("cherry_pick panel applies hash highlight to commit SHAs", function()
 	local cp_panel = require("gitflow.panels.cherry_pick")
