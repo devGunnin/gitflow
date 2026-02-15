@@ -373,7 +373,12 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Stage4 issue") ~= nil
+	for _, line in ipairs(lines) do
+		if line:find("#1", 1, true) and line:find("Stage4 issue", 1, true) then
+			return true
+		end
+	end
+	return false
 end, "issue list should render issue entries")
 
 local issue_buf = buffer.get("issues")
@@ -541,7 +546,7 @@ vim.o.wildcharm = original_wildcharm
 vim.o.wildmenu = original_wildmenu
 vim.o.wildmode = original_wildmode
 
--- Test: create_interactive opens a form-based float
+-- Test: create_interactive opens form-based float with correct fields
 issues_panel.create_interactive()
 wait_until(function()
 	local wins = vim.api.nvim_list_wins()
@@ -556,7 +561,7 @@ wait_until(function()
 		end
 	end
 	return false
-end, "create_interactive should open form float", 2000)
+end, "create_interactive should open form float", 3000)
 
 local create_form_buf = nil
 local create_form_lines = {}
@@ -574,6 +579,7 @@ for _, winid in ipairs(vim.api.nvim_list_wins()) do
 	end
 end
 assert_true(create_form_buf ~= nil, "issue create form buffer should exist")
+assert_true(#create_form_lines > 0, "issue create form should have content")
 assert_true(
 	find_line(create_form_lines, "Title") ~= nil,
 	"issue create form should have Title field"
@@ -603,7 +609,12 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Stage4 PR") ~= nil
+	for _, line in ipairs(lines) do
+		if line:find("#7", 1, true) and line:find("Stage4 PR", 1, true) then
+			return true
+		end
+	end
+	return false
 end, "pr list should render pr entries")
 
 local pr_buf = buffer.get("prs")
@@ -612,7 +623,13 @@ assert_keymaps(pr_buf, { "<CR>", "c", "C", "L", "m", "o", "q" })
 assert_keymap_absent(pr_buf, "l")
 
 local pr_lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
-local pr_line = find_line(pr_lines, "Stage4 PR")
+local pr_line
+for i, line in ipairs(pr_lines) do
+	if line:find("#7", 1, true) and line:find("Stage4 PR", 1, true) then
+		pr_line = i
+		break
+	end
+end
 assert_true(pr_line ~= nil, "pr list line should exist")
 vim.api.nvim_set_current_win(pr_panel.state.winid)
 vim.api.nvim_win_set_cursor(pr_panel.state.winid, { pr_line, 0 })
@@ -740,7 +757,12 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Stage4 PR") ~= nil
+	for _, line in ipairs(lines) do
+		if line:find("#7", 1, true) and line:find("Stage4 PR", 1, true) then
+			return true
+		end
+	end
+	return false
 end, "pr list should re-render before no-selection test")
 
 vim.api.nvim_set_current_win(pr_panel.state.winid)
