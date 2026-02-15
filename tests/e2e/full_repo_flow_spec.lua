@@ -245,6 +245,67 @@ T.run_suite("E2E: Full Repository Flow", {
 		cleanup_panels()
 	end,
 
+	["step 2: status panel shows no-upstream hint when upstream is missing"] = function()
+		cleanup_panels()
+		local prev = vim.env.GITFLOW_GIT_NO_UPSTREAM
+		vim.env.GITFLOW_GIT_NO_UPSTREAM = "1"
+
+		status_panel.open(cfg, {})
+		T.drain_jobs(5000)
+
+		local bufnr = ui.buffer.get("status")
+		T.assert_true(
+			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+			"status buffer should exist for no-upstream test"
+		)
+
+		T.wait_until(function()
+			local lines = T.buf_lines(bufnr)
+			return T.find_line(lines, "Outgoing / Incoming") ~= nil
+		end, "no-upstream section header should render", 5000)
+
+		local lines = T.buf_lines(bufnr)
+
+		-- Combined header must appear
+		T.assert_true(
+			T.find_line(lines, "Outgoing / Incoming") ~= nil,
+			"no-upstream header 'Outgoing / Incoming' should be present"
+		)
+
+		-- Actionable hint must appear
+		T.assert_true(
+			T.find_line(lines, "No upstream branch configured") ~= nil,
+			"no-upstream hint message should be present"
+		)
+		T.assert_true(
+			T.find_line(lines, "Gitflow push") ~= nil,
+			"no-upstream hint should mention :Gitflow push"
+		)
+
+		-- Separate Outgoing/Incoming sections must NOT appear
+		local has_separate_outgoing = false
+		local has_separate_incoming = false
+		for _, line in ipairs(lines) do
+			if line:find("Outgoing %(oldest", 1, true) then
+				has_separate_outgoing = true
+			end
+			if line:find("Incoming %(oldest", 1, true) then
+				has_separate_incoming = true
+			end
+		end
+		T.assert_true(
+			not has_separate_outgoing,
+			"separate Outgoing section should not appear without upstream"
+		)
+		T.assert_true(
+			not has_separate_incoming,
+			"separate Incoming section should not appear without upstream"
+		)
+
+		cleanup_panels()
+		vim.env.GITFLOW_GIT_NO_UPSTREAM = prev
+	end,
+
 	["step 2: stage file dispatches git add"] = function()
 		with_temp_git_log(function(log_path)
 			-- Stage a file via git_status.stage_file

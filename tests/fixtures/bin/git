@@ -154,6 +154,10 @@ DIFF
         printf '%s/.git\n' "$(pwd)"
         ;;
       *--abbrev-ref*@\{upstream\}*|*--symbolic-full-name*@\{upstream\}*)
+        if [ "${GITFLOW_GIT_NO_UPSTREAM:-}" = "1" ]; then
+          echo "fatal: no upstream configured for branch 'main'" >&2
+          exit 128
+        fi
         printf 'origin/main\n'
         ;;
       *--abbrev-ref*)

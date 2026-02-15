@@ -40,6 +40,7 @@ local icons = require("gitflow.icons")
 local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 local STATUS_FLOAT_TITLE = "Gitflow Status"
+local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
 local STATUS_FLOAT_FOOTER =
 	"s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
 	.. "  cx conflicts  p push  X revert  r refresh  q close"
@@ -368,10 +369,11 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		local incoming_title = ("Incoming (oldest -> newest, only on %s)"):format(upstream_name)
 		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false, render_opts)
 	else
-		local upstream_title, upstream_sep = ui_render.section("Outgoing / Incoming", nil, render_opts)
+		local upstream_title, upstream_sep = ui_render.section(STATUS_NO_UPSTREAM_HEADER, nil, render_opts)
 		lines[#lines + 1] = upstream_title
 		lines[#lines + 1] = upstream_sep
-		lines[#lines + 1] = ui_render.entry("(upstream branch is not configured)")
+		lines[#lines + 1] = ui_render.entry("No upstream branch configured")
+		lines[#lines + 1] = ui_render.entry("Run :Gitflow push or git push -u <remote> <branch>")
 		lines[#lines + 1] = ""
 	end
 
@@ -398,6 +400,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 			or vim.startswith(line, "Outgoing")
 			or vim.startswith(line, "Incoming")
 			or vim.startswith(line, "Commit History")
+			or line == STATUS_NO_UPSTREAM_HEADER
 		then
 			entry_highlights[line_no] = "GitflowHeader"
 		end
