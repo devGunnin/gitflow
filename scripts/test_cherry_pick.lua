@@ -810,6 +810,70 @@ test("cherry_pick panel renders commits for a source branch", function()
 	cp_panel.close()
 end)
 
+test("cherry_pick panel applies hash highlight to commit SHAs", function()
+	local cp_panel = require("gitflow.panels.cherry_pick")
+	cp_panel.state.cfg = cfg
+	cp_panel.state.source_branch = "feature-a"
+	cp_panel.state.stage = "commits"
+
+	local ui_mod = require("gitflow.ui")
+	local bufnr = ui_mod.buffer.create("cherry_pick", {
+		filetype = "gitflowcherrypick",
+		lines = { "Loading..." },
+	})
+	cp_panel.state.bufnr = bufnr
+	cp_panel.state.winid = ui_mod.window.open_split({
+		name = "cherry_pick",
+		bufnr = bufnr,
+		orientation = cfg.ui.split.orientation,
+		size = cfg.ui.split.size,
+		on_close = function()
+			cp_panel.state.winid = nil
+		end,
+	})
+
+	cp_panel.refresh()
+
+	vim.wait(3000, function()
+		if not cp_panel.state.bufnr then
+			return false
+		end
+		local lines = vim.api.nvim_buf_get_lines(
+			cp_panel.state.bufnr, 0, -1, false
+		)
+		return #lines > 1 and not lines[1]:find("Loading", 1, true)
+	end, 50)
+
+	local lines = vim.api.nvim_buf_get_lines(
+		cp_panel.state.bufnr, 0, -1, false
+	)
+	local ns = vim.api.nvim_create_namespace("gitflow_cherry_pick_hl")
+	local marks = vim.api.nvim_buf_get_extmarks(
+		cp_panel.state.bufnr, ns, 0, -1, { details = true }
+	)
+	local has_hash_highlight = false
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		if details.hl_group == "GitflowCherryPickHash" then
+			local line_no = mark[2] + 1
+			local entry = cp_panel.state.line_entries[line_no]
+			local line_text = lines[line_no] or ""
+			local sha_start = entry
+				and line_text:find(entry.short_sha, 1, true) or nil
+			if sha_start and mark[3] == (sha_start - 1) then
+				has_hash_highlight = true
+				break
+			end
+		end
+	end
+	assert_true(
+		has_hash_highlight,
+		"rendered commit SHA should use GitflowCherryPickHash highlight"
+	)
+
+	cp_panel.close()
+end)
+
 test("cherry_pick panel keymaps are set on buffer", function()
 	local cp_panel = require("gitflow.panels.cherry_pick")
 	cp_panel.state.cfg = cfg

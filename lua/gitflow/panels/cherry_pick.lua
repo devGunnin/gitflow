@@ -218,6 +218,21 @@ local function render_commits(commits, source_branch, current_branch)
 			entry_highlights = entry_highlights,
 		}
 	)
+
+	for line_no, entry in pairs(line_entries) do
+		local line_text = lines[line_no] or ""
+		local sha_start = line_text:find(entry.short_sha, 1, true)
+		if sha_start then
+			vim.api.nvim_buf_add_highlight(
+				bufnr,
+				CP_HIGHLIGHT_NS,
+				"GitflowCherryPickHash",
+				line_no - 1,
+				sha_start - 1,
+				sha_start - 1 + #entry.short_sha
+			)
+		end
+	end
 end
 
 ---@return GitflowCherryPickEntry|nil
