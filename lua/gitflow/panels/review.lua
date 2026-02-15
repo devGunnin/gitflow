@@ -54,6 +54,24 @@ local REVIEW_FLOAT_FOOTER =
 	.. "  a approve  x changes  R reply"
 	.. "  <leader>t toggle  <leader>b back  r refresh  q close"
 
+---@param line string
+---@return boolean
+local function is_diff_file_header_line(line)
+	return vim.startswith(line, "diff --git")
+		or vim.startswith(line, "index ")
+		or line:match("^%-%-%- [ab]/") ~= nil
+		or line:match("^%-%-%- /dev/null$") ~= nil
+		or line:match("^%+%+%+ [ab]/") ~= nil
+		or line:match("^%+%+%+ /dev/null$") ~= nil
+		or vim.startswith(line, "new file mode")
+		or vim.startswith(line, "deleted file mode")
+		or vim.startswith(line, "rename from")
+		or vim.startswith(line, "rename to")
+		or vim.startswith(line, "similarity index")
+		or vim.startswith(line, "old mode")
+		or vim.startswith(line, "new mode")
+end
+
 ---@type GitflowPrReviewPanelState
 M.state = {
 	bufnr = nil,
@@ -412,25 +430,13 @@ local function render_review(
 
 		for idx, line in ipairs(diff_lines) do
 			local group = nil
-			if vim.startswith(line, "diff --git")
-				or vim.startswith(line, "index ")
-				or vim.startswith(line, "--- ")
-				or vim.startswith(line, "+++ ")
-				or vim.startswith(line, "new file mode")
-				or vim.startswith(line, "deleted file mode")
-				or vim.startswith(line, "rename from")
-				or vim.startswith(line, "rename to")
-				or vim.startswith(line, "similarity index")
-				or vim.startswith(line, "old mode")
-				or vim.startswith(line, "new mode") then
+			if is_diff_file_header_line(line) then
 				group = "GitflowDiffFileHeader"
 			elseif vim.startswith(line, "@@") then
 				group = "GitflowDiffHunkHeader"
-			elseif vim.startswith(line, "+")
-				and not vim.startswith(line, "+++") then
+			elseif vim.startswith(line, "+") then
 				group = "GitflowAdded"
-			elseif vim.startswith(line, "-")
-				and not vim.startswith(line, "---") then
+			elseif vim.startswith(line, "-") then
 				group = "GitflowRemoved"
 			elseif vim.startswith(line, " ") then
 				group = "GitflowDiffContext"

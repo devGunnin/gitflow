@@ -272,6 +272,16 @@ local function render_list(issues)
 	end
 
 	local entry_highlights = {}
+
+	-- Mark section headers
+	for line_no, line in ipairs(lines) do
+		if vim.startswith(line, "Filters:")
+			or vim.startswith(line, "Issues (")
+		then
+			entry_highlights[line_no] = "GitflowHeader"
+		end
+	end
+
 	for line_no, issue in pairs(line_entries) do
 		local group = issue_highlight_group(issue_state(issue))
 		entry_highlights[line_no] = group
@@ -370,6 +380,13 @@ local function render_view(issue)
 
 	local entry_highlights = {}
 	entry_highlights[header_line_count + 1] = issue_highlight_group(issue_state(issue))
+
+	-- Mark section headers in detail view
+	for line_no, line in ipairs(lines) do
+		if line == "Body" or line == "Comments" then
+			entry_highlights[line_no] = "GitflowHeader"
+		end
+	end
 
 	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
 		entry_highlights = entry_highlights,

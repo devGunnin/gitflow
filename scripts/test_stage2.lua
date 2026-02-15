@@ -116,6 +116,19 @@ local function find_line_in_range(lines, needle, start_line, end_line)
 	return nil
 end
 
+local function count_plain_occurrences(text, needle)
+	local count = 0
+	local from = 1
+	while true do
+		local start_idx = text:find(needle, from, true)
+		if not start_idx then
+			return count
+		end
+		count = count + 1
+		from = start_idx + #needle
+	end
+end
+
 local repo_dir = vim.fn.tempname()
 assert_equals(vim.fn.mkdir(repo_dir, "p"), 1, "temp repo directory should be created")
 
@@ -151,9 +164,21 @@ local cfg = gitflow.setup({
 })
 
 assert_equals(cfg.git.log.count, 25, "setup should merge git.log config")
-assert_mapping("gs", "<Plug>(GitflowStatus)", "default status keymap should be registered")
-assert_mapping("gp", "<Plug>(GitflowPush)", "default push keymap should be registered")
-assert_mapping("gP", "<Plug>(GitflowPull)", "default pull keymap should be registered")
+assert_mapping(
+	cfg.keybindings.status,
+	"<Plug>(GitflowStatus)",
+	"default status keymap should be registered"
+)
+assert_mapping(
+	cfg.keybindings.push,
+	"<Plug>(GitflowPush)",
+	"default push keymap should be registered"
+)
+assert_mapping(
+	cfg.keybindings.pull,
+	"<Plug>(GitflowPull)",
+	"default pull keymap should be registered"
+)
 assert_mapping("<Plug>(GitflowFetch)", "<Cmd>Gitflow fetch<CR>", "fetch plug keymap should be registered")
 assert_mapping(
 	cfg.keybindings.fetch,
@@ -522,6 +547,23 @@ local log_ready = vim.wait(5000, function()
 	return lines[#lines] == expected_branch_line
 end, 25)
 assert_true(log_ready, "log panel should display current branch at the bottom")
+
+local log_lines = vim.api.nvim_buf_get_lines(log_panel.state.bufnr, 0, -1, false)
+local first_log_line = nil
+local first_log_entry = nil
+for line_no, entry in pairs(log_panel.state.line_entries) do
+	if not first_log_line or line_no < first_log_line then
+		first_log_line = line_no
+		first_log_entry = entry
+	end
+end
+assert_true(first_log_line ~= nil, "log panel should map rendered rows to commit entries")
+local rendered_log_line = log_lines[first_log_line]
+assert_equals(
+	count_plain_occurrences(rendered_log_line, first_log_entry.short_sha),
+	1,
+	"log panel row should render short sha exactly once"
+)
 
 commands.dispatch({ "stash", "list" }, cfg)
 local stash_panel_ready = vim.wait(5000, function()

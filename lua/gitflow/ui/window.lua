@@ -107,6 +107,12 @@ function M.open_split(opts)
 		vim.api.nvim_win_set_buf(winid, options.bufnr)
 	end
 
+	vim.api.nvim_set_option_value(
+		"winhighlight",
+		"Normal:GitflowNormal",
+		{ win = winid }
+	)
+
 	register_window(options.name, winid, options.on_close)
 
 	if options.enter == false and vim.api.nvim_win_is_valid(current_win) then

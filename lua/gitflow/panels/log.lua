@@ -87,6 +87,28 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---@param entry GitflowLogEntry
+---@return string
+local function display_summary(entry)
+	local summary = entry.summary or ""
+	local short_sha = entry.short_sha or ""
+	if short_sha == "" then
+		return summary
+	end
+
+	if vim.startswith(summary, short_sha) then
+		local remainder = summary:sub(#short_sha + 1)
+		if remainder == "" then
+			return ""
+		end
+		if remainder:match("^%s") then
+			return remainder:gsub("^%s+", "")
+		end
+	end
+
+	return summary
+end
+
 ---@param entries GitflowLogEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
@@ -102,9 +124,12 @@ local function render(entries, current_branch)
 	else
 		for _, entry in ipairs(entries) do
 			local commit_icon = icons.get("git_state", "commit")
-			lines[#lines + 1] = ui_render.entry(
-				("%s %s %s"):format(commit_icon, entry.short_sha, entry.summary)
-			)
+			local summary = display_summary(entry)
+			local line_text = ("%s %s"):format(commit_icon, entry.short_sha)
+			if summary ~= "" then
+				line_text = ("%s %s"):format(line_text, summary)
+			end
+			lines[#lines + 1] = ui_render.entry(line_text)
 			line_entries[#lines] = entry
 		end
 	end
@@ -124,6 +149,19 @@ local function render(entries, current_branch)
 	ui_render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, lines, {
 		footer_line = #lines,
 	})
+
+	-- Apply GitflowLogHash to commit SHA portion of each entry
+	for line_no, entry in pairs(line_entries) do
+		local line_text = lines[line_no] or ""
+		local sha_start = line_text:find(entry.short_sha, 1, true)
+		if sha_start then
+			vim.api.nvim_buf_add_highlight(
+				bufnr, LOG_HIGHLIGHT_NS, "GitflowLogHash",
+				line_no - 1, sha_start - 1,
+				sha_start - 1 + #entry.short_sha
+			)
+		end
+	end
 end
 
 ---@return GitflowLogEntry|nil

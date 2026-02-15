@@ -1,5 +1,17 @@
 local M = {}
 
+--- Centralized color palette — single source of truth for accent colors.
+---@type table<string, string>
+M.PALETTE = {
+	accent_primary = "#56B6C2",
+	accent_secondary = "#DCA561",
+	separator_fg = "#3E4452",
+	backdrop_bg = "#000000",
+	dark_fg = "#222222",
+	log_hash = "#E5C07B",
+	stash_ref = "#C678DD",
+}
+
 M.DEFAULT_GROUPS = {
 	-- Diff / git state
 	GitflowAdded = { link = "DiffAdd" },
@@ -33,6 +45,9 @@ M.DEFAULT_GROUPS = {
 	GitflowReviewApproved = { link = "DiagnosticOk" },
 	GitflowReviewChangesRequested = { link = "WarningMsg" },
 	GitflowReviewComment = { link = "Comment" },
+	-- Log / Stash entry accents
+	GitflowLogHash = { fg = "#E5C07B", bold = true },
+	GitflowStashRef = { fg = "#C678DD", bold = true },
 	-- Window chrome — themed accent colors (cyan primary, gold secondary)
 	GitflowBorder = { fg = "#56B6C2" },
 	GitflowTitle = { fg = "#56B6C2", bold = true },
