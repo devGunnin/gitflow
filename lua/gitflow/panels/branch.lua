@@ -299,7 +299,7 @@ end
 ---@param width integer
 ---@return string
 local function pad_graph_text(text, width)
-	local missing = width - vim.fn.strchars(text)
+	local missing = width - vim.fn.strdisplaywidth(text)
 	if missing <= 0 then
 		return text
 	end
@@ -394,7 +394,7 @@ local function build_graph_rows(graph_entries, current_branch)
 	local lane_width = 8
 	for _, entry in ipairs(graph_entries) do
 		local lane = normalize_graph_text(entry.graph or "")
-		lane_width = math.max(lane_width, vim.fn.strchars(lane))
+		lane_width = math.max(lane_width, vim.fn.strdisplaywidth(lane))
 	end
 
 	---@type GitflowGraphRenderRow[]

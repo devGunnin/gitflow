@@ -394,6 +394,69 @@ T.run_suite("Branch Graph Visualization", {
 		close_panel()
 	end,
 
+	["graph view keeps flow glyphs out of commit column with ambiwidth=double"] = function()
+		local original_ambiwidth = vim.o.ambiwidth
+		local ok, err = xpcall(function()
+			vim.o.ambiwidth = "double"
+			close_panel()
+			branch_panel.open(cfg)
+			T.drain_jobs(3000)
+
+			branch_panel.toggle_view()
+			T.drain_jobs(3000)
+
+			local bufnr = ui.buffer.get("branch")
+			local lines = T.buf_lines(bufnr)
+			local header_line = nil
+			for _, line in ipairs(lines) do
+				if line:find("Flow", 1, true) and line:find("Commit", 1, true) then
+					header_line = line
+					break
+				end
+			end
+
+			T.assert_true(
+				header_line ~= nil,
+				"graph view should render Flow and Commit headers"
+			)
+			local commit_col = header_line:find("Commit", 1, true)
+			T.assert_true(
+				commit_col ~= nil,
+				"graph header should include Commit column"
+			)
+			local commit_display_col = vim.fn.strdisplaywidth(
+				header_line:sub(1, commit_col - 1)
+			)
+
+			local checked_rows = 0
+			for _, line in ipairs(lines) do
+				local hash_col = line:match("()(%x%x%x%x%x%x%x)")
+				if hash_col then
+					checked_rows = checked_rows + 1
+					local hash_display_col = vim.fn.strdisplaywidth(
+						line:sub(1, hash_col - 1)
+					)
+					T.assert_equals(
+						hash_display_col,
+						commit_display_col,
+						("commit hash should align to Commit column: %s"):format(line)
+					)
+				end
+			end
+
+			T.assert_true(
+				checked_rows > 0,
+				"graph view should contain commit rows to validate"
+			)
+
+			close_panel()
+		end, debug.traceback)
+		vim.o.ambiwidth = original_ambiwidth
+		if not ok then
+			error(err, 0)
+		end
+	end,
+
 	["graph view shows Branch Flowchart title"] = function()
 		close_panel()
 		branch_panel.open(cfg)
