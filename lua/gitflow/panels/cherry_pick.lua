@@ -73,6 +73,28 @@ local function refresh_status_panel_if_open()
 	end
 end
 
+---@param entry GitflowCherryPickEntry
+---@return string
+local function display_summary(entry)
+	local summary = entry.summary or ""
+	local short_sha = entry.short_sha or ""
+	if short_sha == "" then
+		return summary
+	end
+
+	if vim.startswith(summary, short_sha) then
+		local remainder = summary:sub(#short_sha + 1)
+		if remainder == "" then
+			return ""
+		end
+		if remainder:match("^%s") then
+			return remainder:gsub("^%s+", "")
+		end
+	end
+
+	return summary
+end
+
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
 		"User", { pattern = "GitflowPostOperation" }
@@ -182,17 +204,19 @@ local function render_commits(commits, source_branch, current_branch)
 		for idx, entry in ipairs(commits) do
 			local commit_icon = icons.get("git_state", "commit")
 			local position_marker = ""
+			local summary = display_summary(entry)
 			if idx <= 9 then
 				position_marker = ("[%d] "):format(idx)
 			end
-			lines[#lines + 1] = ui_render.entry(
-				("%s%s %s %s"):format(
-					position_marker,
-					commit_icon,
-					entry.short_sha,
-					entry.summary
-				)
+			local line_text = ("%s%s %s"):format(
+				position_marker,
+				commit_icon,
+				entry.short_sha
 			)
+			if summary ~= "" then
+				line_text = ("%s %s"):format(line_text, summary)
+			end
+			lines[#lines + 1] = ui_render.entry(line_text)
 			line_entries[#lines] = entry
 		end
 	end

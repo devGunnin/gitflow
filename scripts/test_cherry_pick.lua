@@ -28,6 +28,24 @@ local function contains(list, value)
 	return false
 end
 
+local function count_occurrences(haystack, needle)
+	if needle == "" then
+		return 0
+	end
+
+	local count = 0
+	local start = 1
+	while true do
+		local found = haystack:find(needle, start, true)
+		if not found then
+			break
+		end
+		count = count + 1
+		start = found + #needle
+	end
+	return count
+end
+
 local unpack_fn = table.unpack or unpack
 
 local function wait_async(start, timeout_ms)
@@ -806,6 +824,16 @@ test("cherry_pick panel renders commits for a source branch", function()
 		has_commit,
 		"should display feature-a commits"
 	)
+
+	for line_no, entry in pairs(cp_panel.state.line_entries) do
+		local line_text = lines[line_no] or ""
+		local sha_count =
+			count_occurrences(line_text, entry.short_sha)
+		assert_equals(
+			sha_count, 1,
+			"commit row should render short SHA exactly once"
+		)
+	end
 
 	cp_panel.close()
 end)
