@@ -432,7 +432,7 @@ function M.merge_under_cursor()
 		return
 	end
 
-	vim.cmd("Gitflow merge " .. entry.name)
+	vim.cmd({ cmd = "Gitflow", args = { "merge", entry.name } })
 	vim.schedule(function()
 		M.refresh()
 	end)
