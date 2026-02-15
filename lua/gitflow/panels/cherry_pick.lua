@@ -582,8 +582,17 @@ local function show_target_branch_picker(entry)
 							{},
 							function(cp_err, cp_result, branch_name)
 								if cp_err then
+									if not cp_result then
+										utils.notify(
+											cp_err,
+											vim.log.levels.ERROR
+										)
+										return
+									end
+
 									local output =
-										git.output(cp_result) or cp_err
+										git.output(cp_result)
+										or cp_err
 									local parsed =
 										git_conflict
 										.parse_conflicted_paths_from_output(

@@ -1420,6 +1420,138 @@ test(
 	end
 )
 
+test(
+	"cherry_pick_into_branch handles create-branch errors without result",
+	function()
+		local cp_panel = require("gitflow.panels.cherry_pick")
+		local git_cp = require("gitflow.git.cherry_pick")
+		local git_conflict = require("gitflow.git.conflict")
+		local list_picker = require("gitflow.ui.list_picker")
+		local ui_mod = require("gitflow.ui")
+		local original_list_branches = git_cp.list_branches
+		local original_create = git_cp.create_branch_and_cherry_pick
+		local original_parse =
+			git_conflict.parse_conflicted_paths_from_output
+		local original_list = git_conflict.list
+		local original_picker_open = list_picker.open
+		local notifications = {}
+		local original_notify = vim.notify
+		local picker_open_calls = 0
+		local parse_calls = 0
+		local fallback_list_calls = 0
+
+		local ok, err = pcall(function()
+			cp_panel.close()
+			cp_panel.state.cfg = cfg
+			cp_panel.state.source_branch = "feature-a"
+			cp_panel.state.stage = "commits"
+			cp_panel.state.line_entries = {
+				[1] = {
+					sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					short_sha = "bbbbbbb",
+					summary = "feature-a commit for create branch failure",
+				},
+			}
+
+			local bufnr = ui_mod.buffer.create("cherry_pick", {
+				filetype = "gitflowcherrypick",
+				lines = { "pick line" },
+			})
+			cp_panel.state.bufnr = bufnr
+			cp_panel.state.winid = ui_mod.window.open_split({
+				name = "cherry_pick",
+				bufnr = bufnr,
+				orientation = cfg.ui.split.orientation,
+				size = cfg.ui.split.size,
+				on_close = function()
+					cp_panel.state.winid = nil
+				end,
+			})
+			vim.api.nvim_set_current_win(cp_panel.state.winid)
+			vim.api.nvim_win_set_cursor(cp_panel.state.winid, { 1, 0 })
+
+			vim.notify = function(msg, level, _)
+				notifications[#notifications + 1] = {
+					msg = msg,
+					level = level,
+				}
+			end
+			git_cp.list_branches = function(_, cb)
+				cb(nil, { "main" })
+			end
+			list_picker.open = function(opts)
+				picker_open_calls = picker_open_calls + 1
+				opts.on_submit({ "main" })
+				return {}
+			end
+			git_cp.create_branch_and_cherry_pick = function(_, _, _, _, cb)
+				cb(
+					"git checkout -b failed:"
+						.. " A branch named"
+						.. " 'main-feature-a' already exists.",
+					nil,
+					"main-feature-a"
+				)
+			end
+			git_conflict.parse_conflicted_paths_from_output =
+				function(_)
+					parse_calls = parse_calls + 1
+					return {}
+				end
+			git_conflict.list = function(_, cb)
+				fallback_list_calls = fallback_list_calls + 1
+				cb(nil, { "conflicted/file.txt" })
+			end
+
+			cp_panel.cherry_pick_into_branch()
+
+			local completed = vim.wait(1000, function()
+				return picker_open_calls > 0 and #notifications > 0
+			end, 20)
+			assert_true(
+				completed,
+				"picker submit and error notification should complete"
+			)
+		end)
+
+		git_cp.list_branches = original_list_branches
+		git_cp.create_branch_and_cherry_pick = original_create
+		git_conflict.parse_conflicted_paths_from_output =
+			original_parse
+		git_conflict.list = original_list
+		list_picker.open = original_picker_open
+		vim.notify = original_notify
+		cp_panel.close()
+
+		if not ok then
+			error(err, 0)
+		end
+
+		assert_equals(
+			parse_calls, 0,
+			"conflict output parsing should be skipped when result is nil"
+		)
+		assert_equals(
+			fallback_list_calls, 0,
+			"fallback conflict listing should be skipped for branch create errors"
+		)
+
+		local found_error = false
+		for _, n in ipairs(notifications) do
+			if n.level == vim.log.levels.ERROR
+				and n.msg:find("already exists", 1, true)
+			then
+				found_error = true
+				break
+			end
+		end
+		assert_true(
+			found_error,
+			"should surface branch creation error message without throwing"
+		)
+	end
+)
+
 test("float footer includes B keybind hint", function()
 	-- The float footer constant is used when opening
 	-- in float layout. We verify it contains B hint.
