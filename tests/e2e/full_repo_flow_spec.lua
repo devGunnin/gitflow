@@ -24,7 +24,8 @@ local conflict_panel = require("gitflow.panels.conflict")
 local conflict_view = require("gitflow.ui.conflict")
 local git_conflict = require("gitflow.git.conflict")
 local git_status = require("gitflow.git.status")
-local gh_prs = require("gitflow.gh.prs")
+local gh_labels = require("gitflow.gh.labels")
+local form = require("gitflow.ui.form")
 
 -- ── Helpers ────────────────────────────────────────────────────────────
 
@@ -292,47 +293,72 @@ T.run_suite("E2E: Full Repository Flow", {
 		with_temp_gh_log(function(log_path)
 			with_temporary_patches({
 				{
-					table = gh_prs,
-					key = "create",
-					value = function(opts, extra, cb)
-						-- Simulate creation via real stub by calling
-						-- the original path
-						local orig_create = gh_prs.create
-						-- Since we patched, call gh directly
-						local gh = require("gitflow.gh")
-						gh.run(
-							{ "pr", "create",
-								"--title", opts.title or "Test PR" },
-							{},
-							function(result)
-								cb(nil, "https://github.com/test/43")
-							end
-						)
+					table = gh_labels,
+					key = "list",
+					value = function(_, cb)
+						cb(nil, {})
+					end,
+				},
+				{
+					table = form,
+					key = "open",
+					value = function(opts)
+						opts.on_submit({
+							title = "Flow PR Title",
+							body = "Flow PR Body",
+							base = "main",
+							reviewers = "alice,bob",
+							labels = "bug,docs",
+						})
+						return {
+							bufnr = nil,
+							winid = nil,
+							fields = opts.fields or {},
+							field_lines = {},
+							on_submit = opts.on_submit,
+							active_field = 1,
+						}
 					end,
 				},
 			}, function()
-				gh_prs.create(
-					{ title = "Test PR", body = "Test body" },
-					{},
-					function(err, url)
-						T.assert_true(
-							err == nil,
-							"pr create should not error"
-						)
-						T.assert_true(
-							url ~= nil,
-							"pr create should return URL"
-						)
-					end
-				)
-				T.drain_jobs(3000)
+				commands.dispatch({ "pr", "create" }, cfg)
+				T.drain_jobs(5000)
 
 				local lines = T.read_file(log_path)
+				local create_line = nil
+				for _, line in ipairs(lines) do
+					if line:find("pr create", 1, true) then
+						create_line = line
+					end
+				end
+
 				T.assert_true(
-					T.find_line(lines, "pr create") ~= nil,
+					create_line ~= nil,
 					"should invoke gh pr create"
 				)
+				T.assert_true(
+					create_line:find("--title Flow PR Title", 1, true) ~= nil,
+					"pr create should include title argument"
+				)
+				T.assert_true(
+					create_line:find("--body Flow PR Body", 1, true) ~= nil,
+					"pr create should include body argument"
+				)
+				T.assert_true(
+					create_line:find("--base main", 1, true) ~= nil,
+					"pr create should include base argument"
+				)
+				T.assert_true(
+					create_line:find("--reviewer alice,bob", 1, true) ~= nil,
+					"pr create should include reviewer argument"
+				)
+				T.assert_true(
+					create_line:find("--label bug,docs", 1, true) ~= nil,
+					"pr create should include label argument"
+				)
 			end)
+
+			cleanup_panels()
 		end)
 	end,
 
@@ -694,12 +720,14 @@ T.run_suite("E2E: Full Repository Flow", {
 
 			-- PR diff for review should follow
 			local pr_diff_idx = T.find_line(lines, "pr diff")
-			if pr_diff_idx then
-				T.assert_true(
-					pr_list_idx < pr_diff_idx,
-					"pr list should come before pr diff"
-				)
-			end
+			T.assert_true(
+				pr_diff_idx ~= nil,
+				"gh pr diff should be in log"
+			)
+			T.assert_true(
+				pr_list_idx < pr_diff_idx,
+				"pr list should come before pr diff"
+			)
 		end)
 	end,
 
