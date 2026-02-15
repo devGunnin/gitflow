@@ -18,6 +18,7 @@ local status_panel = require("gitflow.panels.status")
 ---@field stage "branch"|"commits"
 ---@field cfg GitflowConfig|nil
 ---@field picker_request_id integer
+---@field refresh_request_id integer
 
 local M = {}
 local CP_FLOAT_TITLE = "Gitflow Cherry Pick"
@@ -36,6 +37,7 @@ M.state = {
 	stage = "branch",
 	cfg = nil,
 	picker_request_id = 0,
+	refresh_request_id = 0,
 }
 
 local function next_picker_request_id()
@@ -48,6 +50,21 @@ end
 local function is_active_picker_request(request_id)
 	return M.state.picker_request_id == request_id
 		and M.is_open()
+end
+
+local function next_refresh_request_id()
+	M.state.refresh_request_id = (M.state.refresh_request_id or 0) + 1
+	return M.state.refresh_request_id
+end
+
+---@param request_id integer
+---@param source_branch string
+---@return boolean
+local function is_active_refresh_request(request_id, source_branch)
+	return M.state.refresh_request_id == request_id
+		and M.is_open()
+		and M.state.stage == "commits"
+		and M.state.source_branch == source_branch
 end
 
 local function refresh_status_panel_if_open()
@@ -386,20 +403,31 @@ function M.refresh()
 		return
 	end
 
+	local source_branch = M.state.source_branch
+	local request_id = next_refresh_request_id()
 	git_branch.current({}, function(_, branch)
-		M.state.current_branch = branch or "(unknown)"
+		if not is_active_refresh_request(request_id, source_branch) then
+			return
+		end
+
+		local current_branch = branch or "(unknown)"
 		git_cherry_pick.list_unique_commits(
-			M.state.source_branch,
+			source_branch,
 			{ count = cfg.git.log.count },
 			function(err, entries)
+				if not is_active_refresh_request(request_id, source_branch) then
+					return
+				end
+
 				if err then
 					utils.notify(err, vim.log.levels.ERROR)
 					return
 				end
+				M.state.current_branch = current_branch
 				render_commits(
 					entries or {},
-					M.state.source_branch,
-					M.state.current_branch
+					source_branch,
+					current_branch
 				)
 			end
 		)
@@ -432,6 +460,7 @@ end
 
 function M.close()
 	next_picker_request_id()
+	next_refresh_request_id()
 
 	if M.state.winid then
 		ui.window.close(M.state.winid)

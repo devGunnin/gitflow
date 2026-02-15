@@ -607,6 +607,137 @@ test("delayed list_branches callback is ignored after panel close", function()
 	end
 end)
 
+test("out-of-order refresh callbacks ignore stale branch responses", function()
+	local cp_panel = require("gitflow.panels.cherry_pick")
+	local git_cp = require("gitflow.git.cherry_pick")
+	local git_branch = require("gitflow.git.branch")
+	local ui_mod = require("gitflow.ui")
+	local original_list_unique_commits = git_cp.list_unique_commits
+	local original_current = git_branch.current
+	local pending_by_source = {}
+
+	local ok, err = pcall(function()
+		cp_panel.close()
+		cp_panel.state.cfg = cfg
+		cp_panel.state.stage = "commits"
+		cp_panel.state.source_branch = "feature-a"
+
+		local bufnr = ui_mod.buffer.create("cherry_pick", {
+			filetype = "gitflowcherrypick",
+			lines = { "Loading..." },
+		})
+		cp_panel.state.bufnr = bufnr
+		cp_panel.state.winid = ui_mod.window.open_split({
+			name = "cherry_pick",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				cp_panel.state.winid = nil
+			end,
+		})
+
+		git_branch.current = function(_, cb)
+			cb(nil, "main")
+		end
+		git_cp.list_unique_commits = function(source_branch, _, cb)
+			pending_by_source[source_branch] = cb
+		end
+
+		cp_panel.refresh()
+		assert_true(
+			type(pending_by_source["feature-a"]) == "function",
+			"feature-a refresh callback should be pending"
+		)
+
+		cp_panel.state.source_branch = "feature-b"
+		cp_panel.refresh()
+		assert_true(
+			type(pending_by_source["feature-b"]) == "function",
+			"feature-b refresh callback should be pending"
+		)
+
+		pending_by_source["feature-a"](nil, {
+			{
+				sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				short_sha = "aaaaaaa",
+				summary = "stale feature-a entry",
+			},
+		})
+
+		local stale_rendered = false
+		local lines = vim.api.nvim_buf_get_lines(
+			cp_panel.state.bufnr, 0, -1, false
+		)
+		for _, line in ipairs(lines) do
+			if line:find("stale feature-a entry", 1, true) then
+				stale_rendered = true
+				break
+			end
+		end
+		assert_true(
+			not stale_rendered,
+			"stale feature-a callback should not render after switching branches"
+		)
+
+		pending_by_source["feature-b"](nil, {
+			{
+				sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				short_sha = "bbbbbbb",
+				summary = "latest feature-b entry",
+			},
+		})
+
+		lines = vim.api.nvim_buf_get_lines(
+			cp_panel.state.bufnr, 0, -1, false
+		)
+		local has_latest_branch = false
+		local has_latest_entry = false
+		for _, line in ipairs(lines) do
+			if line:find("Source: feature-b", 1, true) then
+				has_latest_branch = true
+			end
+			if line:find("latest feature-b entry", 1, true) then
+				has_latest_entry = true
+			end
+		end
+		assert_true(
+			has_latest_branch,
+			"latest refresh should render feature-b branch header"
+		)
+		assert_true(
+			has_latest_entry,
+			"latest refresh should render feature-b commit entry"
+		)
+
+		local stale_in_entries = false
+		local latest_in_entries = false
+		for _, entry in pairs(cp_panel.state.line_entries) do
+			if entry.summary == "stale feature-a entry" then
+				stale_in_entries = true
+			elseif entry.summary == "latest feature-b entry" then
+				latest_in_entries = true
+			end
+		end
+		assert_true(
+			not stale_in_entries,
+			"line_entries should not contain stale feature-a entries"
+		)
+		assert_true(
+			latest_in_entries,
+			"line_entries should contain the latest feature-b entries"
+		)
+	end)
+
+	git_cp.list_unique_commits = original_list_unique_commits
+	git_branch.current = original_current
+	cp_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 test("cherry_pick panel renders commits for a source branch", function()
 	local cp_panel = require("gitflow.panels.cherry_pick")
 	cp_panel.state.cfg = cfg
