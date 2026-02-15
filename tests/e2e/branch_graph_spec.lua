@@ -139,6 +139,29 @@ T.run_suite("Branch Graph Visualization", {
 			entries[1].graph ~= "",
 			"graph-only line should have graph content"
 		)
+		T.assert_true(
+			entries[1].subject == nil,
+			"graph-only line should not leak connector text into subject"
+		)
+	end,
+
+	["parse_graph keeps connector-only sequences in graph column"] = function()
+		local output = "|/\n|\\\n"
+		local entries = git_branch.parse_graph(output, nil)
+
+		T.assert_equals(#entries, 2, "should parse both connector-only lines")
+		T.assert_equals(
+			entries[1].graph, "|/",
+			"first connector-only line should remain in graph field"
+		)
+		T.assert_equals(
+			entries[2].graph, "|\\",
+			"second connector-only line should remain in graph field"
+		)
+		T.assert_true(
+			entries[1].subject == nil and entries[2].subject == nil,
+			"connector-only lines should not produce subject text"
+		)
 	end,
 
 	["parse_graph preserves raw line"] = function()
@@ -503,6 +526,60 @@ T.run_suite("Branch Graph Visualization", {
 		if not ok then
 			error(err, 0)
 		end
+		end,
+
+	["graph view keeps connector-only rows inside flow column"] = function()
+		close_panel()
+		branch_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		branch_panel.toggle_view()
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("branch")
+		local lines = T.buf_lines(bufnr)
+		local header_line = nil
+		for _, line in ipairs(lines) do
+			if line:find("Flow", 1, true) and line:find("Commit", 1, true) then
+				header_line = line
+				break
+			end
+		end
+
+		T.assert_true(
+			header_line ~= nil,
+			"graph view should render Flow and Commit headers"
+		)
+		local commit_col = header_line:find("Commit", 1, true)
+		T.assert_true(
+			commit_col ~= nil,
+			"graph header should include Commit column"
+		)
+		local commit_display_col = vim.fn.strdisplaywidth(
+			header_line:sub(1, commit_col - 1)
+		)
+
+		for _, line in ipairs(lines) do
+			local has_graph_glyph = line:find("\u{25CF}", 1, true) ~= nil
+				or line:find("\u{2502}", 1, true) ~= nil
+				or line:find("\u{2571}", 1, true) ~= nil
+				or line:find("\u{2572}", 1, true) ~= nil
+				or line:find("*", 1, true) ~= nil
+				or line:find("|", 1, true) ~= nil
+				or line:find("/", 1, true) ~= nil
+				or line:find("\\", 1, true) ~= nil
+			local has_hash = line:find("%x%x%x%x%x%x%x") ~= nil
+			local is_graph_row = vim.startswith(line, "  ")
+				and line:find("Flow", 1, true) == nil
+			if is_graph_row and has_graph_glyph and not has_hash then
+				T.assert_true(
+					vim.fn.strdisplaywidth(line) <= commit_display_col,
+					("connector-only row should not spill into Commit column: %s"):format(line)
+				)
+			end
+		end
+
+		close_panel()
 	end,
 
 	["graph view shows Branch Flowchart title"] = function()

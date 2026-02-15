@@ -367,36 +367,43 @@ function M.parse_graph(output, current_branch)
 		local decoration = nil
 		local subject = nil
 
-		-- Split graph prefix from commit data.
-		-- Graph chars: *, |, /, \, _, space, and box-drawing variants.
-		local g, rest = raw_line:match("^([%s%*|/\\_%.]+)(%S.*)$")
-		if g and rest then
-			graph_part = g
-			-- Try to match: <hash> (<decorations>) <subject>
-			local h, d, s = rest:match("^(%x+)%s+%((.-)%)%s+(.*)$")
-			if h then
-				hash = h
-				decoration = d
-				subject = s
-			else
-				-- Try: <hash> <subject>
-				h, s = rest:match("^(%x+)%s+(.*)$")
+		-- Keep connector-only rows entirely in the flow column.
+		-- Without this guard, the split regex can backtrack and leak the last
+		-- connector glyph into subject text.
+		if raw_line:match("^[%s%*|/\\_%.]+$") then
+			graph_part = raw_line
+		else
+			-- Split graph prefix from commit data.
+			-- Graph chars: *, |, /, \, _, space, and box-drawing variants.
+			local g, rest = raw_line:match("^([%s%*|/\\_%.]+)(%S.*)$")
+			if g and rest then
+				graph_part = g
+				-- Try to match: <hash> (<decorations>) <subject>
+				local h, d, s = rest:match("^(%x+)%s+%((.-)%)%s+(.*)$")
 				if h then
 					hash = h
+					decoration = d
 					subject = s
 				else
-					-- Bare hash or continuation
-					h = rest:match("^(%x+)$")
+					-- Try: <hash> <subject>
+					h, s = rest:match("^(%x+)%s+(.*)$")
 					if h then
 						hash = h
+						subject = s
 					else
-						subject = rest
+						-- Bare hash or continuation
+						h = rest:match("^(%x+)$")
+						if h then
+							hash = h
+						else
+							subject = rest
+						end
 					end
 				end
+			else
+				-- Entire line is graph drawing (e.g. "| |", "| * ")
+				graph_part = raw_line
 			end
-		else
-			-- Entire line is graph drawing (e.g. "| |", "| * ")
-			graph_part = raw_line
 		end
 
 		entries[#entries + 1] = {
