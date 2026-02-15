@@ -557,6 +557,56 @@ test("cherry_pick panel close cleans up state", function()
 	)
 end)
 
+test("delayed list_branches callback is ignored after panel close", function()
+	local cp_panel = require("gitflow.panels.cherry_pick")
+	local git_cp = require("gitflow.git.cherry_pick")
+	local list_picker = require("gitflow.ui.list_picker")
+	local original_list_branches = git_cp.list_branches
+	local original_picker_open = list_picker.open
+	local callback_ran = false
+	local picker_open_calls = 0
+
+	local ok, err = pcall(function()
+		git_cp.list_branches = function(_, cb)
+			vim.defer_fn(function()
+				callback_ran = true
+				cb(nil, { "feature-a", "feature-b" })
+			end, 80)
+		end
+
+		list_picker.open = function(_)
+			picker_open_calls = picker_open_calls + 1
+			return {}
+		end
+
+		cp_panel.close()
+		cp_panel.open(cfg)
+		cp_panel.close()
+
+		local did_run = vim.wait(1000, function()
+			return callback_ran
+		end, 20)
+		assert_true(did_run, "delayed list_branches callback should run")
+
+		vim.wait(120, function()
+			return false
+		end, 20)
+
+		assert_equals(
+			picker_open_calls, 0,
+			"list picker should not open after panel close"
+		)
+	end)
+
+	git_cp.list_branches = original_list_branches
+	list_picker.open = original_picker_open
+	cp_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 test("cherry_pick panel renders commits for a source branch", function()
 	local cp_panel = require("gitflow.panels.cherry_pick")
 	cp_panel.state.cfg = cfg

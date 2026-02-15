@@ -17,6 +17,7 @@ local status_panel = require("gitflow.panels.status")
 ---@field current_branch string|nil
 ---@field stage "branch"|"commits"
 ---@field cfg GitflowConfig|nil
+---@field picker_request_id integer
 
 local M = {}
 local CP_FLOAT_TITLE = "Gitflow Cherry Pick"
@@ -34,7 +35,20 @@ M.state = {
 	current_branch = nil,
 	stage = "branch",
 	cfg = nil,
+	picker_request_id = 0,
 }
+
+local function next_picker_request_id()
+	M.state.picker_request_id = (M.state.picker_request_id or 0) + 1
+	return M.state.picker_request_id
+end
+
+---@param request_id integer
+---@return boolean
+local function is_active_picker_request(request_id)
+	return M.state.picker_request_id == request_id
+		and M.is_open()
+end
 
 local function refresh_status_panel_if_open()
 	if status_panel.is_open() then
@@ -302,7 +316,12 @@ function M.show_branch_picker()
 		return
 	end
 
+	local request_id = next_picker_request_id()
 	git_cherry_pick.list_branches({}, function(err, branches)
+		if not is_active_picker_request(request_id) then
+			return
+		end
+
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
@@ -322,18 +341,31 @@ function M.show_branch_picker()
 		end
 
 		vim.schedule(function()
+			if not is_active_picker_request(request_id) then
+				return
+			end
+
 			list_picker.open({
 				items = items,
 				title = "Select Source Branch",
 				multi_select = false,
 				on_submit = function(selected)
+					if not is_active_picker_request(request_id) then
+						return
+					end
+
 					if #selected > 0 then
+						next_picker_request_id()
 						M.state.source_branch = selected[1]
 						M.state.stage = "commits"
 						M.refresh()
 					end
 				end,
 				on_cancel = function()
+					if not is_active_picker_request(request_id) then
+						return
+					end
+
 					if M.state.stage == "branch" then
 						M.close()
 					end
@@ -399,6 +431,8 @@ function M.select_by_position(position)
 end
 
 function M.close()
+	next_picker_request_id()
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else
