@@ -33,8 +33,8 @@ assert_true(
 )
 assert_equals(
 	defaults.icons.enable,
-	false,
-	"icons.enable should default to false"
+	true,
+	"icons.enable should default to true"
 )
 
 -- validate accepts valid icons config

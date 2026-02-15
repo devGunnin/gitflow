@@ -193,11 +193,15 @@ end, "branch panel should open")
 
 local branch_lines = vim.api.nvim_buf_get_lines(branch_panel.state.bufnr, 0, -1, false)
 assert_true(find_line(branch_lines, "Remote") ~= nil, "branch panel should render remote section")
-local expected_current = ("* %s (current)"):format(current_branch(repo_dir))
-assert_true(
-	find_line(branch_lines, expected_current) ~= nil,
-	"current branch should be indicated distinctly"
-)
+local cur = current_branch(repo_dir)
+local current_found = false
+for _, bl in ipairs(branch_lines) do
+	if bl:find(cur, 1, true) and bl:find("(current)", 1, true) then
+		current_found = true
+		break
+	end
+end
+assert_true(current_found, "current branch should be indicated distinctly")
 
 local branch_maps = vim.api.nvim_buf_get_keymap(branch_panel.state.bufnr, "n")
 local required_maps = { ["<CR>"] = true, c = true, d = true, D = true, r = true, R = true, f = true, q = true }

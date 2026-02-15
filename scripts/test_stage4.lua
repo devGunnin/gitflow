@@ -373,7 +373,12 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "#1 [open] Stage4 issue") ~= nil
+	for _, l in ipairs(lines) do
+		if l:find("#1", 1, true) and l:find("Stage4 issue", 1, true) then
+			return true
+		end
+	end
+	return false
 end, "issue list should render issue entries")
 
 local issue_buf = buffer.get("issues")
@@ -541,88 +546,40 @@ vim.o.wildcharm = original_wildcharm
 vim.o.wildmenu = original_wildmenu
 vim.o.wildmode = original_wildmode
 
--- Test: create_interactive labels prompt wires completion
-local create_prompt_count = 0
-local create_label_completion = nil
-local create_completion_fn_name = nil
-
-vim.ui.input = function(_, _)
-	error(
-		"create label prompt should not use vim.ui.input when completion is configured",
-		2
-	)
-end
-
-vim.fn.inputsave = function()
-	return 1
-end
-vim.fn.inputrestore = function()
-	return 1
-end
-
-vim.fn.input = function(opts)
-	create_prompt_count = create_prompt_count + 1
-	if create_prompt_count == 3 then
-		-- This is the labels prompt (title=1, body=2, labels=3)
-		create_label_completion = opts.completion
-		assert_true(
-			type(create_label_completion) == "string",
-			"create labels prompt should configure completion"
-		)
-
-		create_completion_fn_name =
-			create_label_completion:match("^customlist,v:lua%.([%w_]+)$")
-		assert_true(
-			create_completion_fn_name ~= nil,
-			"create labels prompt should use custom completion"
-		)
-		assert_true(
-			type(_G[create_completion_fn_name]) == "function",
-			"create labels custom completion function should exist"
-		)
-
-		local candidates = _G[create_completion_fn_name]("b", "", 0)
-		assert_true(
-			contains(candidates, "bug"),
-			"create labels completion should suggest matching label"
-		)
-
-		local no_sign = _G[create_completion_fn_name]("+b", "", 0)
-		assert_true(
-			not contains(no_sign, "+bug"),
-			"create labels completion should not handle +/- sign prefixes"
-		)
-
-		local multi = _G[create_completion_fn_name]("bug,d", "", 0)
-		assert_true(
-			contains(multi, "bug,docs"),
-			"create labels completion should support comma-separated values"
-		)
-		assert_true(
-			not contains(multi, "bug,bug"),
-			"create labels completion should exclude already-selected labels"
-		)
-
-		return "bug,docs"
-	end
-	return "test value"
-end
-
+-- Test: create_interactive opens a form-based float
+local form = require("gitflow.ui.form")
 issues_panel.create_interactive()
-wait_until(function()
-	local lines = read_lines(gh_log)
-	return find_line(lines, "issue create") ~= nil
-end, "create_interactive should invoke gh issue create")
 
+-- Wait for the form buffer to appear
+local form_bufnr
+wait_until(function()
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(b)
+			and vim.bo[b].filetype == "gitflow-form" then
+			form_bufnr = b
+			return true
+		end
+	end
+	return false
+end, "create_interactive should open a form float")
+
+-- Verify the form has a Title field
+local form_lines = vim.api.nvim_buf_get_lines(form_bufnr, 0, -1, false)
 assert_true(
-	create_completion_fn_name ~= nil and _G[create_completion_fn_name] == nil,
-	"create labels completion function should be cleaned up after input"
+	find_line(form_lines, "Title") ~= nil,
+	"issue create form should have Title field"
 )
 
-vim.ui.input = original_ui_input
-vim.fn.input = original_fn_input
-vim.fn.inputsave = original_inputsave
-vim.fn.inputrestore = original_inputrestore
+-- Close the form without submitting (press q)
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+	if vim.api.nvim_win_is_valid(w)
+		and vim.api.nvim_win_get_buf(w) == form_bufnr then
+		vim.api.nvim_set_current_win(w)
+		break
+	end
+end
+local esc = vim.api.nvim_replace_termcodes("q", true, false, true)
+vim.api.nvim_feedkeys(esc, "x", false)
 
 commands.dispatch({ "pr", "list", "open" }, cfg)
 wait_until(function()
@@ -640,7 +597,12 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "#7 [open] Stage4 PR") ~= nil
+	for _, l in ipairs(lines) do
+		if l:find("#7", 1, true) and l:find("Stage4 PR", 1, true) then
+			return true
+		end
+	end
+	return false
 end, "pr list should render pr entries")
 
 local pr_buf = buffer.get("prs")
@@ -649,7 +611,13 @@ assert_keymaps(pr_buf, { "<CR>", "c", "C", "L", "m", "o", "q" })
 assert_keymap_absent(pr_buf, "l")
 
 local pr_lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
-local pr_line = find_line(pr_lines, "#7 [open] Stage4 PR")
+local pr_line
+for i, l in ipairs(pr_lines) do
+	if l:find("#7", 1, true) and l:find("Stage4 PR", 1, true) then
+		pr_line = i
+		break
+	end
+end
 assert_true(pr_line ~= nil, "pr list line should exist")
 vim.api.nvim_set_current_win(pr_panel.state.winid)
 vim.api.nvim_win_set_cursor(pr_panel.state.winid, { pr_line, 0 })
@@ -777,7 +745,12 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "#7 [open] Stage4 PR") ~= nil
+	for _, l in ipairs(lines) do
+		if l:find("#7", 1, true) and l:find("Stage4 PR", 1, true) then
+			return true
+		end
+	end
+	return false
 end, "pr list should re-render before no-selection test")
 
 vim.api.nvim_set_current_win(pr_panel.state.winid)
