@@ -52,6 +52,7 @@ local git_diff = require("gitflow.git.diff")
 ---@field comment_threads GitflowPrReviewCommentThread[]
 ---@field thread_line_map table<integer, integer>
 ---@field pending_comments GitflowPrReviewDraftThread[]
+---@field show_inline_comments boolean
 ---@field _cached_title string|nil
 ---@field _cached_diff_text string|nil
 ---@field _cached_files table[]|nil
@@ -62,7 +63,8 @@ local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
 local REVIEW_FLOAT_FOOTER =
 	"]f/[f files  ]c/[c hunks  c comment  S submit"
 	.. "  a approve  x changes  R reply"
-	.. "  <leader>t toggle  <leader>b back  r refresh  q close"
+	.. "  <leader>t toggle  <leader>i inline"
+	.. "  <leader>b back  r refresh  q close"
 
 ---@param line string
 ---@return boolean
@@ -95,6 +97,7 @@ M.state = {
 	comment_threads = {},
 	thread_line_map = {},
 	pending_comments = {},
+	show_inline_comments = false,
 	-- Cached data for local re-renders (avoids API round-trips)
 	_cached_title = nil,
 	_cached_diff_text = nil,
@@ -202,6 +205,10 @@ local function ensure_window(cfg)
 	-- F1: use <leader>t instead of t to avoid shadowing vim motion
 	vim.keymap.set("n", "<leader>t", function()
 		M.toggle_thread()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "<leader>i", function()
+		M.toggle_inline_comments()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -522,12 +529,44 @@ local function render_review(
 				local label = (" [%d comments]"):format(
 					#thread.comments
 				)
+				local extmark_opts = {
+					virt_text = {
+						{
+							label,
+							"GitflowReviewChangesRequested",
+						},
+					},
+					virt_text_pos = "eol",
+				}
+				if M.state.show_inline_comments then
+					local virt_lines = {}
+					for _, c in ipairs(thread.comments) do
+						local body_lines = vim.split(
+							c.body, "\n",
+							{ plain = true, trimempty = true }
+						)
+						for bi, bl in ipairs(body_lines) do
+							if #bl > 96 then
+								bl = bl:sub(1, 93) .. "..."
+							end
+							local prefix = bi == 1
+								and ("  @%s: "):format(c.user)
+								or "        "
+							virt_lines[#virt_lines + 1] = {
+								{
+									prefix .. bl,
+									"GitflowReviewComment",
+								},
+							}
+						end
+					end
+					extmark_opts.virt_lines = virt_lines
+				end
 				pcall(
 					vim.api.nvim_buf_set_extmark,
 					M.state.bufnr, ns_comments,
 					target_line - 1, 0,
-					{ virt_text = { { label, "GitflowReviewChangesRequested" } },
-						virt_text_pos = "eol" }
+					extmark_opts
 				)
 			end
 		end
@@ -1174,6 +1213,11 @@ function M.toggle_thread()
 	M.re_render()
 end
 
+function M.toggle_inline_comments()
+	M.state.show_inline_comments = not M.state.show_inline_comments
+	M.re_render()
+end
+
 function M.next_file()
 	jump_to_marker(M.state.file_markers, 1)
 end
@@ -1494,6 +1538,7 @@ function M.close()
 	M.state.comment_threads = {}
 	M.state.thread_line_map = {}
 	M.state.pending_comments = {}
+	M.state.show_inline_comments = false
 	M.state._cached_title = nil
 	M.state._cached_diff_text = nil
 	M.state._cached_files = nil
