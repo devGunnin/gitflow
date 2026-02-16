@@ -381,6 +381,35 @@ DIFF
     printf '0\n'
     ;;
 
+  # ── worktree ─────────────────────────────────────────────────────────
+  worktree)
+    if [ "$fail_cmd" = "worktree" ]; then
+      echo "fatal: worktree failed" >&2
+      exit 1
+    fi
+    wt_sub="${1:-list}"
+    shift 2>/dev/null || true
+    case "$wt_sub" in
+      list)
+        printf 'worktree %s\n' "$(pwd)"
+        printf 'HEAD abc1234567890abcdef1234567890abcdef1234\n'
+        printf 'branch refs/heads/main\n'
+        printf '\n'
+        printf 'worktree %s/wt-feature\n' "$(pwd)"
+        printf 'HEAD def5678901234abcdef1234567890abcdef5678\n'
+        printf 'branch refs/heads/feature/test\n'
+        printf '\n'
+        ;;
+      add)
+        printf "Preparing worktree (new branch '%s')\n" "${2:-branch}"
+        printf 'HEAD is now at abc1234 Initial commit\n'
+        ;;
+      remove)
+        # remove produces no stdout on success
+        ;;
+    esac
+    ;;
+
   # ── Unknown command ───────────────────────────────────────────────────
   *)
     echo "git stub: unknown command '$subcmd'" >&2

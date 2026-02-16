@@ -88,6 +88,7 @@ function M.defaults()
 			reset = "gR",
 			revert = "gV",
 			cherry_pick = "gC",
+			worktree = "gW",
 			conflict = "<leader>gm",
 			palette = "<leader>go",
 		},

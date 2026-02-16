@@ -70,6 +70,7 @@ jobs:
             scripts/test_reset.lua
             scripts/test_review_loop.lua
             scripts/test_unified_theme.lua
+            scripts/test_worktree.lua
           )
           exit_code=0
           for t in "${passing_stages[@]}"; do

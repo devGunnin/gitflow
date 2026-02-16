@@ -23,6 +23,7 @@ local palette_panel = require("gitflow.panels.palette")
 local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
+local worktree_panel = require("gitflow.panels.worktree")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -1022,6 +1023,7 @@ local function register_builtin_subcommands(cfg)
 			conflict_panel.close()
 			reset_panel.close()
 			cherry_pick_panel.close()
+			worktree_panel.close()
 			palette_panel.close()
 			return "Gitflow panels closed"
 		end,
@@ -1818,6 +1820,14 @@ local function register_builtin_subcommands(cfg)
 			return "Cherry-pick panel opened"
 		end,
 	}
+
+	M.subcommands.worktree = {
+		description = "Open git worktree panel",
+		run = function()
+			worktree_panel.open(cfg)
+			return "Worktree panel opened"
+		end,
+	}
 end
 
 ---@param commandline string
@@ -2219,6 +2229,12 @@ function M.setup(cfg)
 		"<Cmd>Gitflow cherry-pick-panel<CR>",
 		{ silent = true }
 	)
+	vim.keymap.set(
+		"n",
+		"<Plug>(GitflowWorktree)",
+		"<Cmd>Gitflow worktree<CR>",
+		{ silent = true }
+	)
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 
@@ -2244,6 +2260,7 @@ function M.setup(cfg)
 		reset = "<Plug>(GitflowReset)",
 		revert = "<Plug>(GitflowRevert)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
+		worktree = "<Plug>(GitflowWorktree)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 	}
