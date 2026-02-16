@@ -1216,6 +1216,89 @@ T.run_suite("E2E: PR Review Flow", {
 
 		cleanup_panels()
 	end,
+
+	-- ── Treesitter not attached to review buffer ─────────
+	["review buffer uses gitflow-diff filetype"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local bufnr = ui.buffer.get("review")
+		T.assert_true(
+			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+			"review buffer should exist"
+		)
+
+		local ft = vim.api.nvim_get_option_value(
+			"filetype", { buf = bufnr }
+		)
+		T.assert_equals(
+			ft,
+			"gitflow-diff",
+			"review buffer filetype should be gitflow-diff"
+		)
+
+		local syn = vim.api.nvim_get_option_value(
+			"syntax", { buf = bufnr }
+		)
+		T.assert_equals(
+			syn,
+			"diff",
+			"review buffer syntax should be diff"
+		)
+
+		-- Treesitter should not be attached
+		local has_ts_parser = pcall(
+			vim.treesitter.get_parser, bufnr
+		)
+		T.assert_false(
+			has_ts_parser,
+			"treesitter should not attach to gitflow-diff"
+		)
+
+		cleanup_panels()
+	end,
+
+	-- ── Re-render does not cause treesitter error ────────
+	["re-render after comment has no treesitter error"]
+		= function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		-- Add a pending comment to trigger re-render path
+		with_temporary_patches({
+			{
+				table = input,
+				key = "prompt",
+				value = function(_, cb) cb("test comment") end,
+			},
+		}, function()
+			review_panel.inline_comment()
+		end)
+		T.drain_jobs(5000)
+
+		T.assert_equals(
+			#review_panel.state.pending_comments,
+			1,
+			"should have 1 pending comment after re-render"
+		)
+
+		local bufnr = ui.buffer.get("review")
+		T.assert_true(
+			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+			"review buffer should still be valid"
+		)
+
+		-- No treesitter parser should be present
+		local has_ts = pcall(
+			vim.treesitter.get_parser, bufnr
+		)
+		T.assert_false(
+			has_ts,
+			"treesitter should not attach after re-render"
+		)
+
+		cleanup_panels()
+	end,
 })
 
 print("E2E PR review flow tests passed")

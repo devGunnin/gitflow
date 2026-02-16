@@ -129,14 +129,17 @@ local function ensure_window(cfg)
 		and M.state.bufnr or nil
 	if not bufnr then
 		bufnr = ui.buffer.create("diff", {
-			filetype = "diff",
+			filetype = "gitflow-diff",
 			lines = { "Loading diff..." },
 		})
 		M.state.bufnr = bufnr
 	end
 
 	vim.api.nvim_set_option_value(
-		"filetype", "diff", { buf = bufnr }
+		"filetype", "gitflow-diff", { buf = bufnr }
+	)
+	vim.api.nvim_set_option_value(
+		"syntax", "diff", { buf = bufnr }
 	)
 	vim.api.nvim_set_option_value(
 		"modifiable", false, { buf = bufnr }
