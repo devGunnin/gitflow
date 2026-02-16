@@ -419,6 +419,180 @@ T.run_suite("E2E: PR Review Flow", {
 		T.cleanup_panels()
 	end,
 
+	["submit pending review maps deleted-line comment to LEFT side"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local deleted_buf = nil
+		local deleted_ctx = nil
+		local max_line = vim.api.nvim_buf_line_count(review_panel.state.bufnr)
+		for i = 1, max_line do
+			local ctx = review_panel.state.line_context[i]
+			if ctx
+				and ctx.path
+				and ctx.old_line
+				and not ctx.new_line then
+				deleted_buf = i
+				deleted_ctx = ctx
+				break
+			end
+		end
+		T.assert_true(
+			deleted_buf ~= nil,
+			"expected a deleted diff line in fixture"
+		)
+
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = deleted_ctx.path,
+				hunk = deleted_ctx.hunk,
+				line = deleted_buf,
+				body = "Comment on removed line",
+				_anchor_old_line = deleted_ctx.old_line,
+			},
+		}
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(opts, on_confirm)
+						if opts.prompt:find("mode", 1, true) then
+							on_confirm("approve")
+						else
+							on_confirm("Looks good")
+						end
+					end,
+				},
+			}, function()
+				review_panel.submit_pending_review()
+				T.drain_jobs(3000)
+			end)
+
+			local payload = decode_logged_stdin_payload(T.read_file(log_path))
+			T.assert_true(payload ~= nil, "expected review payload in gh log")
+			T.assert_true(
+				type(payload.comments) == "table" and #payload.comments == 1,
+				"expected one pending comment in payload"
+			)
+			T.assert_equals(
+				payload.comments[1].line,
+				deleted_ctx.old_line,
+				"deleted-line comment should use old line number"
+			)
+			T.assert_equals(
+				payload.comments[1].side,
+				"LEFT",
+				"deleted-line comment should use LEFT side"
+			)
+		end)
+
+		cleanup_panels()
+	end,
+
+	["range pending comment keeps start/end mapping after rerender"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local start_buf = nil
+		local end_buf = nil
+		local start_ctx = nil
+		local end_ctx = nil
+		local max_line = vim.api.nvim_buf_line_count(review_panel.state.bufnr)
+		for i = 1, max_line - 1 do
+			local first = review_panel.state.line_context[i]
+			local second = review_panel.state.line_context[i + 1]
+			if first and second
+				and first.path
+				and first.path == second.path
+				and first.hunk
+				and first.hunk == second.hunk
+				and first.new_line
+				and second.new_line then
+				start_buf = i
+				end_buf = i + 1
+				start_ctx = first
+				end_ctx = second
+				break
+			end
+		end
+		T.assert_true(
+			start_buf ~= nil,
+			"expected two consecutive diff lines with new-line mapping"
+		)
+
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = start_ctx.path,
+				hunk = start_ctx.hunk,
+				line = end_buf,
+				start_line = start_buf,
+				end_line = end_buf,
+				body = "Range note",
+				_anchor_new_line = end_ctx.new_line,
+				_anchor_old_line = end_ctx.old_line,
+				_anchor_start_new_line = start_ctx.new_line,
+				_anchor_start_old_line = start_ctx.old_line,
+				_anchor_end_new_line = end_ctx.new_line,
+				_anchor_end_old_line = end_ctx.old_line,
+			},
+		}
+
+		review_panel.re_render()
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(opts, on_confirm)
+						if opts.prompt:find("mode", 1, true) then
+							on_confirm("approve")
+						else
+							on_confirm("Range body")
+						end
+					end,
+				},
+			}, function()
+				review_panel.submit_pending_review()
+				T.drain_jobs(3000)
+			end)
+
+			local payload = decode_logged_stdin_payload(T.read_file(log_path))
+			T.assert_true(payload ~= nil, "expected review payload in gh log")
+			T.assert_true(
+				type(payload.comments) == "table" and #payload.comments == 1,
+				"expected one pending comment in payload"
+			)
+			local comment = payload.comments[1]
+			T.assert_equals(
+				comment.start_line,
+				start_ctx.new_line,
+				"range comment start line should stay anchored"
+			)
+			T.assert_equals(
+				comment.line,
+				end_ctx.new_line,
+				"range comment end line should stay anchored"
+			)
+			T.assert_equals(
+				comment.start_side,
+				"RIGHT",
+				"range comment should set start side"
+			)
+			T.assert_equals(
+				comment.side,
+				"RIGHT",
+				"range comment should set side"
+			)
+		end)
+
+		cleanup_panels()
+	end,
+
 	-- ── Submit review as approve (a key) ──────────────────────────────
 
 	["approve review a invokes gh pr review --approve"] = function()
@@ -1370,16 +1544,23 @@ T.run_suite("E2E: PR Review Flow", {
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		-- Add a pending comment to trigger re-render path
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, cb) cb("test comment") end,
-			},
-		}, function()
-			review_panel.inline_comment()
-		end)
+			-- Add a pending comment to trigger re-render path
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, cb) cb("test comment") end,
+				},
+			}, function()
+				local first_hunk = review_panel.state.hunk_markers[1]
+				if first_hunk then
+					vim.api.nvim_win_set_cursor(
+						review_panel.state.winid,
+						{ first_hunk.line + 1, 0 }
+					)
+				end
+				review_panel.inline_comment()
+			end)
 		T.drain_jobs(5000)
 
 		T.assert_equals(

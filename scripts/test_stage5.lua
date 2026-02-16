@@ -537,6 +537,10 @@ review_panel.review_request_changes()
 review_panel.review_comment()
 
 -- B2: inline_comment now queues instead of submitting
+vim.api.nvim_win_set_cursor(
+	review_panel.state.winid,
+	{ second_hunk + 1, 0 }
+)
 review_panel.inline_comment()
 assert_equals(
 	#review_panel.state.pending_comments, 1,
