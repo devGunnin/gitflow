@@ -25,8 +25,8 @@ Normal-mode mappings available in any buffer. Configured via
 | `gZ` | Stash push (with prompt) | `stash_push` |
 | `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
-| `<leader>gI` | Open issue list | `issue` |
-| `<leader>gR` | Open PR list | `pr` |
+| `<leader>gi` | Open issue list | `issue` |
+| `<leader>gr` | Open PR list | `pr` |
 | `<leader>gL` | Open label list | `label` |
 | `gR` | Open reset panel | `reset` |
 | `<leader>gm` | Open conflict panel | `conflict` |

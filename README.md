@@ -67,8 +67,8 @@ require("gitflow").setup({
     stash_push = "gZ",
     stash_pop  = "gX",
     branch     = "<leader>gb",
-    issue      = "<leader>gI",
-    pr         = "<leader>gR",
+    issue      = "<leader>gi",
+    pr         = "<leader>gr",
     label      = "<leader>gL",
     conflict   = "<leader>gm",
     palette    = "<leader>gp",
@@ -239,8 +239,8 @@ instructions.
 | `gZ` | Stash push |
 | `gX` | Stash pop |
 | `<leader>gb` | Branch list |
-| `<leader>gI` | Issues |
-| `<leader>gR` | Pull requests |
+| `<leader>gi` | Issues |
+| `<leader>gr` | Pull requests |
 | `<leader>gL` | Labels |
 | `<leader>gm` | Conflicts |
 | `<leader>gp` | Command palette |
