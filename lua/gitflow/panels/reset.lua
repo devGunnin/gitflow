@@ -17,7 +17,7 @@ local status_panel = require("gitflow.panels.status")
 local M = {}
 local RESET_FLOAT_TITLE = "Gitflow Reset"
 local RESET_FLOAT_FOOTER =
-	"<CR> select  1-9 by position  S soft reset  H hard reset  r refresh  q close"
+	"<CR> select  1-9 jump  S soft reset  H hard reset  r refresh  q close"
 local RESET_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_reset_hl")
 
 ---@type GitflowResetPanelState
@@ -131,8 +131,8 @@ local function render(entries, merge_base_sha, current_branch)
 		for idx, entry in ipairs(entries) do
 			local commit_icon = icons.get("git_state", "commit")
 			local position_marker = ""
-			if idx <= 9 then
-				position_marker = ("[%d] "):format(idx)
+			if idx >= 2 and idx <= 10 then
+				position_marker = ("[%d] "):format(idx - 1)
 			end
 			lines[#lines + 1] = ui_render.entry(
 				("%s%s %s %s"):format(
@@ -189,7 +189,8 @@ local function entry_under_cursor()
 	return M.state.line_entries[line]
 end
 
----Find the Nth entry (1-indexed) from the line_entries map.
+---Find the entry at the given position (1-indexed, offset from HEAD).
+---Position 1 maps to the 2nd entry (HEAD~1) since HEAD is a no-op target.
 ---@param position integer
 ---@return GitflowResetEntry|nil
 local function entry_by_position(position)
@@ -199,10 +200,11 @@ local function entry_by_position(position)
 	end
 	table.sort(sorted_lines)
 
-	if position < 1 or position > #sorted_lines then
+	local actual = position + 1
+	if actual < 1 or actual > #sorted_lines then
 		return nil
 	end
-	return M.state.line_entries[sorted_lines[position]]
+	return M.state.line_entries[sorted_lines[actual]]
 end
 
 ---Prompt user for soft/hard and execute reset.

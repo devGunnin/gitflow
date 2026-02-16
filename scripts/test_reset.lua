@@ -483,7 +483,7 @@ test("merge-base commit is highlighted", function()
 	reset_panel.close()
 end)
 
-test("position numbers are rendered for first 9 commits", function()
+test("HEAD has no position number, [1] is on HEAD~1", function()
 	local reset_panel = require("gitflow.panels.reset")
 	reset_panel.open(cfg)
 
@@ -504,16 +504,32 @@ test("position numbers are rendered for first 9 commits", function()
 		reset_panel.state.bufnr, 0, -1, false
 	)
 
-	local has_numbered = false
+	-- Find the first commit line (HEAD) and the second commit line (HEAD~1)
+	local commit_lines = {}
 	for _, line in ipairs(lines) do
-		if line:find("%[1%]", 1, false) then
-			has_numbered = true
-			break
+		if line:find("feature commit", 1, true)
+			or line:find("second commit", 1, true)
+			or line:find("initial commit", 1, true)
+		then
+			commit_lines[#commit_lines + 1] = line
 		end
 	end
+
 	assert_true(
-		has_numbered,
-		"first commit should have [1] position marker"
+		#commit_lines >= 2,
+		"should have at least 2 commit lines"
+	)
+
+	-- HEAD (first commit line) should NOT have a [N] marker
+	assert_true(
+		not commit_lines[1]:find("%[%d%]"),
+		"HEAD commit should not have a position number"
+	)
+
+	-- HEAD~1 (second commit line) should have [1]
+	assert_true(
+		commit_lines[2]:find("%[1%]", 1, false) ~= nil,
+		"HEAD~1 commit should have [1] position marker"
 	)
 
 	reset_panel.close()
