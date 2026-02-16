@@ -192,7 +192,7 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "q", function()
-		M.close()
+		M.close_with_guard()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
@@ -1205,6 +1205,24 @@ function M.back_to_pr()
 	else
 		pr_panel.open_view(number)
 	end
+end
+
+function M.close_with_guard()
+	local count = #M.state.pending_comments
+	if count > 0 then
+		local msg = (
+			"Are you sure you want to discard the review?"
+			.. " You have %d comment%s so far."
+		):format(count, count == 1 and "" or "s")
+		local confirmed = input.confirm(msg, {
+			choices = { "&Yes", "&No" },
+			default_choice = 2,
+		})
+		if not confirmed then
+			return
+		end
+	end
+	M.close()
 end
 
 function M.close()
