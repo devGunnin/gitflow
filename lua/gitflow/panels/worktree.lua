@@ -5,6 +5,7 @@ local git_worktree = require("gitflow.git.worktree")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local list_picker = require("gitflow.ui.list_picker")
 
 ---@class GitflowWorktreePanelState
 ---@field bufnr integer|nil
@@ -118,6 +119,7 @@ local function render(entries, current_branch)
 	)
 	local line_entries = {}
 	local entry_highlights = {}
+	local path_highlights = {}
 
 	if #entries == 0 then
 		lines[#lines + 1] = ui_render.empty(
@@ -140,12 +142,23 @@ local function render(entries, current_branch)
 				entry.short_sha,
 				entry.path
 			)
-			lines[#lines + 1] = ui_render.entry(display)
+			local rendered_line = ui_render.entry(display)
+			lines[#lines + 1] = rendered_line
 			line_entries[#lines] = entry
 
 			if entry.branch == current_branch then
 				entry_highlights[#lines] =
 					"GitflowWorktreeActive"
+			end
+
+			local path_start = rendered_line:find(
+				entry.path, 1, true
+			)
+			if path_start then
+				path_highlights[#lines] = {
+					start_col = path_start - 1,
+					end_col = path_start - 1 + #entry.path,
+				}
 			end
 		end
 	end
@@ -171,6 +184,17 @@ local function render(entries, current_branch)
 			entry_highlights = entry_highlights,
 		}
 	)
+
+	for line_no, cols in pairs(path_highlights) do
+		vim.api.nvim_buf_add_highlight(
+			bufnr,
+			WT_HIGHLIGHT_NS,
+			"GitflowWorktreePath",
+			line_no - 1,
+			cols.start_col,
+			cols.end_col
+		)
+	end
 end
 
 ---@return GitflowWorktreeEntry|nil
@@ -250,62 +274,79 @@ function M.switch_under_cursor()
 	emit_post_operation()
 end
 
-function M.add_worktree()
-	local cfg = M.state.cfg
-	if not cfg then
-		return
-	end
-
+---@param branch string
+local function prompt_for_worktree_path(branch)
 	ui.input.prompt({
-		prompt = "Worktree branch: ",
-	}, function(branch)
-		local trimmed_branch = vim.trim(branch)
-		if trimmed_branch == "" then
+		prompt = "Worktree path: ",
+	}, function(path)
+		local trimmed_path = vim.trim(path)
+		if trimmed_path == "" then
 			utils.notify(
-				"Branch name cannot be empty",
+				"Path cannot be empty",
 				vim.log.levels.WARN
 			)
 			return
 		end
 
-		ui.input.prompt({
-			prompt = "Worktree path: ",
-		}, function(path)
-			local trimmed_path = vim.trim(path)
-			if trimmed_path == "" then
-				utils.notify(
-					"Path cannot be empty",
-					vim.log.levels.WARN
+		git_worktree.add(trimmed_path, branch, function(err, result)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			local output = git.output(result)
+			if output == "" then
+				output = ("Created worktree at %s"):format(
+					trimmed_path
 				)
+			end
+			utils.notify(output, vim.log.levels.INFO)
+			M.refresh()
+			emit_post_operation()
+		end)
+	end)
+end
+
+function M.add_worktree()
+	git_branch.list({}, function(err, entries)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+
+		local local_branches = git_branch.partition(
+			entries or {}
+		)
+		if #local_branches == 0 then
+			utils.notify(
+				"No local branches found",
+				vim.log.levels.WARN
+			)
+			return
+		end
+
+		local items = {}
+		for _, branch in ipairs(local_branches) do
+			items[#items + 1] = { name = branch.name }
+		end
+
+		vim.schedule(function()
+			if not M.state.bufnr
+				or not vim.api.nvim_buf_is_valid(M.state.bufnr)
+			then
 				return
 			end
 
-			git_worktree.add(
-				trimmed_path,
-				trimmed_branch,
-				function(err, result)
-					if err then
-						utils.notify(
-							err,
-							vim.log.levels.ERROR
-						)
+			list_picker.open({
+				items = items,
+				title = "Select Worktree Branch",
+				multi_select = false,
+				on_submit = function(selected)
+					if #selected == 0 then
 						return
 					end
-					local output = git.output(result)
-					if output == "" then
-						output = (
-							"Created worktree"
-								.. " at %s"
-						):format(trimmed_path)
-					end
-					utils.notify(
-						output,
-						vim.log.levels.INFO
-					)
-					M.refresh()
-					emit_post_operation()
-				end
-			)
+					prompt_for_worktree_path(selected[1])
+				end,
+			})
 		end)
 	end)
 end

@@ -627,6 +627,150 @@ test("line_entries populated after render", function()
 	wt_panel.close()
 end)
 
+test("add_worktree uses branch picker before path prompt", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	local git_branch = require("gitflow.git.branch")
+	local git_wt = require("gitflow.git.worktree")
+	local list_picker = require("gitflow.ui.list_picker")
+	local ui_input = require("gitflow.ui.input")
+	local ui_mod = require("gitflow.ui")
+
+	local original_list = git_branch.list
+	local original_add = git_wt.add
+	local original_picker_open = list_picker.open
+	local original_prompt = ui_input.prompt
+	local original_refresh = wt_panel.refresh
+
+	local bufnr = ui_mod.buffer.create("worktree", {
+		filetype = "gitflowworktree",
+		lines = { "Loading..." },
+	})
+	wt_panel.state.bufnr = bufnr
+	wt_panel.state.cfg = cfg
+	wt_panel.refresh = function()
+		return
+	end
+
+	local picker_called = false
+	local added_branch = nil
+	local added_path = nil
+
+	local ok, err = pcall(function()
+		git_branch.list = function(_, cb)
+			cb(nil, {
+				{ name = "main", is_remote = false },
+				{ name = "feature", is_remote = false },
+				{ name = "origin/main", is_remote = true },
+			})
+		end
+
+		list_picker.open = function(opts)
+			picker_called = true
+			assert_true(
+				type(opts.items) == "table" and #opts.items >= 2,
+				"branch picker should include local branches"
+			)
+			opts.on_submit({ "feature" })
+		end
+
+		ui_input.prompt = function(opts, on_confirm)
+			assert_equals(
+				opts.prompt,
+				"Worktree path: ",
+				"path prompt should run after branch selection"
+			)
+			on_confirm(repo_dir .. "/wt-from-picker")
+		end
+
+		git_wt.add = function(path, branch, cb)
+			added_path = path
+			added_branch = branch
+			cb(nil, {
+				code = 0,
+				stdout = "",
+				stderr = "",
+				cmd = { "git", "worktree", "add", path, branch },
+			})
+		end
+
+		wt_panel.add_worktree()
+		vim.wait(1000, function()
+			return picker_called and added_branch ~= nil
+		end, 20)
+
+		assert_true(
+			picker_called,
+			"branch picker should open for add flow"
+		)
+		assert_equals(
+			added_branch,
+			"feature",
+			"selected branch should be passed to git worktree add"
+		)
+		assert_equals(
+			added_path,
+			repo_dir .. "/wt-from-picker",
+			"prompted path should be passed to git worktree add"
+		)
+	end)
+
+	git_branch.list = original_list
+	git_wt.add = original_add
+	list_picker.open = original_picker_open
+	ui_input.prompt = original_prompt
+	wt_panel.refresh = original_refresh
+	wt_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test("worktree panel applies path highlight to entry paths", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	wt_panel.open(cfg)
+
+	vim.wait(2000, function()
+		if not wt_panel.state.bufnr then
+			return false
+		end
+		local lines = vim.api.nvim_buf_get_lines(
+			wt_panel.state.bufnr, 0, -1, false
+		)
+		return #lines > 1
+			and not lines[1]:find("Loading", 1, true)
+	end, 50)
+
+	local lines = vim.api.nvim_buf_get_lines(
+		wt_panel.state.bufnr, 0, -1, false
+	)
+	local ns = vim.api.nvim_create_namespace("gitflow_worktree_hl")
+	local marks = vim.api.nvim_buf_get_extmarks(
+		wt_panel.state.bufnr, ns, 0, -1, { details = true }
+	)
+
+	local has_path_highlight = false
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		if details.hl_group == "GitflowWorktreePath" then
+			local line_no = mark[2] + 1
+			local line_text = lines[line_no] or ""
+			local path_start = line_text:find(repo_dir, 1, true)
+			if path_start and mark[3] == (path_start - 1) then
+				has_path_highlight = true
+				break
+			end
+		end
+	end
+
+	assert_true(
+		has_path_highlight,
+		"entry path text should use GitflowWorktreePath highlight"
+	)
+
+	wt_panel.close()
+end)
+
 test("dispatch worktree returns message", function()
 	local commands = require("gitflow.commands")
 	local result = commands.dispatch({ "worktree" }, cfg)
