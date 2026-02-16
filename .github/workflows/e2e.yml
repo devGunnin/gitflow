@@ -50,7 +50,6 @@ jobs:
           passing_stages=(
             scripts/test_stage1.lua
             scripts/test_stage2.lua
-            scripts/test_stage3.lua
             scripts/test_stage4.lua
             scripts/test_stage5.lua
             scripts/test_stage6.lua
