@@ -338,6 +338,56 @@ local pr_buf = buffer.get("prs")
 assert_true(pr_buf ~= nil, "pr panel should open")
 assert_keymaps(pr_buf, { "v" })
 
+-- #302: verify PR detail view shows review comments
+pr_panel.open_view(7, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "Review Comments") ~= nil
+end, "pr detail view should show Review Comments section")
+
+local pr_view_buf = buffer.get("prs")
+local pr_view_lines =
+	vim.api.nvim_buf_get_lines(pr_view_buf, 0, -1, false)
+assert_true(
+	find_line(pr_view_lines, "reviewer1 on lua/gitflow/commands.lua:")
+		~= nil,
+	"pr detail should show reviewer1 review comment"
+)
+assert_true(
+	find_line(pr_view_lines, "reviewer2 on lua/gitflow/commands.lua:")
+		~= nil,
+	"pr detail should show reviewer2 review comment"
+)
+assert_true(
+	find_line(pr_view_lines, "Consider renaming this variable") ~= nil,
+	"pr detail should show review comment body"
+)
+
+-- Verify Review Comments header gets GitflowHeader highlight
+local prs_hl_ns = vim.api.nvim_get_namespaces().gitflow_prs_hl
+assert_true(prs_hl_ns ~= nil, "prs highlight namespace should exist")
+local rc_header_line = find_line(pr_view_lines, "Review Comments")
+assert_true(
+	line_has_highlight(pr_view_buf, prs_hl_ns, rc_header_line,
+		"GitflowHeader"),
+	"Review Comments header should use GitflowHeader"
+)
+
+-- Go back to list for subsequent tests
+commands.dispatch({ "pr", "list", "open" }, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_pr_row(lines, 7, "Stage5 PR") ~= nil
+end, "pr list should render after returning from detail view")
+
 commands.dispatch({ "pr", "review", "7" }, cfg)
 wait_until(function()
 	local bufnr = buffer.get("review")

@@ -349,7 +349,8 @@ local function render_list(prs)
 end
 
 ---@param pr table
-local function render_view(pr)
+---@param review_comments table[]|nil
+local function render_view(pr, review_comments)
 	local view_state = pr_state(pr)
 	local view_icon = icons.get("github", "pr_" .. view_state)
 	local render_opts = {
@@ -412,6 +413,32 @@ local function render_view(pr)
 		end
 	end
 
+	local rc = review_comments or {}
+	if type(rc) == "table" and #rc > 0 then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "Review Comments"
+		lines[#lines + 1] = "---------------"
+
+		for _, c in ipairs(rc) do
+			local author = type(c.user) == "table"
+				and maybe_text(c.user.login) or maybe_text(c.user)
+			if author == "-" then
+				author = "unknown"
+			end
+			local path = maybe_text(c.path)
+			lines[#lines + 1] = ("%s on %s:"):format(author, path)
+			local body_lines = split_lines(tostring(c.body or ""))
+			if #body_lines == 0 then
+				lines[#lines + 1] = "  (empty)"
+			else
+				for _, bl in ipairs(body_lines) do
+					lines[#lines + 1] = ("  %s"):format(bl)
+				end
+			end
+			lines[#lines + 1] = ""
+		end
+	end
+
 	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
 		.. "  m: merge  o: checkout  v: review  r: refresh"
 
@@ -430,7 +457,8 @@ local function render_view(pr)
 
 	-- Mark section headers in detail view
 	for line_no, line in ipairs(lines) do
-		if line == "Body" or line == "Comments" then
+		if line == "Body" or line == "Comments"
+			or line == "Review Comments" then
 			entry_highlights[line_no] = "GitflowHeader"
 		end
 	end
@@ -520,7 +548,9 @@ function M.open_view(number, cfg)
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		render_view(pr or {})
+		gh_prs.review_comments(number, {}, function(rc_err, rc)
+			render_view(pr or {}, not rc_err and rc or nil)
+		end)
 	end)
 end
 
