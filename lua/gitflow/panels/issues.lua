@@ -328,6 +328,7 @@ local function render_view(issue)
 		render_opts
 	)
 	local header_line_count = #lines
+	lines[#lines + 1] = ("Title: %s"):format(maybe_text(issue.title))
 	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
 	lines[#lines + 1] = ("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-")
 	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(issue))
@@ -379,7 +380,7 @@ local function render_view(issue)
 	end
 
 	local entry_highlights = {}
-	entry_highlights[header_line_count + 1] = issue_highlight_group(issue_state(issue))
+	entry_highlights[header_line_count + 2] = issue_highlight_group(issue_state(issue))
 
 	-- Mark section headers in detail view
 	for line_no, line in ipairs(lines) do
@@ -393,7 +394,7 @@ local function render_view(issue)
 	})
 
 	-- Colored labels in detail view
-	local labels_line_no = header_line_count + 3
+	local labels_line_no = header_line_count + 4
 	local labels_line = lines[labels_line_no] or ""
 	if labels_line:find("Labels:", 1, true) then
 		local issue_labels = issue.labels or {}
