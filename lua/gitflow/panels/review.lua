@@ -46,6 +46,10 @@ local git_diff = require("gitflow.git.diff")
 ---@field comment_threads GitflowPrReviewCommentThread[]
 ---@field thread_line_map table<integer, integer>
 ---@field pending_comments GitflowPrReviewDraftThread[]
+---@field _cached_title string|nil
+---@field _cached_diff_text string|nil
+---@field _cached_files table[]|nil
+---@field _cached_hunks table[]|nil
 
 local M = {}
 local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
@@ -85,6 +89,11 @@ M.state = {
 	comment_threads = {},
 	thread_line_map = {},
 	pending_comments = {},
+	-- Cached data for local re-renders (avoids API round-trips)
+	_cached_title = nil,
+	_cached_diff_text = nil,
+	_cached_files = nil,
+	_cached_hunks = nil,
 }
 
 ---@param cfg GitflowConfig
@@ -1106,7 +1115,21 @@ function M.re_render()
 		or not vim.api.nvim_buf_is_valid(M.state.bufnr) then
 		return
 	end
-	-- Reconstruct from cached data - trigger a full refresh
+	-- Fast path: rebuild buffer from cached data without API calls
+	if M.state._cached_title and M.state._cached_diff_text then
+		local anchor = capture_cursor_anchor()
+		render_review(
+			M.state._cached_title,
+			M.state._cached_diff_text,
+			M.state._cached_files or {},
+			M.state._cached_hunks or {},
+			M.state.comment_threads
+		)
+		update_pending_comment_lines()
+		restore_cursor_from_anchor(anchor)
+		return
+	end
+	-- Fallback: no cached data yet, do a full refresh
 	M.refresh()
 end
 
@@ -1177,6 +1200,13 @@ function M.refresh()
 					local preview_lines = split_lines(diff_text)
 					local files, hunks =
 						git_diff.collect_markers(preview_lines, 1)
+
+					-- Cache data for fast local re-renders
+					M.state._cached_title = title
+					M.state._cached_diff_text = diff_text or ""
+					M.state._cached_files = files
+					M.state._cached_hunks = hunks
+
 					render_review(
 						title, diff_text or "",
 						files, hunks, comment_threads
@@ -1259,6 +1289,10 @@ function M.close()
 	M.state.comment_threads = {}
 	M.state.thread_line_map = {}
 	M.state.pending_comments = {}
+	M.state._cached_title = nil
+	M.state._cached_diff_text = nil
+	M.state._cached_files = nil
+	M.state._cached_hunks = nil
 
 	-- B3: restore focus to previous window
 	if prev and vim.api.nvim_win_is_valid(prev) then

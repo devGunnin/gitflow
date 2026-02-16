@@ -503,6 +503,25 @@ assert_equals(
 	"pending comment body should match input"
 )
 
+-- re_render should use cached data and not trigger new gh calls
+local gh_lines_before = #read_lines(gh_log)
+review_panel.re_render()
+local gh_lines_after = #read_lines(gh_log)
+assert_equals(
+	gh_lines_after, gh_lines_before,
+	"re_render should not trigger gh API calls"
+)
+
+-- Verify cached state is populated after initial refresh
+assert_true(
+	review_panel.state._cached_title ~= nil,
+	"cached title should be populated after refresh"
+)
+assert_true(
+	review_panel.state._cached_diff_text ~= nil,
+	"cached diff_text should be populated after refresh"
+)
+
 -- reply_to_thread falls back to pending comment
 review_panel.reply_to_thread()
 
