@@ -62,6 +62,12 @@ local function with_temp_gh_log(fn)
 	end
 end
 
+-- Compatibility helper for merge-ref runs where newer base-only tests may
+-- still call cleanup_panels() in this file.
+local function cleanup_panels()
+	T.cleanup_panels()
+end
+
 T.run_suite("E2E: PR Review Flow", {
 
 	-- ── Review panel opens and loads diff ─────────────────────────────
