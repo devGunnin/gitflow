@@ -69,35 +69,6 @@ local function capture_notifications(fn)
 	return notifications
 end
 
---- Close all panels and floating windows.
-local function cleanup_panels()
-	if conflict_view.is_open() then
-		pcall(conflict_view.close)
-	end
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	-- Close any remaining tabs (conflict view opens a tab)
-	while vim.fn.tabpagenr("$") > 1 do
-		pcall(vim.cmd, "tabclose!")
-	end
-
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
-end
-
 --- Create a temporary file with conflict markers for testing.
 ---@return string path
 local function create_conflict_file()
@@ -217,7 +188,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			"conflict panel should report as open"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Conflicted file list renders from git stub ───────────────────
@@ -241,7 +212,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Conflict panel keymaps ───────────────────────────────────────
@@ -254,7 +225,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		T.assert_true(bufnr ~= nil, "conflict buffer should exist")
 		T.assert_keymaps(bufnr, { "<CR>", "r", "R", "C", "A", "q" })
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Active operation label renders ───────────────────────────────
@@ -270,13 +241,13 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			"should show active operation line"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Empty conflict list shows empty state ────────────────────────
 
 	["empty conflict list shows no conflicts state"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		conflict_panel.open(cfg)
 		T.drain_jobs(3000)
 
@@ -288,7 +259,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			"should show 0 unresolved files when no conflicts"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── parse_markers correctly parses conflict hunks ─────────────────
@@ -476,7 +447,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Merged buffer keymaps ────────────────────────────────────────
@@ -510,7 +481,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Top buffers are read-only ────────────────────────────────────
@@ -556,7 +527,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		T.assert_true(modifiable, "merged buffer should be modifiable")
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Hunk navigation ]x / [x ──────────────────────────────────────
@@ -612,7 +583,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Hunk navigation wraps around ─────────────────────────────────
@@ -660,7 +631,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Accept LOCAL side (1) ────────────────────────────────────────
@@ -719,7 +690,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		end)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Accept BASE side (2) ─────────────────────────────────────────
@@ -767,7 +738,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		end)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Accept REMOTE side (3) ───────────────────────────────────────
@@ -815,7 +786,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		end)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Resolve all hunks (a) ────────────────────────────────────────
@@ -873,7 +844,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		end)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Manual edit mode (e) ─────────────────────────────────────────
@@ -914,7 +885,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		vim.cmd("stopinsert")
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Continue merge/rebase (C) ────────────────────────────────────
@@ -954,7 +925,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			end)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Abort operation (A) ──────────────────────────────────────────
@@ -992,7 +963,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			end)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Window layout cleanup after close ────────────────────────────
@@ -1054,7 +1025,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Conflict panel close also closes conflict view ───────────────
@@ -1090,7 +1061,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Top panes scrollbind ─────────────────────────────────────────
@@ -1130,7 +1101,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		T.assert_false(merged_sb, "merged window should not have scrollbind")
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Highlights applied to hunks ──────────────────────────────────
@@ -1164,7 +1135,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Callbacks fire on resolve / close ─────────────────────────────
@@ -1198,7 +1169,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })
 

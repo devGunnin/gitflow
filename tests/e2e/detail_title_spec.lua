@@ -9,27 +9,12 @@ local prs_panel = require("gitflow.panels.prs")
 local ui = require("gitflow.ui")
 local cfg = _G.TestConfig
 
-local function cleanup_panels()
-	for _, name in ipairs({
-		"issues", "prs", "status", "diff", "log",
-		"stash", "branch", "conflict", "labels",
-		"review", "palette",
-	}) do
-		local ok, mod = pcall(
-			require, "gitflow.panels." .. name
-		)
-		if ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-end
-
 T.run_suite("detail_title_spec", {
 
 	-- ── Issue detail view ──────────────────────────
 
 	["issue view shows Title field"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		issues_panel.open_view(1, cfg)
 		T.drain_jobs(3000)
 
@@ -56,11 +41,11 @@ T.run_suite("detail_title_spec", {
 			"Title line should show the issue title"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["issue view Title appears before Body"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		issues_panel.open_view(1, cfg)
 		T.drain_jobs(3000)
 
@@ -82,13 +67,13 @@ T.run_suite("detail_title_spec", {
 			"Title line must appear before Body"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── PR detail view ─────────────────────────────
 
 	["pr view shows Title field"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		prs_panel.open_view(42, cfg)
 		T.drain_jobs(3000)
 
@@ -115,11 +100,11 @@ T.run_suite("detail_title_spec", {
 			"Title line should show the PR title"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["pr view Title appears before Body"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		prs_panel.open_view(42, cfg)
 		T.drain_jobs(3000)
 
@@ -141,6 +126,6 @@ T.run_suite("detail_title_spec", {
 			"Title line must appear before Body"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })

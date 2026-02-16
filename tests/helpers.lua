@@ -387,6 +387,37 @@ function M.assert_keymaps(bufnr, required)
 	end
 end
 
+-- ── Panel cleanup ─────────────────────────────────────────────────────
+
+--- All panel module names used across the plugin.
+local ALL_PANELS = {
+	"status", "diff", "log", "stash", "branch",
+	"conflict", "issues", "prs", "labels", "review",
+	"palette", "cherry_pick", "reset",
+}
+
+--- Close all open panel windows and reset shared state.
+function M.cleanup_panels()
+	for _, panel_name in ipairs(ALL_PANELS) do
+		local mod_ok, mod = pcall(
+			require, "gitflow.panels." .. panel_name
+		)
+		if mod_ok and mod.close then
+			pcall(mod.close)
+		end
+	end
+	local cmd_ok, commands = pcall(require, "gitflow.commands")
+	if cmd_ok then
+		pcall(function()
+			commands.state.panel_window = nil
+		end)
+	end
+	local ui_ok, ui = pcall(require, "gitflow.ui")
+	if ui_ok then
+		pcall(ui.window.close, "main")
+	end
+end
+
 -- ── File helpers ───────────────────────────────────────────────────────
 
 --- Write lines to a file on disk.

@@ -52,52 +52,10 @@ local function with_temp_git_log(fn)
 	end
 end
 
--- All subcommands that should be registered after setup
-local EXPECTED_SUBCOMMANDS = {
-	"help",
-	"open",
-	"refresh",
-	"close",
-	"palette",
-	"status",
-	"branch",
-	"commit",
-	"push",
-	"pull",
-	"sync",
-	"fetch",
-	"diff",
-	"log",
-	"stash",
-	"issue",
-	"pr",
-	"label",
-	"conflicts",
-	"conflict",
-	"merge",
-	"rebase",
-	"cherry-pick",
-	"quick-commit",
-	"quick-push",
-}
-
---- Close any panel windows left open between tests.
-local function cleanup_panels()
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-	pcall(function()
-		commands.state.panel_window = nil
-	end)
-	pcall(ui.window.close, "main")
-end
+-- Generate EXPECTED_SUBCOMMANDS from the live registered set so
+-- new subcommands are automatically covered without manual updates.
+local EXPECTED_SUBCOMMANDS = vim.tbl_keys(commands.subcommands)
+table.sort(EXPECTED_SUBCOMMANDS)
 
 T.run_suite("E2E: Command Exposure & Dispatch", {
 
@@ -167,7 +125,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 			palette_panel.is_open(),
 			"palette should open after dispatch"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── commit + quick actions ────────────────────────────────────────────
@@ -359,7 +317,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 			bufnr ~= nil,
 			"status should create a buffer"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── branch subcommand ───────────────────────────────────────────────
@@ -370,7 +328,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "branch should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── diff subcommand ─────────────────────────────────────────────────
@@ -381,7 +339,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "diff should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── log subcommand ──────────────────────────────────────────────────
@@ -392,7 +350,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "log should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── stash subcommand ────────────────────────────────────────────────
@@ -403,7 +361,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "stash list should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── fetch subcommand ────────────────────────────────────────────────
@@ -454,7 +412,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "conflicts should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── conflict alias ──────────────────────────────────────────────────
@@ -465,7 +423,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "conflict should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── issue subcommand ────────────────────────────────────────────────
@@ -476,7 +434,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "issue list should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── pr subcommand ───────────────────────────────────────────────────
@@ -487,7 +445,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "pr list should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── label subcommand ────────────────────────────────────────────────
@@ -498,7 +456,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "label list should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── refresh subcommand ──────────────────────────────────────────────
@@ -511,7 +469,7 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 		T.assert_true(ok, "refresh should not crash: " .. (err or ""))
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── merge subcommand (no args gives usage) ──────────────────────────
