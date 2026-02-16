@@ -14,6 +14,12 @@ local git_diff = require("gitflow.git.diff")
 ---@field start_line integer|nil
 ---@field end_line integer|nil
 ---@field body string
+---@field _anchor_new_line integer|nil
+---@field _anchor_old_line integer|nil
+---@field _anchor_start_new_line integer|nil
+---@field _anchor_start_old_line integer|nil
+---@field _anchor_end_new_line integer|nil
+---@field _anchor_end_old_line integer|nil
 
 ---@class GitflowPrReviewExistingComment
 ---@field id integer
@@ -46,6 +52,10 @@ local git_diff = require("gitflow.git.diff")
 ---@field comment_threads GitflowPrReviewCommentThread[]
 ---@field thread_line_map table<integer, integer>
 ---@field pending_comments GitflowPrReviewDraftThread[]
+---@field _cached_title string|nil
+---@field _cached_diff_text string|nil
+---@field _cached_files table[]|nil
+---@field _cached_hunks table[]|nil
 
 local M = {}
 local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
@@ -85,6 +95,11 @@ M.state = {
 	comment_threads = {},
 	thread_line_map = {},
 	pending_comments = {},
+	-- Cached data for local re-renders (avoids API round-trips)
+	_cached_title = nil,
+	_cached_diff_text = nil,
+	_cached_files = nil,
+	_cached_hunks = nil,
 }
 
 ---@param cfg GitflowConfig
@@ -632,12 +647,186 @@ local function submit_review(mode, body, on_success_message)
 	end)
 end
 
+---@return table[]|nil, string|nil
+local function collect_api_comments()
+	local api_comments = {}
+
+	---@param path string|nil
+	---@param anchor_new integer|nil
+	---@param anchor_old integer|nil
+	---@return integer|nil
+	local function find_buffer_line_for_anchor(path, anchor_new, anchor_old)
+		if not path or path == "" then
+			return nil
+		end
+		for buf_line, ctx in pairs(M.state.line_context) do
+			if ctx.path == path
+				and anchor_new
+				and ctx.new_line == anchor_new then
+				return buf_line
+			end
+		end
+		for buf_line, ctx in pairs(M.state.line_context) do
+			if ctx.path == path
+				and anchor_old
+				and ctx.old_line == anchor_old then
+				return buf_line
+			end
+		end
+		return nil
+	end
+
+	---@param path string|nil
+	---@param buf_line integer|nil
+	---@param fallback_new integer|nil
+	---@param fallback_old integer|nil
+	---@return table|nil
+	local function resolve_api_target(path, buf_line, fallback_new, fallback_old)
+		if path and path ~= ""
+			and buf_line
+			and M.state.line_context[buf_line] then
+			local ctx = M.state.line_context[buf_line]
+			if ctx.path == path then
+				if ctx.new_line then
+					return { line = ctx.new_line, side = "RIGHT" }
+				end
+				if ctx.old_line then
+					return { line = ctx.old_line, side = "LEFT" }
+				end
+			end
+		end
+		local anchored_buf = find_buffer_line_for_anchor(
+			path, fallback_new, fallback_old
+		)
+		if anchored_buf and M.state.line_context[anchored_buf] then
+			local anchored_ctx = M.state.line_context[anchored_buf]
+			if anchored_ctx.new_line then
+				return { line = anchored_ctx.new_line, side = "RIGHT" }
+			end
+			if anchored_ctx.old_line then
+				return { line = anchored_ctx.old_line, side = "LEFT" }
+			end
+		end
+		if fallback_new then
+			return { line = fallback_new, side = "RIGHT" }
+		end
+		if fallback_old then
+			return { line = fallback_old, side = "LEFT" }
+		end
+		return nil
+	end
+
+	local unresolved_ids = {}
+	for _, pc in ipairs(M.state.pending_comments) do
+		if pc.path and pc.path ~= "" then
+			local entry = {
+				path = pc.path,
+				body = pc.body,
+			}
+
+			local primary = resolve_api_target(
+				pc.path, pc.line,
+				pc._anchor_new_line, pc._anchor_old_line
+			)
+			if not primary then
+				unresolved_ids[#unresolved_ids + 1] =
+					tostring(pc.id or "?")
+				goto continue
+			end
+			entry.line = primary.line
+			entry.side = primary.side
+
+			if pc.start_line and pc.end_line then
+				local start_target = resolve_api_target(
+					pc.path,
+					pc.start_line,
+					pc._anchor_start_new_line or pc._anchor_new_line,
+					pc._anchor_start_old_line or pc._anchor_old_line
+				)
+				local end_target = resolve_api_target(
+					pc.path,
+					pc.end_line,
+					pc._anchor_end_new_line or pc._anchor_new_line,
+					pc._anchor_end_old_line or pc._anchor_old_line
+				)
+				if start_target and end_target
+					and start_target.side == end_target.side then
+					entry.start_line = start_target.line
+					entry.start_side = start_target.side
+					entry.line = end_target.line
+					entry.side = end_target.side
+				end
+			end
+
+			api_comments[#api_comments + 1] = entry
+		else
+			unresolved_ids[#unresolved_ids + 1] = tostring(pc.id or "?")
+		end
+		::continue::
+	end
+
+	if #unresolved_ids > 0 then
+		return nil, (
+			"Cannot submit pending comment(s) with unresolved diff lines "
+			.. "(ids: %s). Re-open those comments on valid diff lines and retry."
+		):format(table.concat(unresolved_ids, ", "))
+	end
+
+	return api_comments, nil
+end
+
+---@param mode "approve"|"request_changes"|"comment"
+---@param body string
+---@param on_success_message string
+local function submit_review_with_pending(mode, body, on_success_message)
+	if #M.state.pending_comments == 0 then
+		submit_review(mode, body, on_success_message)
+		return
+	end
+
+	local number = current_pr_number()
+	if not number then
+		utils.notify(
+			"No pull request selected for review",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	local api_comments, collect_err = collect_api_comments()
+	if collect_err then
+		utils.notify(collect_err, vim.log.levels.WARN)
+		return
+	end
+	gh_prs.submit_review(
+		number, mode, body, api_comments, {},
+		function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			local count = #M.state.pending_comments
+			M.state.pending_comments = {}
+			utils.notify(
+				("Review submitted (%s) with %d comment(s)")
+					:format(mode, count),
+				vim.log.levels.INFO
+			)
+			M.refresh()
+		end
+	)
+end
+
 ---@param mode "approve"|"request_changes"|"comment"
 ---@param prompt string
 ---@param on_success_message string
 local function prompt_and_submit(mode, prompt, on_success_message)
 	input.prompt({ prompt = prompt }, function(body)
-		submit_review(mode, body or "", on_success_message)
+		submit_review_with_pending(
+			mode,
+			body or "",
+			on_success_message
+		)
 	end)
 end
 
@@ -743,58 +932,9 @@ function M.submit_pending_review()
 			prompt = "Review body (optional): ",
 		}, function(body_input)
 			local body = vim.trim(body_input or "")
-			local api_comments = {}
-			for _, pc in ipairs(M.state.pending_comments) do
-				if pc.path and pc.path ~= "" then
-					local entry = {
-						path = pc.path,
-						body = pc.body,
-					}
-					local ctx =
-						M.state.line_context[pc.line] or {}
-					if ctx.new_line then
-						entry.line = ctx.new_line
-					end
-					if pc.start_line and pc.end_line then
-						local sc =
-							M.state.line_context[
-								pc.start_line
-							] or {}
-						local ec =
-							M.state.line_context[
-								pc.end_line
-							] or {}
-						if sc.new_line then
-							entry.start_line = sc.new_line
-						end
-						if ec.new_line then
-							entry.line = ec.new_line
-						end
-					end
-					api_comments[#api_comments + 1] = entry
-				end
-			end
-
-			gh_prs.submit_review(
-				number, mode, body,
-				api_comments, {},
-				function(err)
-					if err then
-						utils.notify(
-							err, vim.log.levels.ERROR
-						)
-						return
-					end
-					local count = #M.state.pending_comments
-					M.state.pending_comments = {}
-					utils.notify(
-						("Review submitted (%s)"
-							.. " with %d comment(s)"
-						):format(mode, count),
-						vim.log.levels.INFO
-					)
-					M.refresh()
-				end
+			submit_review_with_pending(
+				mode, body,
+				("Review submitted (%s)"):format(mode)
 			)
 		end)
 	end)
@@ -814,6 +954,14 @@ function M.inline_comment()
 			and vim.api.nvim_win_get_cursor(M.state.winid)[1]
 			or 1
 		local context = M.state.line_context[cursor_line] or {}
+		if not context.path or context.path == ""
+			or (not context.new_line and not context.old_line) then
+			utils.notify(
+				"Move cursor to a diff content line before adding a comment",
+				vim.log.levels.WARN
+			)
+			return
+		end
 		local number = #M.state.pending_comments + 1
 		M.state.pending_comments[#M.state.pending_comments + 1] = {
 			id = number,
@@ -822,6 +970,7 @@ function M.inline_comment()
 			line = cursor_line,
 			body = body,
 			_anchor_new_line = context.new_line,
+			_anchor_old_line = context.old_line,
 		}
 		utils.notify(
 			("Inline comment queued (#%d)"
@@ -860,6 +1009,25 @@ function M.inline_comment_visual()
 
 			local start_ctx =
 				M.state.line_context[start_line] or {}
+			local end_ctx =
+				M.state.line_context[end_line] or {}
+			if not start_ctx.path
+				or start_ctx.path == ""
+				or start_ctx.path ~= end_ctx.path then
+				utils.notify(
+					"Range comments must stay within one diff file",
+					vim.log.levels.WARN
+				)
+				return
+			end
+			if (not start_ctx.new_line and not start_ctx.old_line)
+				or (not end_ctx.new_line and not end_ctx.old_line) then
+				utils.notify(
+					"Select diff content lines for range comments",
+					vim.log.levels.WARN
+				)
+				return
+			end
 			local number = #M.state.pending_comments + 1
 			M.state.pending_comments[
 				#M.state.pending_comments + 1
@@ -867,11 +1035,16 @@ function M.inline_comment_visual()
 				id = number,
 				path = start_ctx.path,
 				hunk = start_ctx.hunk,
-				line = start_line,
+				line = end_line,
 				start_line = start_line,
 				end_line = end_line,
 				body = body,
-				_anchor_new_line = start_ctx.new_line,
+				_anchor_new_line = end_ctx.new_line,
+				_anchor_old_line = end_ctx.old_line,
+				_anchor_start_new_line = start_ctx.new_line,
+				_anchor_start_old_line = start_ctx.old_line,
+				_anchor_end_new_line = end_ctx.new_line,
+				_anchor_end_old_line = end_ctx.old_line,
 			}
 			utils.notify(
 				("Inline comment queued (#%d, lines %d-%d)"
@@ -1083,18 +1256,59 @@ end
 --- After a re-render, update pending_comments buffer-line references
 --- so that extmark indicators land on the correct new buffer lines.
 local function update_pending_comment_lines()
+	---@param path string|nil
+	---@param anchor_new integer|nil
+	---@param anchor_old integer|nil
+	---@return integer|nil
+	local function find_buffer_line_for_anchor(path, anchor_new, anchor_old)
+		if not path or path == "" then
+			return nil
+		end
+		for buf_line, ctx in pairs(M.state.line_context) do
+			if ctx.path == path
+				and anchor_new
+				and ctx.new_line == anchor_new then
+				return buf_line
+			end
+		end
+		for buf_line, ctx in pairs(M.state.line_context) do
+			if ctx.path == path
+				and anchor_old
+				and ctx.old_line == anchor_old then
+				return buf_line
+			end
+		end
+		return nil
+	end
+
 	for _, pc in ipairs(M.state.pending_comments) do
 		if pc.path then
-			for buf_line, ctx in pairs(M.state.line_context) do
-				local match = ctx.path == pc.path
-				if match and ctx.new_line then
-					-- Match by new_line from the original context
-					local orig_ctx_new = pc._anchor_new_line
-					if orig_ctx_new
-						and ctx.new_line == orig_ctx_new then
-						pc.line = buf_line
-						break
-					end
+			local remapped_line = find_buffer_line_for_anchor(
+				pc.path, pc._anchor_new_line, pc._anchor_old_line
+			)
+			if remapped_line then
+				pc.line = remapped_line
+			end
+
+			if pc.start_line then
+				local remapped_start = find_buffer_line_for_anchor(
+					pc.path,
+					pc._anchor_start_new_line or pc._anchor_new_line,
+					pc._anchor_start_old_line or pc._anchor_old_line
+				)
+				if remapped_start then
+					pc.start_line = remapped_start
+				end
+			end
+
+			if pc.end_line then
+				local remapped_end = find_buffer_line_for_anchor(
+					pc.path,
+					pc._anchor_end_new_line or pc._anchor_new_line,
+					pc._anchor_end_old_line or pc._anchor_old_line
+				)
+				if remapped_end then
+					pc.end_line = remapped_end
 				end
 			end
 		end
@@ -1106,7 +1320,21 @@ function M.re_render()
 		or not vim.api.nvim_buf_is_valid(M.state.bufnr) then
 		return
 	end
-	-- Reconstruct from cached data - trigger a full refresh
+	-- Fast path: rebuild buffer from cached data without API calls
+	if M.state._cached_title and M.state._cached_diff_text then
+		local anchor = capture_cursor_anchor()
+		render_review(
+			M.state._cached_title,
+			M.state._cached_diff_text,
+			M.state._cached_files or {},
+			M.state._cached_hunks or {},
+			M.state.comment_threads
+		)
+		update_pending_comment_lines()
+		restore_cursor_from_anchor(anchor)
+		return
+	end
+	-- Fallback: no cached data yet, do a full refresh
 	M.refresh()
 end
 
@@ -1177,6 +1405,13 @@ function M.refresh()
 					local preview_lines = split_lines(diff_text)
 					local files, hunks =
 						git_diff.collect_markers(preview_lines, 1)
+
+					-- Cache data for fast local re-renders
+					M.state._cached_title = title
+					M.state._cached_diff_text = diff_text or ""
+					M.state._cached_files = files
+					M.state._cached_hunks = hunks
+
 					render_review(
 						title, diff_text or "",
 						files, hunks, comment_threads
@@ -1259,6 +1494,10 @@ function M.close()
 	M.state.comment_threads = {}
 	M.state.thread_line_map = {}
 	M.state.pending_comments = {}
+	M.state._cached_title = nil
+	M.state._cached_diff_text = nil
+	M.state._cached_files = nil
+	M.state._cached_hunks = nil
 
 	-- B3: restore focus to previous window
 	if prev and vim.api.nvim_win_is_valid(prev) then
@@ -1276,57 +1515,10 @@ end
 ---@param mode "approve"|"request_changes"|"comment"
 ---@param body string
 function M.submit_review_direct(mode, body)
-	local number = current_pr_number()
-	if not number then
-		submit_review(
-			mode, body,
-			("Review submitted (%s)"):format(mode)
-		)
-		return
-	end
-
-	-- If there are pending comments, batch-submit them
-	if #M.state.pending_comments > 0 then
-		local api_comments = {}
-		for _, pc in ipairs(M.state.pending_comments) do
-			if pc.path and pc.path ~= "" then
-				local entry = {
-					path = pc.path,
-					body = pc.body,
-				}
-				local ctx =
-					M.state.line_context[pc.line] or {}
-				if ctx.new_line then
-					entry.line = ctx.new_line
-				end
-				api_comments[#api_comments + 1] = entry
-			end
-		end
-
-		gh_prs.submit_review(
-			number, mode, body,
-			api_comments, {},
-			function(err)
-				if err then
-					utils.notify(err, vim.log.levels.ERROR)
-					return
-				end
-				local count = #M.state.pending_comments
-				M.state.pending_comments = {}
-				utils.notify(
-					("Review submitted (%s)"
-						.. " with %d comment(s)"
-					):format(mode, count),
-					vim.log.levels.INFO
-				)
-				M.refresh()
-			end
-		)
-		return
-	end
-
-	submit_review(
-		mode, body, ("Review submitted (%s)"):format(mode)
+	submit_review_with_pending(
+		mode,
+		body,
+		("Review submitted (%s)"):format(mode)
 	)
 end
 

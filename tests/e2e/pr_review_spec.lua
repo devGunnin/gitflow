@@ -62,6 +62,23 @@ local function with_temp_gh_log(fn)
 	end
 end
 
+---@param lines string[]
+---@return table|nil
+local function decode_logged_stdin_payload(lines)
+	for i = #lines, 1, -1 do
+		local line = lines[i]
+		if line:sub(1, 6) == "stdin " then
+			local ok, decoded =
+				pcall(vim.json.decode, line:sub(7))
+			if ok then
+				return decoded
+			end
+			return nil
+		end
+	end
+	return nil
+end
+
 -- Compatibility helper for merge-ref runs where newer base-only tests may
 -- still call cleanup_panels() in this file.
 local function cleanup_panels()
@@ -93,6 +110,36 @@ T.run_suite("E2E: PR Review Flow", {
 		)
 
 		T.cleanup_panels()
+	end,
+
+	["review panel fetches current PR diff without --patch"] = function()
+		with_temp_gh_log(function(log_path)
+			review_panel.open(cfg, 42)
+			T.drain_jobs(5000)
+
+			local lines = T.read_file(log_path)
+			local found_diff = false
+			local found_patch_flag = false
+			for _, line in ipairs(lines) do
+				if line:find("pr diff 42", 1, true) then
+					found_diff = true
+				end
+				if line:find("pr diff 42 --patch", 1, true) then
+					found_patch_flag = true
+				end
+			end
+
+			T.assert_true(
+				found_diff,
+				"review open should call gh pr diff for the PR"
+			)
+			T.assert_false(
+				found_patch_flag,
+				"review open should not request mailbox --patch output"
+			)
+		end)
+
+		cleanup_panels()
 	end,
 
 	-- ── Review panel renders diff content ─────────────────────────────
@@ -402,6 +449,180 @@ T.run_suite("E2E: PR Review Flow", {
 		T.cleanup_panels()
 	end,
 
+	["submit pending review maps deleted-line comment to LEFT side"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local deleted_buf = nil
+		local deleted_ctx = nil
+		local max_line = vim.api.nvim_buf_line_count(review_panel.state.bufnr)
+		for i = 1, max_line do
+			local ctx = review_panel.state.line_context[i]
+			if ctx
+				and ctx.path
+				and ctx.old_line
+				and not ctx.new_line then
+				deleted_buf = i
+				deleted_ctx = ctx
+				break
+			end
+		end
+		T.assert_true(
+			deleted_buf ~= nil,
+			"expected a deleted diff line in fixture"
+		)
+
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = deleted_ctx.path,
+				hunk = deleted_ctx.hunk,
+				line = deleted_buf,
+				body = "Comment on removed line",
+				_anchor_old_line = deleted_ctx.old_line,
+			},
+		}
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(opts, on_confirm)
+						if opts.prompt:find("mode", 1, true) then
+							on_confirm("approve")
+						else
+							on_confirm("Looks good")
+						end
+					end,
+				},
+			}, function()
+				review_panel.submit_pending_review()
+				T.drain_jobs(3000)
+			end)
+
+			local payload = decode_logged_stdin_payload(T.read_file(log_path))
+			T.assert_true(payload ~= nil, "expected review payload in gh log")
+			T.assert_true(
+				type(payload.comments) == "table" and #payload.comments == 1,
+				"expected one pending comment in payload"
+			)
+			T.assert_equals(
+				payload.comments[1].line,
+				deleted_ctx.old_line,
+				"deleted-line comment should use old line number"
+			)
+			T.assert_equals(
+				payload.comments[1].side,
+				"LEFT",
+				"deleted-line comment should use LEFT side"
+			)
+		end)
+
+		cleanup_panels()
+	end,
+
+	["range pending comment keeps start/end mapping after rerender"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local start_buf = nil
+		local end_buf = nil
+		local start_ctx = nil
+		local end_ctx = nil
+		local max_line = vim.api.nvim_buf_line_count(review_panel.state.bufnr)
+		for i = 1, max_line - 1 do
+			local first = review_panel.state.line_context[i]
+			local second = review_panel.state.line_context[i + 1]
+			if first and second
+				and first.path
+				and first.path == second.path
+				and first.hunk
+				and first.hunk == second.hunk
+				and first.new_line
+				and second.new_line then
+				start_buf = i
+				end_buf = i + 1
+				start_ctx = first
+				end_ctx = second
+				break
+			end
+		end
+		T.assert_true(
+			start_buf ~= nil,
+			"expected two consecutive diff lines with new-line mapping"
+		)
+
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = start_ctx.path,
+				hunk = start_ctx.hunk,
+				line = end_buf,
+				start_line = start_buf,
+				end_line = end_buf,
+				body = "Range note",
+				_anchor_new_line = end_ctx.new_line,
+				_anchor_old_line = end_ctx.old_line,
+				_anchor_start_new_line = start_ctx.new_line,
+				_anchor_start_old_line = start_ctx.old_line,
+				_anchor_end_new_line = end_ctx.new_line,
+				_anchor_end_old_line = end_ctx.old_line,
+			},
+		}
+
+		review_panel.re_render()
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(opts, on_confirm)
+						if opts.prompt:find("mode", 1, true) then
+							on_confirm("approve")
+						else
+							on_confirm("Range body")
+						end
+					end,
+				},
+			}, function()
+				review_panel.submit_pending_review()
+				T.drain_jobs(3000)
+			end)
+
+			local payload = decode_logged_stdin_payload(T.read_file(log_path))
+			T.assert_true(payload ~= nil, "expected review payload in gh log")
+			T.assert_true(
+				type(payload.comments) == "table" and #payload.comments == 1,
+				"expected one pending comment in payload"
+			)
+			local comment = payload.comments[1]
+			T.assert_equals(
+				comment.start_line,
+				start_ctx.new_line,
+				"range comment start line should stay anchored"
+			)
+			T.assert_equals(
+				comment.line,
+				end_ctx.new_line,
+				"range comment end line should stay anchored"
+			)
+			T.assert_equals(
+				comment.start_side,
+				"RIGHT",
+				"range comment should set start side"
+			)
+			T.assert_equals(
+				comment.side,
+				"RIGHT",
+				"range comment should set side"
+			)
+		end)
+
+		cleanup_panels()
+	end,
+
 	-- ── Submit review as approve (a key) ──────────────────────────────
 
 	["approve review a invokes gh pr review --approve"] = function()
@@ -453,6 +674,95 @@ T.run_suite("E2E: PR Review Flow", {
 		end)
 
 		T.cleanup_panels()
+	end,
+
+	["approve with pending comments submits batched review"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				hunk = "@@ -10,7 +10,9 @@",
+				line = review_panel.state.hunk_markers[1]
+					and review_panel.state.hunk_markers[1].line + 1
+					or 1,
+				body = "Ship this with context",
+			},
+		}
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("LGTM pending")
+					end,
+				},
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
+
+			local lines = T.read_file(log_path)
+			local found_review_api = false
+			local found_legacy_review = false
+			local found_input = false
+			for _, line in ipairs(lines) do
+				if line:find("api repos/{owner}/{repo}/pulls/42/reviews", 1, true) then
+					found_review_api = true
+				end
+				if line:find("pr review 42", 1, true) then
+					found_legacy_review = true
+				end
+				if line:find("--input -", 1, true) then
+					found_input = true
+				end
+			end
+
+			local payload = decode_logged_stdin_payload(lines)
+			T.assert_true(
+				found_review_api,
+				"approve should use reviews API when pending comments exist"
+			)
+			T.assert_false(
+				found_legacy_review,
+				"approve with pending should not call gh pr review"
+			)
+			T.assert_true(
+				found_input,
+				"approve with pending should submit JSON payload over stdin"
+			)
+			T.assert_true(
+				payload ~= nil,
+				"approve with pending should log a JSON payload"
+			)
+			T.assert_equals(
+				payload.event,
+				"APPROVE",
+				"approve should map to APPROVE event in payload"
+			)
+			T.assert_equals(
+				payload.body,
+				"LGTM pending",
+				"approve should include the entered review body"
+			)
+			T.assert_true(
+				type(payload.comments) == "table"
+					and #payload.comments == 1,
+				"approve with pending should include one inline comment"
+			)
+		end)
+
+		T.assert_equals(
+			#review_panel.state.pending_comments,
+			0,
+			"approve with pending should clear queued comments"
+		)
+
+		cleanup_panels()
 	end,
 
 	-- ── Submit review as request-changes (x key) ──────────────────────
@@ -803,40 +1113,48 @@ T.run_suite("E2E: PR Review Flow", {
 
 			local lines = T.read_file(log_path)
 			local found_review_api = false
-			local found_event = false
-			local found_body = false
-			local found_comments = false
+			local found_input = false
 			for _, line in ipairs(lines) do
 				if line:find("api repos/{owner}/{repo}/pulls/42/reviews", 1, true) then
 					found_review_api = true
 				end
-				if line:find("event=APPROVE", 1, true) then
-					found_event = true
-				end
-				if line:find("body=Good overall", 1, true) then
-					found_body = true
-				end
-				if line:find("comments=", 1, true)
-					and line:find("lua/gitflow/highlights.lua", 1, true) then
-					found_comments = true
+				if line:find("--input -", 1, true) then
+					found_input = true
 				end
 			end
+			local payload = decode_logged_stdin_payload(lines)
 
 			T.assert_true(
 				found_review_api,
 				"submit review should call reviews API endpoint"
 			)
 			T.assert_true(
-				found_event,
-				"submit review should map approve mode to event=APPROVE"
+				found_input,
+				"submit review should pass payload over stdin"
 			)
 			T.assert_true(
-				found_body,
+				payload ~= nil,
+				"submit review should log a decodable JSON payload"
+			)
+			T.assert_equals(
+				payload.event,
+				"APPROVE",
+				"submit review should map approve mode to APPROVE"
+			)
+			T.assert_equals(
+				payload.body,
+				"Good overall",
 				"submit review should include provided body"
 			)
 			T.assert_true(
-				found_comments,
+				type(payload.comments) == "table"
+					and #payload.comments == 1,
 				"submit review should include inline comments payload"
+			)
+			T.assert_equals(
+				payload.comments[1].path,
+				"lua/gitflow/highlights.lua",
+				"submit review should keep inline comment path"
 			)
 		end)
 
@@ -861,23 +1179,30 @@ T.run_suite("E2E: PR Review Flow", {
 			T.drain_jobs(3000)
 
 			local lines = T.read_file(log_path)
-			local found_event = false
-			local found_body = false
+			local found_input = false
 			for _, line in ipairs(lines) do
-				if line:find("event=REQUEST_CHANGES", 1, true) then
-					found_event = true
-				end
-				if line:find("body=Need another pass", 1, true) then
-					found_body = true
+				if line:find("--input -", 1, true) then
+					found_input = true
 				end
 			end
+			local payload = decode_logged_stdin_payload(lines)
 
 			T.assert_true(
-				found_event,
-				"submit_review should map request_changes to REQUEST_CHANGES"
+				found_input,
+				"submit_review should submit request body via stdin"
 			)
 			T.assert_true(
-				found_body,
+				payload ~= nil,
+				"submit_review should produce a JSON payload"
+			)
+			T.assert_equals(
+				payload.event,
+				"REQUEST_CHANGES",
+				"submit_review should map request_changes to REQUEST_CHANGES"
+			)
+			T.assert_equals(
+				payload.body,
+				"Need another pass",
 				"submit_review should include request changes body"
 			)
 		end)
@@ -1249,16 +1574,23 @@ T.run_suite("E2E: PR Review Flow", {
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		-- Add a pending comment to trigger re-render path
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, cb) cb("test comment") end,
-			},
-		}, function()
-			review_panel.inline_comment()
-		end)
+			-- Add a pending comment to trigger re-render path
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, cb) cb("test comment") end,
+				},
+			}, function()
+				local first_hunk = review_panel.state.hunk_markers[1]
+				if first_hunk then
+					vim.api.nvim_win_set_cursor(
+						review_panel.state.winid,
+						{ first_hunk.line + 1, 0 }
+					)
+				end
+				review_panel.inline_comment()
+			end)
 		T.drain_jobs(5000)
 
 		T.assert_equals(

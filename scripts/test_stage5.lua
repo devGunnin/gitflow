@@ -64,6 +64,51 @@ local function read_lines(path)
 	return vim.fn.readfile(path)
 end
 
+local function wait_for_log_quiescence(path, stable_ticks, timeout_ms)
+	local last_count = #read_lines(path)
+	local stable = 0
+	local ok = vim.wait(timeout_ms or 5000, function()
+		local current = #read_lines(path)
+		if current == last_count then
+			stable = stable + 1
+		else
+			last_count = current
+			stable = 0
+		end
+		return stable >= (stable_ticks or 5)
+	end, 20)
+	assert_true(ok, "gh log should quiesce before assertion")
+	return last_count
+end
+
+local function count_lines_with(path, needle)
+	local count = 0
+	for _, line in ipairs(read_lines(path)) do
+		if line:find(needle, 1, true) then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+local function wait_for_review_refresh_cycles(path, expected, timeout_ms)
+	local target = expected or 1
+	local timeout = timeout_ms or 10000
+	local ok = vim.wait(timeout, function()
+		return count_lines_with(path, "pr view 7 --json") >= target
+			and count_lines_with(path, "pr diff 7") >= target
+			and count_lines_with(
+				path,
+				"api repos/{owner}/{repo}/pulls/7/comments"
+			) >= target
+	end, 20)
+	assert_true(
+		ok,
+		("review refresh cycles should reach %d"):format(target)
+	)
+	return wait_for_log_quiescence(path, 10, timeout)
+end
+
 local function assert_keymaps(bufnr, required)
 	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
 	local missing = {}
@@ -170,7 +215,7 @@ if [ "$#" -ge 4 ] && [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "7" ]; the
   exit 0
 fi
 
-if [ "$#" -ge 4 ] && [ "$1" = "pr" ] && [ "$2" = "diff" ] && [ "$3" = "7" ] && [ "$4" = "--patch" ]; then
+if [ "$#" -ge 3 ] && [ "$1" = "pr" ] && [ "$2" = "diff" ] && [ "$3" = "7" ]; then
   sleep 0.1
   cat <<'EOF'
 __DIFF_PATCH__
@@ -315,6 +360,15 @@ end, "review panel should render title and diff")
 
 local review_buf = buffer.get("review")
 assert_true(review_buf ~= nil, "review panel should open")
+assert_true(
+	count_lines_with(gh_log, "pr diff 7") >= 1,
+	"review refresh should call gh pr diff"
+)
+assert_equals(
+	count_lines_with(gh_log, "pr diff 7 --patch"),
+	0,
+	"review refresh should not use --patch mailbox format"
+)
 
 -- ]c/[c for hunk nav per spec
 -- c = inline comment, S = submit review
@@ -492,6 +546,10 @@ review_panel.review_request_changes()
 review_panel.review_comment()
 
 -- B2: inline_comment now queues instead of submitting
+vim.api.nvim_win_set_cursor(
+	review_panel.state.winid,
+	{ second_hunk + 1, 0 }
+)
 review_panel.inline_comment()
 assert_equals(
 	#review_panel.state.pending_comments, 1,
@@ -501,6 +559,27 @@ assert_equals(
 	review_panel.state.pending_comments[1].body,
 	"Inline context note",
 	"pending comment body should match input"
+)
+
+-- re_render should use cached data and not trigger new gh calls
+-- Wait for initial load + 3 async refreshes from a/x/comment submissions.
+local gh_lines_before =
+	wait_for_review_refresh_cycles(gh_log, 4, 10000)
+review_panel.re_render()
+local gh_lines_after = wait_for_log_quiescence(gh_log, 10, 10000)
+assert_equals(
+	gh_lines_after, gh_lines_before,
+	"re_render should not trigger gh API calls"
+)
+
+-- Verify cached state is populated after initial refresh
+assert_true(
+	review_panel.state._cached_title ~= nil,
+	"cached title should be populated after refresh"
+)
+assert_true(
+	review_panel.state._cached_diff_text ~= nil,
+	"cached diff_text should be populated after refresh"
 )
 
 -- reply_to_thread falls back to pending comment

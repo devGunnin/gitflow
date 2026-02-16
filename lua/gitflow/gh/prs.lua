@@ -297,7 +297,7 @@ function M.diff(number, opts, cb)
 		return
 	end
 
-	gh.run({ "pr", "diff", normalize_number(number), "--patch" }, opts, function(result)
+	gh.run({ "pr", "diff", normalize_number(number) }, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "diff"), nil, result)
 			return
@@ -662,24 +662,25 @@ function M.submit_review(number, mode, body, comments, opts, cb)
 			normalize_number(number)
 		)
 
+	local normalized_body = vim.trim(tostring(body or ""))
+	local payload = { event = event }
+	if normalized_body ~= "" then
+		payload.body = normalized_body
+	end
+	if comments and #comments > 0 then
+		payload.comments = comments
+	end
+
+	-- Submit as JSON body so comments is an array, not a string field.
 	local args = {
 		"api", endpoint, "--method", "POST",
-		"--field", ("event=%s"):format(event),
+		"--input", "-",
 	}
+	local run_opts = vim.tbl_extend("force", opts or {}, {
+		stdin = vim.json.encode(payload),
+	})
 
-	local normalized_body = vim.trim(tostring(body or ""))
-	if normalized_body ~= "" then
-		args[#args + 1] = "--field"
-		args[#args + 1] = ("body=%s"):format(normalized_body)
-	end
-
-	if comments and #comments > 0 then
-		local json_comments = vim.json.encode(comments)
-		args[#args + 1] = "--raw-field"
-		args[#args + 1] = ("comments=%s"):format(json_comments)
-	end
-
-	gh.run(args, opts, function(result)
+	gh.run(args, run_opts, function(result)
 		if result.code ~= 0 then
 			cb(
 				error_from_result(result, "submit_review"),
