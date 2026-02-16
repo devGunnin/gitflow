@@ -81,6 +81,34 @@ local function wait_for_log_quiescence(path, stable_ticks, timeout_ms)
 	return last_count
 end
 
+local function count_lines_with(path, needle)
+	local count = 0
+	for _, line in ipairs(read_lines(path)) do
+		if line:find(needle, 1, true) then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+local function wait_for_review_refresh_cycles(path, expected, timeout_ms)
+	local target = expected or 1
+	local timeout = timeout_ms or 10000
+	local ok = vim.wait(timeout, function()
+		return count_lines_with(path, "pr view 7 --json") >= target
+			and count_lines_with(path, "pr diff 7 --patch") >= target
+			and count_lines_with(
+				path,
+				"api repos/{owner}/{repo}/pulls/7/comments"
+			) >= target
+	end, 20)
+	assert_true(
+		ok,
+		("review refresh cycles should reach %d"):format(target)
+	)
+	return wait_for_log_quiescence(path, 10, timeout)
+end
+
 local function assert_keymaps(bufnr, required)
 	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
 	local missing = {}
@@ -521,9 +549,11 @@ assert_equals(
 )
 
 -- re_render should use cached data and not trigger new gh calls
-local gh_lines_before = wait_for_log_quiescence(gh_log, 5, 5000)
+-- Wait for initial load + 3 async refreshes from a/x/comment submissions.
+local gh_lines_before =
+	wait_for_review_refresh_cycles(gh_log, 4, 10000)
 review_panel.re_render()
-local gh_lines_after = wait_for_log_quiescence(gh_log, 5, 5000)
+local gh_lines_after = wait_for_log_quiescence(gh_log, 10, 10000)
 assert_equals(
 	gh_lines_after, gh_lines_before,
 	"re_render should not trigger gh API calls"
