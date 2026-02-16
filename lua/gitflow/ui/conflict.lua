@@ -555,8 +555,15 @@ end
 
 ---@param bufnr integer
 local function set_top_buffer_options(bufnr)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-	vim.api.nvim_set_option_value("readonly", true, { buf = bufnr })
+	vim.api.nvim_set_option_value(
+		"syntax", "diff", { buf = bufnr }
+	)
+	vim.api.nvim_set_option_value(
+		"modifiable", false, { buf = bufnr }
+	)
+	vim.api.nvim_set_option_value(
+		"readonly", true, { buf = bufnr }
+	)
 end
 
 ---@param path string
@@ -564,18 +571,36 @@ end
 ---@param callbacks table
 local function open_layout(path, ctx, callbacks)
 	local name_key = sanitize(path)
-	local local_bufnr = ui.buffer.create(("conflict-local-%s"):format(name_key), {
-		filetype = "diff",
-		lines = with_fallback(ctx.local_lines, "(local version unavailable)"),
-	})
-	local base_bufnr = ui.buffer.create(("conflict-base-%s"):format(name_key), {
-		filetype = "diff",
-		lines = with_fallback(ctx.base_lines, "(base version unavailable)"),
-	})
-	local remote_bufnr = ui.buffer.create(("conflict-remote-%s"):format(name_key), {
-		filetype = "diff",
-		lines = with_fallback(ctx.remote_lines, "(remote version unavailable)"),
-	})
+	local local_bufnr = ui.buffer.create(
+		("conflict-local-%s"):format(name_key),
+		{
+			filetype = "gitflow-diff",
+			lines = with_fallback(
+				ctx.local_lines,
+				"(local version unavailable)"
+			),
+		}
+	)
+	local base_bufnr = ui.buffer.create(
+		("conflict-base-%s"):format(name_key),
+		{
+			filetype = "gitflow-diff",
+			lines = with_fallback(
+				ctx.base_lines,
+				"(base version unavailable)"
+			),
+		}
+	)
+	local remote_bufnr = ui.buffer.create(
+		("conflict-remote-%s"):format(name_key),
+		{
+			filetype = "gitflow-diff",
+			lines = with_fallback(
+				ctx.remote_lines,
+				"(remote version unavailable)"
+			),
+		}
+	)
 	local merged_bufnr = ui.buffer.create(("conflict-merged-%s"):format(name_key), {
 		filetype = "gitflowconflictmerge",
 		lines = ctx.merged_lines,

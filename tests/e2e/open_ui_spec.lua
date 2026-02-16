@@ -231,6 +231,23 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 			"diff buffer should exist after :Gitflow diff"
 		)
 
+		local ft = vim.api.nvim_get_option_value(
+			"filetype", { buf = bufnr }
+		)
+		T.assert_equals(
+			ft,
+			"gitflow-diff",
+			"diff buffer should use gitflow-diff filetype"
+		)
+
+		local has_ts = pcall(
+			vim.treesitter.get_parser, bufnr
+		)
+		T.assert_false(
+			has_ts,
+			"treesitter should not attach to diff buffer"
+		)
+
 		diff_panel.close()
 	end,
 
