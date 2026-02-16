@@ -112,6 +112,36 @@ T.run_suite("E2E: PR Review Flow", {
 		T.cleanup_panels()
 	end,
 
+	["review panel fetches current PR diff without --patch"] = function()
+		with_temp_gh_log(function(log_path)
+			review_panel.open(cfg, 42)
+			T.drain_jobs(5000)
+
+			local lines = T.read_file(log_path)
+			local found_diff = false
+			local found_patch_flag = false
+			for _, line in ipairs(lines) do
+				if line:find("pr diff 42", 1, true) then
+					found_diff = true
+				end
+				if line:find("pr diff 42 --patch", 1, true) then
+					found_patch_flag = true
+				end
+			end
+
+			T.assert_true(
+				found_diff,
+				"review open should call gh pr diff for the PR"
+			)
+			T.assert_false(
+				found_patch_flag,
+				"review open should not request mailbox --patch output"
+			)
+		end)
+
+		cleanup_panels()
+	end,
+
 	-- ── Review panel renders diff content ─────────────────────────────
 
 	["review panel renders diff content from stub"] = function()

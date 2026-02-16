@@ -297,7 +297,7 @@ function M.diff(number, opts, cb)
 		return
 	end
 
-	gh.run({ "pr", "diff", normalize_number(number), "--patch" }, opts, function(result)
+	gh.run({ "pr", "diff", normalize_number(number) }, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "diff"), nil, result)
 			return

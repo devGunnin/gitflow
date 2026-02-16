@@ -96,7 +96,7 @@ local function wait_for_review_refresh_cycles(path, expected, timeout_ms)
 	local timeout = timeout_ms or 10000
 	local ok = vim.wait(timeout, function()
 		return count_lines_with(path, "pr view 7 --json") >= target
-			and count_lines_with(path, "pr diff 7 --patch") >= target
+			and count_lines_with(path, "pr diff 7") >= target
 			and count_lines_with(
 				path,
 				"api repos/{owner}/{repo}/pulls/7/comments"
@@ -215,7 +215,7 @@ if [ "$#" -ge 4 ] && [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$3" = "7" ]; the
   exit 0
 fi
 
-if [ "$#" -ge 4 ] && [ "$1" = "pr" ] && [ "$2" = "diff" ] && [ "$3" = "7" ] && [ "$4" = "--patch" ]; then
+if [ "$#" -ge 3 ] && [ "$1" = "pr" ] && [ "$2" = "diff" ] && [ "$3" = "7" ]; then
   sleep 0.1
   cat <<'EOF'
 __DIFF_PATCH__
@@ -360,6 +360,15 @@ end, "review panel should render title and diff")
 
 local review_buf = buffer.get("review")
 assert_true(review_buf ~= nil, "review panel should open")
+assert_true(
+	count_lines_with(gh_log, "pr diff 7") >= 1,
+	"review refresh should call gh pr diff"
+)
+assert_equals(
+	count_lines_with(gh_log, "pr diff 7 --patch"),
+	0,
+	"review refresh should not use --patch mailbox format"
+)
 
 -- ]c/[c for hunk nav per spec
 -- c = inline comment, S = submit review
