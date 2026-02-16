@@ -78,6 +78,43 @@ test(
 )
 
 test(
+	"issue doc entry exists",
+	function()
+		assert_true(
+			doc_entries["issue"] ~= nil,
+			"issue should be in KEYBINDINGS.md global table"
+		)
+	end
+)
+
+test(
+	"issue doc entry matches config default",
+	function()
+		assert_equals(
+			doc_entries["issue"],
+			defaults.issue,
+			"KEYBINDINGS.md issue key"
+		)
+	end
+)
+
+test(
+	"issue keybinding is lowercase <leader>gi",
+	function()
+		assert_equals(
+			doc_entries["issue"],
+			"<leader>gi",
+			"issue doc entry should be lowercase"
+		)
+		assert_equals(
+			defaults.issue,
+			"<leader>gi",
+			"issue config default should be lowercase"
+		)
+	end
+)
+
+test(
 	"PR doc entry exists",
 	function()
 		assert_true(
