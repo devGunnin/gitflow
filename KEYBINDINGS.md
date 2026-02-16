@@ -186,6 +186,7 @@ Buffer-local bindings active in the review panel (`:Gitflow pr review`).
 | `S` | Submit pending review |
 | `R` | Reply to comment thread |
 | `<leader>t` | Toggle thread collapse/expand |
+| `<leader>i` | Toggle inline comment bodies on diff lines |
 | `<leader>b` | Back to PR view |
 | `r` | Refresh |
 | `q` | Close (confirms if pending comments exist) |
