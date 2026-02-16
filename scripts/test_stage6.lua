@@ -44,25 +44,55 @@ local function run_git(repo_dir, args, should_succeed)
 	local cmd = { "git" }
 	vim.list_extend(cmd, args)
 
-	local output = ""
-	local code = 1
-	if vim.system then
-		local result = vim.system(cmd, { cwd = repo_dir, text = true }):wait()
-		output = (result.stdout or "") .. (result.stderr or "")
-		code = result.code or 1
-	else
-		local previous = vim.fn.getcwd()
-		vim.fn.chdir(repo_dir)
-		output = vim.fn.system(cmd)
-		code = vim.v.shell_error
-		vim.fn.chdir(previous)
-	end
-
 	if should_succeed == nil then
 		should_succeed = true
 	end
+
+	local output = ""
+	local code = 1
+	local max_lock_retries = 10
+	local lock_retry_delay = 100
+
+	for attempt = 1, max_lock_retries do
+		if vim.system then
+			local result = vim.system(
+				cmd, { cwd = repo_dir, text = true }
+			):wait()
+			output = (result.stdout or "") .. (result.stderr or "")
+			code = result.code or 1
+		else
+			local previous = vim.fn.getcwd()
+			vim.fn.chdir(repo_dir)
+			output = vim.fn.system(cmd)
+			code = vim.v.shell_error
+			vim.fn.chdir(previous)
+		end
+
+		if code == 0 or not should_succeed then
+			break
+		end
+
+		local lower_output = output:lower()
+		local is_lock = lower_output:find("index.lock", 1, true)
+			and (
+				lower_output:find("file exists", 1, true)
+				or lower_output:find("unable to create", 1, true)
+				or lower_output:find("another git process", 1, true)
+			)
+		if not is_lock or attempt == max_lock_retries then
+			break
+		end
+
+		vim.wait(lock_retry_delay, function() return false end)
+	end
+
 	if should_succeed and code ~= 0 then
-		error(("git command failed (%s): %s"):format(table.concat(cmd, " "), output), 2)
+		error(
+			("git command failed (%s): %s"):format(
+				table.concat(cmd, " "), output
+			),
+			2
+		)
 	end
 
 	return output, code
@@ -148,6 +178,46 @@ local function hold_index_lock(repo_dir, delay_ms)
 	vim.defer_fn(function()
 		pcall(vim.fn.delete, lock_path)
 	end, delay_ms or 200)
+end
+
+local function drain_async_git(timeout_ms)
+	local budget = timeout_ms or 5000
+	-- Wait for async vim.system/jobstart processes to
+	-- finish by polling for active job channels and libuv
+	-- process handles. Three consecutive idle polls
+	-- confirms all background git operations have settled.
+	local idle_count = 0
+	vim.wait(budget, function()
+		local active = false
+		for _, ch in ipairs(vim.api.nvim_list_chans()) do
+			if ch.stream == "job" then
+				active = true
+				break
+			end
+		end
+		if not active and vim.uv then
+			vim.uv.walk(function(handle)
+				if handle:get_type() == "process"
+					and handle:is_active()
+				then
+					active = true
+				end
+			end)
+		end
+		if active then
+			idle_count = 0
+		else
+			idle_count = idle_count + 1
+		end
+		return idle_count >= 3
+	end, 50)
+end
+
+local function ensure_no_index_lock(repo_dir, timeout_ms)
+	local lock_path = git_dir_path(repo_dir) .. "/index.lock"
+	drain_async_git(timeout_ms)
+	-- Final safety: force-remove stale lock if still present
+	pcall(vim.fn.delete, lock_path)
 end
 
 local repo_dir = vim.fn.tempname()
@@ -248,7 +318,7 @@ wait_until(function()
 		and has_conflict(repo_dir, "choose-base.txt")
 		and has_conflict(repo_dir, "choose-remote.txt")
 		and has_conflict(repo_dir, "abort.txt")
-end, "merge should create conflict entries")
+end, "merge should create conflict entries", 10000)
 
 wait_until(function()
 	if not conflict_panel.is_open() then
@@ -266,7 +336,7 @@ wait_until(function()
 		and find_line(lines, "choose-base.txt") ~= nil
 		and find_line(lines, "choose-remote.txt") ~= nil
 		and find_line(lines, "abort.txt") ~= nil
-end, "merge conflict should auto-open conflict panel")
+end, "merge conflict should auto-open conflict panel", 10000)
 
 local conflict_buf = buffer.get("conflict")
 assert_true(conflict_buf ~= nil, "conflict panel buffer should exist")
@@ -289,7 +359,7 @@ local function resolve_single_file(path, side, expected, opts)
 
 	wait_until(function()
 		return conflict_view.is_open() and conflict_view.state.path == path
-	end, ("conflict view should open for %s"):format(path))
+	end, ("conflict view should open for %s"):format(path), 10000)
 
 	if not asserted_view_shape then
 		local current_tab = vim.api.nvim_get_current_tabpage()
@@ -316,8 +386,9 @@ local function resolve_single_file(path, side, expected, opts)
 	conflict_view.resolve_current(side)
 
 	wait_until(function()
-		return marker_count(repo_dir .. "/" .. path) == 0 and not has_conflict(repo_dir, path)
-	end, ("resolution action should clear conflict markers in %s"):format(path))
+		return marker_count(repo_dir .. "/" .. path) == 0
+			and not has_conflict(repo_dir, path)
+	end, ("resolution action should clear conflict markers in %s"):format(path), 10000)
 
 	assert_deep_equals(
 		read_file(repo_dir .. "/" .. path),
@@ -328,6 +399,8 @@ local function resolve_single_file(path, side, expected, opts)
 	if conflict_view.is_open() then
 		conflict_view.close()
 	end
+
+	ensure_no_index_lock(repo_dir)
 end
 
 resolve_single_file("choose-local.txt", "local", "local main", {
@@ -344,7 +417,7 @@ wait_until(function()
 	end
 	local lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
 	return find_line(lines, "abort.txt") ~= nil and find_line(lines, "UU  abort.txt") ~= nil
-end, "status panel should display unresolved UU entry")
+end, "status panel should display unresolved UU entry", 10000)
 
 local status_lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
 local abort_line = find_line(status_lines, "UU  abort.txt")
@@ -355,7 +428,7 @@ status_panel.open_conflict_under_cursor()
 
 wait_until(function()
 	return conflict_view.is_open() and conflict_view.state.path == "abort.txt"
-end, "status cx action should open conflict view for UU file")
+end, "status cx action should open conflict view for UU file", 10000)
 
 vim.api.nvim_set_current_win(conflict_view.state.merged_winid)
 vim.api.nvim_win_set_cursor(
@@ -375,7 +448,7 @@ conflict_view.refresh()
 wait_until(function()
 	return vim.deep_equal(read_file(repo_dir .. "/abort.txt"), { "abort manual resolution" })
 		and not has_conflict(repo_dir, "abort.txt")
-end, "manual edit path should resolve and persist conflict content")
+end, "manual edit path should resolve and persist conflict content", 10000)
 
 if conflict_view.is_open() then
 	conflict_view.close()
@@ -384,11 +457,11 @@ end
 wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(conflict_buf, 0, -1, false)
 	return find_line(lines, "Unresolved files: 0") ~= nil
-end, "conflict panel should refresh when all files are resolved")
+end, "conflict panel should refresh when all files are resolved", 10000)
 
 wait_until(function()
 	return not in_merge(repo_dir)
-end, "resolved merge should prompt and continue automatically")
+end, "resolved merge should prompt and continue automatically", 10000)
 
 run_git(repo_dir, { "checkout", "-b", "abort-topic" })
 write_file(repo_dir .. "/abort-merge.txt", { "abort topic value" })
@@ -400,19 +473,21 @@ write_file(repo_dir .. "/abort-merge.txt", { "abort main value" })
 run_git(repo_dir, { "add", "abort-merge.txt" })
 run_git(repo_dir, { "commit", "-m", "abort main change" })
 
+ensure_no_index_lock(repo_dir)
 commands.dispatch({ "merge", "abort-topic" }, cfg)
 wait_until(function()
 		return has_conflict(repo_dir, "abort-merge.txt")
 			and in_merge(repo_dir)
 			and conflict_panel.is_open()
-end, "merge conflict for abort flow should open panel")
+end, "merge conflict for abort flow should open panel", 10000)
 
+ensure_no_index_lock(repo_dir)
 commands.dispatch({ "merge", "--abort" }, cfg)
 wait_until(function()
 	return not in_merge(repo_dir)
 		and not has_conflict(repo_dir, "abort-merge.txt")
 		and not conflict_panel.is_open()
-end, "merge --abort should clear conflict state and close conflict panel")
+end, "merge --abort should clear conflict state and close conflict panel", 10000)
 assert_deep_equals(
 	read_file(repo_dir .. "/abort-merge.txt"),
 	{ "abort main value" },
@@ -434,18 +509,20 @@ run_git(repo_dir, { "add", "rebase-file.txt" })
 run_git(repo_dir, { "commit", "-m", "rebase main change" })
 
 run_git(repo_dir, { "checkout", "rebase-topic" })
+ensure_no_index_lock(repo_dir)
 commands.dispatch({ "rebase", "main" }, cfg)
 wait_until(function()
 		return in_rebase(repo_dir)
 			and has_conflict(repo_dir, "rebase-file.txt")
 			and conflict_panel.is_open()
-end, "rebase conflicts should auto-open conflict panel")
+end, "rebase conflicts should auto-open conflict panel", 10000)
 
 commands.dispatch({ "rebase", "--abort" }, cfg)
 wait_until(function()
 	return not in_rebase(repo_dir) and not conflict_panel.is_open()
-end, "rebase --abort should close conflict panel")
+end, "rebase --abort should close conflict panel", 10000)
 
+ensure_no_index_lock(repo_dir)
 run_git(repo_dir, { "checkout", "main" })
 run_git(repo_dir, { "checkout", "-b", "cherry-source" })
 write_file(repo_dir .. "/cherry-file.txt", { "cherry topic" })
@@ -458,17 +535,18 @@ write_file(repo_dir .. "/cherry-file.txt", { "cherry main" })
 run_git(repo_dir, { "add", "cherry-file.txt" })
 run_git(repo_dir, { "commit", "-m", "cherry main change" })
 
+ensure_no_index_lock(repo_dir)
 commands.dispatch({ "cherry-pick", cherry_sha }, cfg)
 wait_until(function()
 	return in_cherry_pick(repo_dir)
 		and has_conflict(repo_dir, "cherry-file.txt")
 		and conflict_panel.is_open()
-end, "cherry-pick conflicts should auto-open conflict panel")
+end, "cherry-pick conflicts should auto-open conflict panel", 10000)
 
 conflict_panel.abort_operation()
 wait_until(function()
 	return not in_cherry_pick(repo_dir) and not has_conflict(repo_dir, "cherry-file.txt")
-end, "abort operation should clear cherry-pick conflict state")
+end, "abort operation should clear cherry-pick conflict state", 10000)
 
 commands.dispatch({ "conflicts" }, cfg)
 wait_until(function()

@@ -501,6 +501,47 @@ local function format_conflicted_paths(paths)
 	return table.concat(paths, "\n")
 end
 
+local LOCK_MAX_ATTEMPTS = 10
+local LOCK_RETRY_DELAY_MS = 150
+
+---@param output string
+---@return boolean
+local function mentions_index_lock(output)
+	local normalized = (output or ""):lower()
+	if not normalized:find("index.lock", 1, true) then
+		return false
+	end
+	return normalized:find("file exists", 1, true) ~= nil
+		or normalized:find("unable to create", 1, true) ~= nil
+		or normalized:find("another git process", 1, true) ~= nil
+end
+
+---@param args string[]
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(result: GitflowGitResult)
+---@param attempt integer|nil
+local function git_with_lock_retry(args, opts, cb, attempt)
+	local current = attempt or 1
+	git.git(args, opts or {}, function(result)
+		if result.code == 0 then
+			cb(result)
+			return
+		end
+		local output = git.output(result)
+		if mentions_index_lock(output)
+			and current < LOCK_MAX_ATTEMPTS
+		then
+			vim.defer_fn(function()
+				git_with_lock_retry(
+					args, opts, cb, current + 1
+				)
+			end, LOCK_RETRY_DELAY_MS)
+			return
+		end
+		cb(result)
+	end)
+end
+
 ---@param cfg GitflowConfig
 ---@param output string
 ---@param heading string
@@ -544,7 +585,7 @@ end
 ---@param branch string
 ---@param cfg GitflowConfig
 local function run_merge(branch, cfg)
-	git.git({ "merge", branch }, {}, function(result)
+	git_with_lock_retry({ "merge", branch }, {}, function(result)
 		if result.code == 0 then
 			local output = result_message(result, ("Merged '%s'"):format(branch))
 			local merge_type = "Merge commit created"
@@ -568,7 +609,7 @@ end
 
 ---@param cfg GitflowConfig
 local function run_merge_abort(cfg)
-	git.git({ "merge", "--abort" }, {}, function(result)
+	git_with_lock_retry({ "merge", "--abort" }, {}, function(result)
 		if result.code ~= 0 then
 			show_error(result_message(result, "git merge --abort failed"))
 			return
@@ -594,9 +635,13 @@ local function run_rebase(args, cfg)
 	git.git(git_args, {}, function(result)
 		local action = table.concat(git_args, " ")
 		if result.code == 0 then
-			local output = result_message(result, ("%s completed"):format(action))
+			local output = result_message(
+				result, ("%s completed"):format(action)
+			)
 			show_info(output)
-			if action == "rebase --abort" or action == "rebase --continue" then
+			if action == "rebase --abort"
+				or action == "rebase --continue"
+			then
 				conflict_panel.close()
 			end
 			refresh_status_panel_if_open()
@@ -604,12 +649,15 @@ local function run_rebase(args, cfg)
 			return
 		end
 
-		local output = result_message(result, ("%s failed"):format(action))
+		local output = result_message(
+			result, ("%s failed"):format(action)
+		)
 		handle_conflict_failure(
 			cfg,
 			output,
 			"Rebase stopped with conflicts.",
-			"Use :Gitflow rebase --continue or :Gitflow rebase --abort."
+			"Use :Gitflow rebase --continue"
+				.. " or :Gitflow rebase --abort."
 		)
 	end)
 end

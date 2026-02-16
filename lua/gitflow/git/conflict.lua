@@ -56,8 +56,8 @@ local function lower(value)
 	return (value or ""):lower()
 end
 
-local INDEX_LOCK_MAX_ATTEMPTS = 12
-local INDEX_LOCK_RETRY_DELAY_MS = 50
+local INDEX_LOCK_MAX_ATTEMPTS = 20
+local INDEX_LOCK_RETRY_DELAY_MS = 100
 
 ---@param git_dir string
 ---@param leaf string
