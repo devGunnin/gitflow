@@ -63,27 +63,6 @@ local function with_temp_git_log(fn)
 	end
 end
 
---- Close all panels and floating windows.
-local function cleanup_panels()
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
-end
-
 --- Count active timers via libuv handle walk.
 ---@return integer
 local function active_timer_count()
@@ -130,7 +109,7 @@ T.run_suite("E2E: Async Determinism", {
 			"status panel should have content after async completion"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["diff panel waits for git completion before rendering"] = function()
@@ -149,7 +128,7 @@ T.run_suite("E2E: Async Determinism", {
 			"diff panel should have content after async completion"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["log panel waits for git completion before rendering"] = function()
@@ -168,7 +147,7 @@ T.run_suite("E2E: Async Determinism", {
 			"log panel should have content after async completion"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── No race conditions in concurrent panel operations ─────────────
@@ -204,7 +183,7 @@ T.run_suite("E2E: Async Determinism", {
 			"concurrent opens should render content for all panels"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["rapid open/close does not leave orphaned state"] = function()
@@ -221,7 +200,7 @@ T.run_suite("E2E: Async Determinism", {
 			"status panel should be closed after rapid open/close cycles"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── No hanging processes ──────────────────────────────────────────
@@ -286,7 +265,7 @@ T.run_suite("E2E: Async Determinism", {
 		log_panel.open(cfg, {})
 		commands.dispatch({ "fetch" }, cfg)
 		T.drain_jobs(5000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		T.wait_until(function()
 			return active_timer_count() <= baseline_timers
@@ -478,11 +457,11 @@ T.run_suite("E2E: Async Determinism", {
 		-- Run several commands in sequence to ensure no state leaks
 		commands.dispatch({ "diff" }, cfg)
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		commands.dispatch({ "log" }, cfg)
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		commands.dispatch({ "status" }, cfg)
 		T.drain_jobs(3000)
@@ -493,6 +472,6 @@ T.run_suite("E2E: Async Determinism", {
 			"status buffer should be valid after multiple dispatches"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })

@@ -84,27 +84,6 @@ local function with_temp_git_log(fn)
 	end
 end
 
---- Close all panels and floating windows.
-local function cleanup_panels()
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
-end
-
 --- Count current window/layout and gitflow UI registry state.
 ---@return { total: integer, floats: integer, panel_windows: integer, panel_buffers: integer }
 local function window_snapshot()
@@ -237,7 +216,7 @@ T.run_suite("E2E: Error Paths", {
 			"Neovim should remain responsive after gh failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["gh CLI failure on issue list does not crash"] = function()
@@ -253,7 +232,7 @@ T.run_suite("E2E: Error Paths", {
 			"should notify user of gh issue failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── git CLI failure ───────────────────────────────────────────────
@@ -294,7 +273,7 @@ T.run_suite("E2E: Error Paths", {
 			"Neovim should remain responsive after diff failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["git merge failure with conflict shows error"] = function()
@@ -312,7 +291,7 @@ T.run_suite("E2E: Error Paths", {
 			"merge failure should mention conflict or failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Malformed JSON from gh ────────────────────────────────────────
@@ -422,7 +401,7 @@ T.run_suite("E2E: Error Paths", {
 			"Neovim should remain responsive after status failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── State resets after error ──────────────────────────────────────
@@ -433,7 +412,7 @@ T.run_suite("E2E: Error Paths", {
 			prs_panel.open(cfg)
 			T.drain_jobs(3000)
 		end)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- Now open again without failure — should work normally
 		prs_panel.open(cfg)
@@ -445,7 +424,7 @@ T.run_suite("E2E: Error Paths", {
 			"PR panel should work after previous failure clears"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["state resets correctly after git failure scenario"] = function()
@@ -454,7 +433,7 @@ T.run_suite("E2E: Error Paths", {
 			diff_panel.open(cfg, {})
 			T.drain_jobs(3000)
 		end)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- Now open without failure
 		diff_panel.open(cfg, {})
@@ -466,7 +445,7 @@ T.run_suite("E2E: Error Paths", {
 			"diff panel should work after previous failure clears"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── No orphaned buffers/windows ───────────────────────────────────
@@ -478,7 +457,7 @@ T.run_suite("E2E: Error Paths", {
 			prs_panel.open(cfg)
 			T.drain_jobs(3000)
 		end)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		local after = window_snapshot()
 		T.assert_equals(
@@ -505,7 +484,7 @@ T.run_suite("E2E: Error Paths", {
 			diff_panel.open(cfg, {})
 			T.drain_jobs(3000)
 		end)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		local after = window_snapshot()
 		T.assert_equals(
@@ -584,7 +563,7 @@ T.run_suite("E2E: Error Paths", {
 			"Neovim should remain responsive after log failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Git stash failure ─────────────────────────────────────────────
@@ -610,6 +589,6 @@ T.run_suite("E2E: Error Paths", {
 			"Neovim should remain responsive after stash failure"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })

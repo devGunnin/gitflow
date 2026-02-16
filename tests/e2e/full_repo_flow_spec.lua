@@ -88,34 +88,6 @@ local function has_notification(notifications, needle, level)
 	return false
 end
 
---- Close all panels and floating windows.
-local function cleanup_panels()
-	if conflict_view.is_open() then
-		pcall(conflict_view.close)
-	end
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	while vim.fn.tabpagenr("$") > 1 do
-		pcall(vim.cmd, "tabclose!")
-	end
-
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
-end
-
 ---@param fn fun(log_path: string)
 local function with_temp_git_log(fn)
 	local log_path = vim.fn.tempname()
@@ -194,7 +166,7 @@ T.run_suite("E2E: Full Repository Flow", {
 	-- ── Step 1: Open main UI -> verify panel ─────────────────────────
 
 	["step 1: main UI opens and shows panel"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		T.exec_command("Gitflow open")
 
 		local winid = commands.state.panel_window
@@ -216,7 +188,7 @@ T.run_suite("E2E: Full Repository Flow", {
 	-- ── Step 2: Status panel → stage files ───────────────────────────
 
 	["step 2: status panel opens and shows files"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		status_panel.open(cfg, {})
 		T.drain_jobs(5000)
 
@@ -242,11 +214,11 @@ T.run_suite("E2E: Full Repository Flow", {
 			"status panel should show section headers from git stub"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["step 2: status panel shows no-upstream hint when upstream is missing"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		local prev = vim.env.GITFLOW_GIT_NO_UPSTREAM
 		vim.env.GITFLOW_GIT_NO_UPSTREAM = "1"
 
@@ -302,7 +274,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			"separate Incoming section should not appear without upstream"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 		vim.env.GITFLOW_GIT_NO_UPSTREAM = prev
 	end,
 
@@ -393,7 +365,7 @@ T.run_suite("E2E: Full Repository Flow", {
 	end,
 
 	["step 2: status panel has staging keymaps"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		status_panel.open(cfg, {})
 		T.drain_jobs(3000)
 
@@ -401,7 +373,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.assert_true(bufnr ~= nil, "status buffer should exist")
 		T.assert_keymaps(bufnr, { "s", "u", "a", "A", "q", "r" })
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Step 3: Create PR via :Gitflow pr create ─────────────────────
@@ -475,12 +447,12 @@ T.run_suite("E2E: Full Repository Flow", {
 				)
 			end)
 
-			cleanup_panels()
+			T.cleanup_panels()
 		end)
 	end,
 
 	["step 3: pr panel opens and lists PRs"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		prs_panel.open(cfg)
 		T.drain_jobs(3000)
 
@@ -499,7 +471,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			"PR panel should show PR from fixture"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Step 4: View PR via :Gitflow pr view ─────────────────────────
@@ -516,13 +488,13 @@ T.run_suite("E2E: Full Repository Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Step 5: Review panel → inline comment → submit ───────────────
 
 	["step 5: review panel opens for PR"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
 
@@ -539,11 +511,11 @@ T.run_suite("E2E: Full Repository Flow", {
 			"review panel should have content"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["step 5: review panel has expected keymaps"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
 
@@ -554,11 +526,11 @@ T.run_suite("E2E: Full Repository Flow", {
 			{ "]f", "[f", "]c", "[c", "c", "S", "a", "x", "q" }
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["step 5: review tracks PR number"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
 
@@ -567,11 +539,11 @@ T.run_suite("E2E: Full Repository Flow", {
 			"review panel should track PR number"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["step 5: inline comment adds to pending list"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
 
@@ -594,13 +566,13 @@ T.run_suite("E2E: Full Repository Flow", {
 			"pending comments should increase by 1"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["step 5: review approve invokes gh pr review"] = function()
 		local input_mod = require("gitflow.ui.input")
 		with_temp_gh_log(function(log_path)
-			cleanup_panels()
+			T.cleanup_panels()
 			review_panel.open(cfg, 42)
 			T.drain_jobs(3000)
 
@@ -627,13 +599,13 @@ T.run_suite("E2E: Full Repository Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Step 6: Conflict resolution ──────────────────────────────────
 
 	["step 6: conflict panel opens and lists files"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 		with_conflicts("conflict.txt", function()
 			conflict_panel.open(cfg)
 			T.drain_jobs(3000)
@@ -651,7 +623,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["step 6: conflict resolution resolves file"] = function()
@@ -704,13 +676,13 @@ T.run_suite("E2E: Full Repository Flow", {
 		end)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Step 7: Full flow without restart ────────────────────────────
 
 	["step 7: sequential operations work without restart"] = function()
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- 1. Open and close main panel
 		T.exec_command("Gitflow open")
@@ -728,7 +700,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			status_buf ~= nil,
 			"status buffer should exist in flow"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- 3. Open PR panel
 		prs_panel.open(cfg)
@@ -738,7 +710,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			pr_buf ~= nil,
 			"PR buffer should exist in flow"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- 4. Open review panel
 		review_panel.open(cfg, 42)
@@ -748,7 +720,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			review_buf ~= nil,
 			"review buffer should exist in flow"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- 5. Open conflict panel
 		conflict_panel.open(cfg)
@@ -758,7 +730,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			conflict_buf ~= nil,
 			"conflict buffer should exist in flow"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		-- 6. Verify no leaked state
 		T.assert_true(
@@ -818,12 +790,12 @@ T.run_suite("E2E: Full Repository Flow", {
 			-- Open PR list
 			prs_panel.open(cfg)
 			T.drain_jobs(3000)
-			cleanup_panels()
+			T.cleanup_panels()
 
 			-- Open review
 			review_panel.open(cfg, 42)
 			T.drain_jobs(3000)
-			cleanup_panels()
+			T.cleanup_panels()
 
 			local lines = T.read_file(log_path)
 
@@ -858,19 +830,19 @@ T.run_suite("E2E: Full Repository Flow", {
 
 		status_panel.open(cfg, {})
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		prs_panel.open(cfg)
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		conflict_panel.open(cfg)
 		T.drain_jobs(3000)
-		cleanup_panels()
+		T.cleanup_panels()
 
 		local after = T.window_layout()
 		T.assert_equals(
@@ -889,7 +861,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			result ~= nil,
 			"status dispatch should return a result"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["dispatch conflicts command works"] = function()
@@ -899,7 +871,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			result ~= nil,
 			"conflicts dispatch should return a result"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["dispatch conflict alias works"] = function()
@@ -909,7 +881,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			result ~= nil,
 			"conflict alias dispatch should return a result"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["dispatch pr list command works"] = function()
@@ -919,14 +891,14 @@ T.run_suite("E2E: Full Repository Flow", {
 			result ~= nil,
 			"pr list dispatch should return a result"
 		)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Conflict panel → 3-way view → back to panel ─────────────────
 
 	["conflict flow: panel → 3-way → close returns to panel"] = function()
 		local path = create_conflict_file()
-		cleanup_panels()
+		T.cleanup_panels()
 
 		with_temporary_patches({
 			{
@@ -988,7 +960,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		end)
 
 		pcall(vim.fn.delete, path)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })
 

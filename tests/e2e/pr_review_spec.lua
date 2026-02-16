@@ -62,25 +62,10 @@ local function with_temp_gh_log(fn)
 	end
 end
 
---- Close all panels and floating windows.
+-- Compatibility helper for merge-ref runs where newer base-only tests may
+-- still call cleanup_panels() in this file.
 local function cleanup_panels()
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
+	T.cleanup_panels()
 end
 
 T.run_suite("E2E: PR Review Flow", {
@@ -107,7 +92,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review buffer should exist"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review panel renders diff content ─────────────────────────────
@@ -134,7 +119,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review buffer should contain filename from diff"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review panel renders file/hunk summary ────────────────────────
@@ -155,7 +140,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review panel should show Hunks count"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── File markers populated ────────────────────────────────────────
@@ -185,7 +170,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"file markers should include config.lua"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Hunk markers populated ────────────────────────────────────────
@@ -201,7 +186,7 @@ T.run_suite("E2E: PR Review Flow", {
 			)
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review panel keymaps are set ──────────────────────────────────
@@ -238,7 +223,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review panel should map <leader>t for thread toggle"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── File navigation with ]f/[f ────────────────────────────────────
@@ -278,7 +263,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"cursor should be on a file marker line after ]f"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["file navigation [f jumps to previous file marker"] = function()
@@ -310,7 +295,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"cursor should move backward on [f"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Hunk navigation with ]c/[c ────────────────────────────────────
@@ -337,7 +322,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"cursor should be on a hunk marker line after ]c"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["hunk navigation [c wraps to last hunk from first"] = function()
@@ -366,7 +351,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"[c from first hunk should wrap to last hunk"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Inline comment (c key) ────────────────────────────────────────
@@ -414,7 +399,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"pending comment body should match input"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Submit review as approve (a key) ──────────────────────────────
@@ -467,7 +452,7 @@ T.run_suite("E2E: PR Review Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Submit review as request-changes (x key) ──────────────────────
@@ -520,7 +505,7 @@ T.run_suite("E2E: PR Review Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review success shows notification ─────────────────────────────
@@ -570,7 +555,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"notification should mention 'approved'"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review failure shows error ────────────────────────────────────
@@ -625,7 +610,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"error should be at ERROR level"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Comment threads rendered ──────────────────────────────────────
@@ -647,7 +632,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review buffer should show comment body"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Thread collapse toggle (<leader>t) ────────────────────────────
@@ -708,7 +693,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"thread should be collapsed after toggle"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Thread reply (R key) ──────────────────────────────────────────
@@ -733,7 +718,7 @@ T.run_suite("E2E: PR Review Flow", {
 
 		if not thread_line then
 			-- If no rendered threads, skip gracefully
-			cleanup_panels()
+			T.cleanup_panels()
 			return
 		end
 
@@ -774,7 +759,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"reply body should match user input"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Submit pending review with inline comments ────────────────────
@@ -855,7 +840,7 @@ T.run_suite("E2E: PR Review Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	["submit review API maps request_changes to REQUEST_CHANGES"] = function()
@@ -897,7 +882,7 @@ T.run_suite("E2E: PR Review Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review panel close restores previous window ───────────────────
@@ -929,7 +914,7 @@ T.run_suite("E2E: PR Review Flow", {
 			)
 		end
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review panel state reset on close ─────────────────────────────
@@ -963,7 +948,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"pending_comments should be empty after close"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Line context tracks old/new line numbers ──────────────────────
@@ -992,7 +977,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"line context should contain new_line entries"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review via command dispatch ───────────────────────────────────
@@ -1058,7 +1043,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"cursor should return to same new_line after comment"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Review via command dispatch ───────────────────────────────────
@@ -1090,7 +1075,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"command dispatch should invoke approve review"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Close guard: q with no pending comments closes ───────────
@@ -1116,7 +1101,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review panel should close without confirmation"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Close guard: q with pending comments shows confirm ──────
@@ -1159,7 +1144,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"review panel should close after user confirms"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Close guard: cancel keeps panel open ────────────────────
@@ -1214,7 +1199,7 @@ T.run_suite("E2E: PR Review Flow", {
 			"pending comments should be preserved"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Treesitter not attached to review buffer ─────────
