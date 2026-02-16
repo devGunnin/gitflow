@@ -361,6 +361,7 @@ local function render_view(pr)
 		render_opts
 	)
 	local header_line_count = #lines
+	lines[#lines + 1] = ("Title: %s"):format(maybe_text(pr.title))
 	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
 	lines[#lines + 1] = ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-")
 	lines[#lines + 1] = ("Refs: %s -> %s"):
@@ -425,7 +426,7 @@ local function render_view(pr)
 	end
 
 	local entry_highlights = {}
-	entry_highlights[header_line_count + 1] = pr_highlight_group(pr_state(pr))
+	entry_highlights[header_line_count + 2] = pr_highlight_group(pr_state(pr))
 
 	-- Mark section headers in detail view
 	for line_no, line in ipairs(lines) do
