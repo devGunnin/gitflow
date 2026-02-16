@@ -64,6 +64,23 @@ local function read_lines(path)
 	return vim.fn.readfile(path)
 end
 
+local function wait_for_log_quiescence(path, stable_ticks, timeout_ms)
+	local last_count = #read_lines(path)
+	local stable = 0
+	local ok = vim.wait(timeout_ms or 5000, function()
+		local current = #read_lines(path)
+		if current == last_count then
+			stable = stable + 1
+		else
+			last_count = current
+			stable = 0
+		end
+		return stable >= (stable_ticks or 5)
+	end, 20)
+	assert_true(ok, "gh log should quiesce before assertion")
+	return last_count
+end
+
 local function assert_keymaps(bufnr, required)
 	local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
 	local missing = {}
@@ -504,9 +521,9 @@ assert_equals(
 )
 
 -- re_render should use cached data and not trigger new gh calls
-local gh_lines_before = #read_lines(gh_log)
+local gh_lines_before = wait_for_log_quiescence(gh_log, 5, 5000)
 review_panel.re_render()
-local gh_lines_after = #read_lines(gh_log)
+local gh_lines_after = wait_for_log_quiescence(gh_log, 5, 5000)
 assert_equals(
 	gh_lines_after, gh_lines_before,
 	"re_render should not trigger gh API calls"

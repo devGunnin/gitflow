@@ -641,12 +641,83 @@ local function submit_review(mode, body, on_success_message)
 	end)
 end
 
+---@return table[]
+local function collect_api_comments()
+	local api_comments = {}
+	for _, pc in ipairs(M.state.pending_comments) do
+		if pc.path and pc.path ~= "" then
+			local entry = {
+				path = pc.path,
+				body = pc.body,
+			}
+			local ctx = M.state.line_context[pc.line] or {}
+			if ctx.new_line then
+				entry.line = ctx.new_line
+			end
+			if pc.start_line and pc.end_line then
+				local sc = M.state.line_context[pc.start_line] or {}
+				local ec = M.state.line_context[pc.end_line] or {}
+				if sc.new_line then
+					entry.start_line = sc.new_line
+				end
+				if ec.new_line then
+					entry.line = ec.new_line
+				end
+			end
+			api_comments[#api_comments + 1] = entry
+		end
+	end
+	return api_comments
+end
+
+---@param mode "approve"|"request_changes"|"comment"
+---@param body string
+---@param on_success_message string
+local function submit_review_with_pending(mode, body, on_success_message)
+	if #M.state.pending_comments == 0 then
+		submit_review(mode, body, on_success_message)
+		return
+	end
+
+	local number = current_pr_number()
+	if not number then
+		utils.notify(
+			"No pull request selected for review",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	local api_comments = collect_api_comments()
+	gh_prs.submit_review(
+		number, mode, body, api_comments, {},
+		function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			local count = #M.state.pending_comments
+			M.state.pending_comments = {}
+			utils.notify(
+				("Review submitted (%s) with %d comment(s)")
+					:format(mode, count),
+				vim.log.levels.INFO
+			)
+			M.refresh()
+		end
+	)
+end
+
 ---@param mode "approve"|"request_changes"|"comment"
 ---@param prompt string
 ---@param on_success_message string
 local function prompt_and_submit(mode, prompt, on_success_message)
 	input.prompt({ prompt = prompt }, function(body)
-		submit_review(mode, body or "", on_success_message)
+		submit_review_with_pending(
+			mode,
+			body or "",
+			on_success_message
+		)
 	end)
 end
 
@@ -752,58 +823,9 @@ function M.submit_pending_review()
 			prompt = "Review body (optional): ",
 		}, function(body_input)
 			local body = vim.trim(body_input or "")
-			local api_comments = {}
-			for _, pc in ipairs(M.state.pending_comments) do
-				if pc.path and pc.path ~= "" then
-					local entry = {
-						path = pc.path,
-						body = pc.body,
-					}
-					local ctx =
-						M.state.line_context[pc.line] or {}
-					if ctx.new_line then
-						entry.line = ctx.new_line
-					end
-					if pc.start_line and pc.end_line then
-						local sc =
-							M.state.line_context[
-								pc.start_line
-							] or {}
-						local ec =
-							M.state.line_context[
-								pc.end_line
-							] or {}
-						if sc.new_line then
-							entry.start_line = sc.new_line
-						end
-						if ec.new_line then
-							entry.line = ec.new_line
-						end
-					end
-					api_comments[#api_comments + 1] = entry
-				end
-			end
-
-			gh_prs.submit_review(
-				number, mode, body,
-				api_comments, {},
-				function(err)
-					if err then
-						utils.notify(
-							err, vim.log.levels.ERROR
-						)
-						return
-					end
-					local count = #M.state.pending_comments
-					M.state.pending_comments = {}
-					utils.notify(
-						("Review submitted (%s)"
-							.. " with %d comment(s)"
-						):format(mode, count),
-						vim.log.levels.INFO
-					)
-					M.refresh()
-				end
+			submit_review_with_pending(
+				mode, body,
+				("Review submitted (%s)"):format(mode)
 			)
 		end)
 	end)
@@ -1310,57 +1332,10 @@ end
 ---@param mode "approve"|"request_changes"|"comment"
 ---@param body string
 function M.submit_review_direct(mode, body)
-	local number = current_pr_number()
-	if not number then
-		submit_review(
-			mode, body,
-			("Review submitted (%s)"):format(mode)
-		)
-		return
-	end
-
-	-- If there are pending comments, batch-submit them
-	if #M.state.pending_comments > 0 then
-		local api_comments = {}
-		for _, pc in ipairs(M.state.pending_comments) do
-			if pc.path and pc.path ~= "" then
-				local entry = {
-					path = pc.path,
-					body = pc.body,
-				}
-				local ctx =
-					M.state.line_context[pc.line] or {}
-				if ctx.new_line then
-					entry.line = ctx.new_line
-				end
-				api_comments[#api_comments + 1] = entry
-			end
-		end
-
-		gh_prs.submit_review(
-			number, mode, body,
-			api_comments, {},
-			function(err)
-				if err then
-					utils.notify(err, vim.log.levels.ERROR)
-					return
-				end
-				local count = #M.state.pending_comments
-				M.state.pending_comments = {}
-				utils.notify(
-					("Review submitted (%s)"
-						.. " with %d comment(s)"
-					):format(mode, count),
-					vim.log.levels.INFO
-				)
-				M.refresh()
-			end
-		)
-		return
-	end
-
-	submit_review(
-		mode, body, ("Review submitted (%s)"):format(mode)
+	submit_review_with_pending(
+		mode,
+		body,
+		("Review submitted (%s)"):format(mode)
 	)
 end
 

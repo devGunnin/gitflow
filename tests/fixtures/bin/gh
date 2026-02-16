@@ -10,6 +10,23 @@ if [ -n "${GITFLOW_GH_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$GITFLOW_GH_LOG"
 fi
 
+needs_stdin=false
+prev_arg=""
+for arg in "$@"; do
+  if [ "$prev_arg" = "--input" ] && [ "$arg" = "-" ]; then
+    needs_stdin=true
+    break
+  fi
+  prev_arg="$arg"
+done
+
+if [ "$needs_stdin" = true ]; then
+  stdin_payload="$(cat)"
+  if [ -n "${GITFLOW_GH_LOG:-}" ]; then
+    printf 'stdin %s\n' "$stdin_payload" >> "$GITFLOW_GH_LOG"
+  fi
+fi
+
 # Resolve fixture directory relative to this script
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FIXTURE_DIR="$SCRIPT_DIR/../gh"
