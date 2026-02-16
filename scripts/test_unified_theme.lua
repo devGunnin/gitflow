@@ -408,6 +408,9 @@ local panel_names = {
 	"gitflow.panels.conflict",
 	"gitflow.panels.review",
 	"gitflow.panels.labels",
+	"gitflow.panels.palette",
+	"gitflow.panels.cherry_pick",
+	"gitflow.panels.reset",
 }
 
 for _, panel_name in ipairs(panel_names) do
@@ -419,7 +422,45 @@ end
 -- ── 6. ui.render is exported ────────────────────────────────────
 
 local ui = require("gitflow.ui")
-assert_true(ui.render ~= nil, "ui module should export render sub-module")
-assert_equals(ui.render.separator, ui_render.separator, "ui.render should be the render module")
+assert_true(
+	ui.render ~= nil,
+	"ui module should export render sub-module"
+)
+assert_equals(
+	ui.render.separator,
+	ui_render.separator,
+	"ui.render should be the render module"
+)
 
-print(("Unified theme tests passed (%d/%d assertions)"):format(passed, total))
+-- ── 7. palette highlight groups exist ──────────────────────────
+
+local palette_hl_groups = {
+	"GitflowPaletteSelection",
+	"GitflowPaletteHeader",
+	"GitflowPaletteKeybind",
+	"GitflowPaletteDescription",
+	"GitflowPaletteIndex",
+	"GitflowPaletteCommand",
+	"GitflowPaletteNormal",
+	"GitflowPaletteHeaderBar",
+	"GitflowPaletteHeaderIcon",
+	"GitflowPaletteEntryIcon",
+	"GitflowPaletteBackdrop",
+}
+
+for _, group in ipairs(palette_hl_groups) do
+	local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group })
+	assert_true(
+		ok and hl
+			and (hl.link ~= nil or hl.fg ~= nil or hl.bg ~= nil),
+		("palette highlight group '%s' should be defined"):format(
+			group
+		)
+	)
+end
+
+print(
+	("Unified theme tests passed (%d/%d assertions)"):format(
+		passed, total
+	)
+)

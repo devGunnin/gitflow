@@ -22,6 +22,7 @@ local conflict_panel = require("gitflow.panels.conflict")
 local palette_panel = require("gitflow.panels.palette")
 local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
+local revert_panel = require("gitflow.panels.revert")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -1152,6 +1153,14 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands.revert = {
+		description = "Open git revert panel",
+		run = function()
+			revert_panel.open(cfg)
+			return "Revert panel opened"
+		end,
+	}
+
 	M.subcommands.stash = {
 		description = "Stash operations: list|push|pop|drop",
 		run = function(ctx)
@@ -2203,6 +2212,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowLabel)", "<Cmd>Gitflow label list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPalette)", "<Cmd>Gitflow palette<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowReset)", "<Cmd>Gitflow reset<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowRevert)", "<Cmd>Gitflow revert<CR>", { silent = true })
 	vim.keymap.set(
 		"n",
 		"<Plug>(GitflowCherryPick)",
@@ -2232,6 +2242,7 @@ function M.setup(cfg)
 		pr = "<Plug>(GitflowPr)",
 		label = "<Plug>(GitflowLabel)",
 		reset = "<Plug>(GitflowReset)",
+		revert = "<Plug>(GitflowRevert)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",

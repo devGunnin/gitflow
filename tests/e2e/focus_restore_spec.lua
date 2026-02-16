@@ -42,29 +42,6 @@ local function with_temporary_patches(patches, fn)
 	end
 end
 
---- Close any panel windows left open between tests.
-local function cleanup_panels()
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(
-			require, "gitflow.panels." .. panel_name
-		)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
-end
-
 T.run_suite("E2E: Focus Restore After Creation", {
 
 	-- ── Issue creation restores focus to panel ──────────────
@@ -149,7 +126,7 @@ T.run_suite("E2E: Focus Restore After Creation", {
 		end)
 
 		pcall(vim.api.nvim_win_close, other_win, true)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── PR creation restores focus to panel ─────────────────
@@ -233,7 +210,7 @@ T.run_suite("E2E: Focus Restore After Creation", {
 		end)
 
 		pcall(vim.api.nvim_win_close, other_win, true)
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Focus restore skipped when panel closed ─────────────
@@ -310,7 +287,7 @@ T.run_suite("E2E: Focus Restore After Creation", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })
 

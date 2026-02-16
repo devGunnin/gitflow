@@ -62,28 +62,6 @@ local function with_temp_gh_log(fn)
 	end
 end
 
---- Close any panel windows left open between tests.
-local function cleanup_panels()
-	for _, panel_name in ipairs({
-		"status", "diff", "log", "stash", "branch",
-		"conflict", "issues", "prs", "labels", "review",
-		"palette",
-	}) do
-		local mod_ok, mod = pcall(require, "gitflow.panels." .. panel_name)
-		if mod_ok and mod.close then
-			pcall(mod.close)
-		end
-	end
-
-	-- Close any remaining float windows (forms, pickers, etc.)
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
-		local win_cfg = vim.api.nvim_win_get_config(win)
-		if win_cfg.relative and win_cfg.relative ~= "" then
-			pcall(vim.api.nvim_win_close, win, true)
-		end
-	end
-end
-
 T.run_suite("E2E: PR Creation Flow", {
 
 	-- ── PR panel opens and shows PR list ──────────────────────────────
@@ -108,7 +86,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			"PR list should contain PR #42 title"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── PR panel has create keymap ────────────────────────────────────
@@ -121,7 +99,7 @@ T.run_suite("E2E: PR Creation Flow", {
 		T.assert_true(bufnr ~= nil, "prs buffer should exist")
 		T.assert_keymaps(bufnr, { "c" })
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── create_interactive opens form ─────────────────────────────────
@@ -188,7 +166,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Title field is required ───────────────────────────────────────
@@ -234,7 +212,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Body field is multiline ───────────────────────────────────────
@@ -280,7 +258,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Submission invokes gh pr create with correct args ─────────────
@@ -360,7 +338,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Submission passes labels and reviewers ────────────────────────
@@ -426,7 +404,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Success notification after creation ───────────────────────────
@@ -495,7 +473,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Creation failure shows error notification ─────────────────────
@@ -569,7 +547,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── gh pr create API call via stub logs invocation ─────────────────
@@ -642,7 +620,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			end)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Draft PR creation ─────────────────────────────────────────────
@@ -676,7 +654,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── PR create via :Gitflow pr create command dispatch ─────────────
@@ -721,7 +699,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Label fetch failure still opens form ──────────────────────────
@@ -763,7 +741,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── PR panel view mode renders detail ─────────────────────────────
@@ -796,7 +774,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			"view should show Body section"
 		)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 
 	-- ── Buffer updates after creation ─────────────────────────────────
@@ -870,7 +848,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			)
 		end)
 
-		cleanup_panels()
+		T.cleanup_panels()
 	end,
 })
 
