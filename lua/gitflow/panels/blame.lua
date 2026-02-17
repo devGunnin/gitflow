@@ -322,8 +322,8 @@ function M.close()
 end
 
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return M.state.winid ~= nil
+		and vim.api.nvim_win_is_valid(M.state.winid)
 end
 
 return M

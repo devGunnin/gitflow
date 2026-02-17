@@ -425,7 +425,32 @@ test("blame panel should support toggle behavior", function()
 	)
 end)
 
+test("blame command should reopen after manual window close", function()
+	vim.cmd("edit " .. repo_dir .. "/test.txt")
+	commands.dispatch({ "blame" }, cfg)
+	wait_until(function()
+		return blame_panel.state.winid ~= nil
+			and vim.api.nvim_win_is_valid(blame_panel.state.winid)
+	end, "blame panel should open before manual close")
+
+	vim.api.nvim_win_close(blame_panel.state.winid, true)
+	vim.wait(100, function() return false end, 10)
+	assert_true(
+		not blame_panel.is_open(),
+		"is_open should be false after manual window close"
+	)
+
+	commands.dispatch({ "blame" }, cfg)
+	wait_until(function()
+		return blame_panel.state.winid ~= nil
+			and vim.api.nvim_win_is_valid(blame_panel.state.winid)
+	end, "single dispatch should reopen blame panel")
+end)
+
 test("blame panel should target the current buffer when reopened", function()
+	if blame_panel.is_open() then
+		blame_panel.close()
+	end
 	vim.cmd("edit " .. repo_dir .. "/other.txt")
 	commands.dispatch({ "blame" }, cfg)
 	wait_until(function()
