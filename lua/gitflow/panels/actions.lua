@@ -40,6 +40,31 @@ local function current_footer()
 	return ACTIONS_LIST_FOOTER
 end
 
+local function update_float_footer()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return
+	end
+
+	local ok, win_cfg = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or not win_cfg or not win_cfg.relative or win_cfg.relative == "" then
+		return
+	end
+
+	local cfg = M.state.cfg
+	local footer_enabled = cfg
+		and cfg.ui
+		and cfg.ui.float
+		and cfg.ui.float.footer
+	if not footer_enabled or vim.fn.has("nvim-0.10") ~= 1 then
+		return
+	end
+
+	pcall(vim.api.nvim_win_set_config, winid, {
+		footer = current_footer(),
+	})
+end
+
 ---@return integer
 local function next_request_id()
 	M.state.request_id = (M.state.request_id or 0) + 1
@@ -236,6 +261,7 @@ end
 ---@param runs GitflowActionRun[]
 ---@param current_branch string
 local function render_list(runs, current_branch)
+	update_float_footer()
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -288,6 +314,7 @@ end
 
 ---@param run GitflowActionRun
 local function render_detail(run)
+	update_float_footer()
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -368,6 +395,7 @@ function M.open(cfg)
 	M.state.detail_run = nil
 	next_request_id()
 	ensure_window(cfg)
+	update_float_footer()
 	setup_post_operation_autocmd()
 	M.refresh()
 end
@@ -426,6 +454,7 @@ function M.open_detail_under_cursor()
 
 	M.state.view = "detail"
 	M.state.detail_run = run
+	update_float_footer()
 	local request_id = next_request_id()
 	gh_actions.view(run.id, nil, function(err, detailed_run)
 		if not is_active_request(request_id, "detail") then
@@ -465,6 +494,7 @@ function M.back_to_list()
 	end
 	M.state.view = "list"
 	M.state.detail_run = nil
+	update_float_footer()
 	M.refresh()
 end
 

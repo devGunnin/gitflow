@@ -14,6 +14,7 @@ local cfg = _G.TestConfig
 
 local commands = require("gitflow.commands")
 local ui = require("gitflow.ui")
+local gh = require("gitflow.gh")
 local gh_actions = require("gitflow.gh.actions")
 local actions_panel = require("gitflow.panels.actions")
 
@@ -75,6 +76,29 @@ local function focus_run_by_title(title)
 	)
 	vim.api.nvim_set_current_win(winid)
 	vim.api.nvim_win_set_cursor(winid, { line, 0 })
+end
+
+---@param footer any
+---@return string
+local function footer_text(footer)
+	if type(footer) == "string" then
+		return footer
+	end
+	if type(footer) ~= "table" then
+		return tostring(footer or "")
+	end
+
+	local parts = {}
+	for _, chunk in ipairs(footer) do
+		if type(chunk) == "string" then
+			parts[#parts + 1] = chunk
+		elseif type(chunk) == "table" then
+			parts[#parts + 1] = tostring(chunk[1] or "")
+		else
+			parts[#parts + 1] = tostring(chunk)
+		end
+	end
+	return table.concat(parts, "")
 end
 
 T.run_suite("E2E: GitHub Actions Panel", {
@@ -271,6 +295,102 @@ T.run_suite("E2E: GitHub Actions Panel", {
 	end,
 
 	-- ── Status icon rendering ───────────────────────────────────────────
+
+	["view keeps snippets job-scoped when step names are duplicated"] = function()
+		local run_result = nil
+		local err_result = nil
+		with_temporary_patches({
+			{
+				table = gh,
+				key = "json",
+				value = function(_, _, cb)
+					cb(nil, {
+						databaseId = 555,
+						name = "CI",
+						headBranch = "main",
+						status = "completed",
+						conclusion = "failure",
+						event = "pull_request",
+						createdAt = "2026-02-17T12:00:00Z",
+						updatedAt = "2026-02-17T12:05:00Z",
+						url = "https://example.invalid/actions/runs/555",
+						displayTitle = "Matrix CI",
+						jobs = {
+							{
+								databaseId = 1,
+								name = "linux",
+								status = "completed",
+								conclusion = "failure",
+								steps = {
+									{
+										name = "Run tests",
+										status = "completed",
+										conclusion = "failure",
+										number = 1,
+									},
+								},
+							},
+							{
+								databaseId = 2,
+								name = "windows",
+								status = "completed",
+								conclusion = "failure",
+								steps = {
+									{
+										name = "Run tests",
+										status = "completed",
+										conclusion = "failure",
+										number = 1,
+									},
+								},
+							},
+						},
+					})
+				end,
+			},
+			{
+				table = gh,
+				key = "run",
+				value = function(_, _, cb)
+					cb({
+						code = 0,
+						signal = 0,
+						stdout = table.concat({
+							"linux\tRun tests\tLinux failure details",
+							"windows\tRun tests\tWindows failure details",
+						}, "\n"),
+						stderr = "",
+						cmd = { "gh" },
+					})
+				end,
+			},
+		}, function()
+			T.wait_async(function(done)
+				gh_actions.view(555, nil, function(err, run)
+					err_result = err
+					run_result = run
+					done()
+				end)
+			end)
+		end)
+
+		T.assert_true(
+			err_result == nil,
+			"view should not return error: " .. (err_result or "")
+		)
+		T.assert_true(run_result ~= nil, "view should return run data")
+
+		local linux_step = run_result.jobs[1].steps[1]
+		local windows_step = run_result.jobs[2].steps[1]
+		T.assert_true(
+			linux_step.log_snippet:find("Linux failure", 1, true) ~= nil,
+			"linux step should keep linux-specific snippet"
+		)
+		T.assert_true(
+			windows_step.log_snippet:find("Windows failure", 1, true) ~= nil,
+			"windows step should keep windows-specific snippet"
+		)
+	end,
 
 	["status_icon returns correct icons for each state"] = function()
 		T.assert_equals(
@@ -487,6 +607,61 @@ T.run_suite("E2E: GitHub Actions Panel", {
 	end,
 
 	-- ── Panel state resets on close ─────────────────────────────────────
+
+	["float footer updates between list and detail views"] = function()
+		if vim.fn.has("nvim-0.10") ~= 1 then
+			return
+		end
+
+		with_temporary_patches({
+			{
+				table = cfg.ui,
+				key = "default_layout",
+				value = "float",
+			},
+			{
+				table = cfg.ui.float,
+				key = "footer",
+				value = true,
+			},
+		}, function()
+			actions_panel.open(cfg)
+			T.drain_jobs(3000)
+
+			local winid = actions_panel.state.winid
+			T.assert_true(
+				winid ~= nil and vim.api.nvim_win_is_valid(winid),
+				"actions window should be valid"
+			)
+
+			local list_footer = footer_text(vim.api.nvim_win_get_config(winid).footer)
+			T.assert_true(
+				tostring(list_footer):find("<CR> detail", 1, true) ~= nil,
+				"list view footer should advertise <CR> detail"
+			)
+
+			focus_run_by_title("CI: PR #42")
+			actions_panel.open_detail_under_cursor()
+			T.drain_jobs(4000)
+
+			local detail_footer = footer_text(vim.api.nvim_win_get_config(winid).footer)
+			T.assert_true(
+				tostring(detail_footer):find("<BS> back", 1, true) ~= nil,
+				"detail view footer should advertise <BS> back"
+			)
+
+			actions_panel.back_to_list()
+			T.drain_jobs(3000)
+
+			local back_footer = footer_text(vim.api.nvim_win_get_config(winid).footer)
+			T.assert_true(
+				tostring(back_footer):find("<CR> detail", 1, true) ~= nil,
+				"returning to list should restore list footer hints"
+			)
+
+			T.cleanup_panels()
+		end)
+	end,
 
 	["state resets to list view on close"] = function()
 		actions_panel.open(cfg)

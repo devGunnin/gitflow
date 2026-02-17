@@ -62,6 +62,7 @@ local RUN_VIEW_FIELDS = table.concat({
 ---@field log_snippet string|nil
 
 ---@class GitflowActionLogSnippets
+---@field by_job_step table<string, string>
 ---@field by_job table<string, string>
 ---@field by_step table<string, string>
 ---@field fallback string|nil
@@ -127,11 +128,24 @@ local function normalize_snippet(value)
 	return text
 end
 
+---@param job_name any
+---@param step_name any
+---@return string|nil
+local function normalize_job_step_key(job_name, step_name)
+	local job_key = normalize_key(job_name)
+	local step_key = normalize_key(step_name)
+	if job_key == "" or step_key == "" then
+		return nil
+	end
+	return ("%s\t%s"):format(job_key, step_key)
+end
+
 ---@param log_output string
 ---@return GitflowActionLogSnippets
 local function parse_failed_log_snippets(log_output)
 	---@type GitflowActionLogSnippets
 	local snippets = {
+		by_job_step = {},
 		by_job = {},
 		by_step = {},
 		fallback = nil,
@@ -154,6 +168,10 @@ local function parse_failed_log_snippets(log_output)
 		if job_name and step_name and candidate ~= "" then
 			local job_key = normalize_key(job_name)
 			local step_key = normalize_key(step_name)
+			local job_step_key = normalize_job_step_key(job_name, step_name)
+			if job_step_key and not snippets.by_job_step[job_step_key] then
+				snippets.by_job_step[job_step_key] = candidate
+			end
 			if job_key ~= "" and not snippets.by_job[job_key] then
 				snippets.by_job[job_key] = candidate
 			end
@@ -199,8 +217,10 @@ local function attach_failed_log_snippets(run, log_output)
 				or step.status == "failed"
 			if failed then
 				local step_key = normalize_key(step.name)
-				local snippet = snippets.by_step[step_key]
+				local job_step_key = normalize_job_step_key(job.name, step.name)
+				local snippet = (job_step_key and snippets.by_job_step[job_step_key])
 					or job_snippet
+					or snippets.by_step[step_key]
 					or snippets.fallback
 				if snippet and snippet ~= "" then
 					step.log_snippet = snippet
