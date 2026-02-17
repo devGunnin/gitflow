@@ -168,6 +168,77 @@ local VALID_PANEL_NAMES = {
 	stash = true, reset = true, revert = true, cherry_pick = true,
 }
 
+local PANEL_DEFAULT_KEYS = {
+	status = {
+		stage = "s", unstage = "u", stage_all = "a", unstage_all = "A",
+		commit = "cc", diff = "dd", conflicts = "cx", push = "p",
+		revert = "X", refresh = "r", close = "q",
+	},
+	branch = {
+		switch = "<CR>", create = "c", delete = "d", force_delete = "D",
+		rename = "r", refresh = "R", fetch = "f", merge = "m",
+		toggle_graph = "G", close = "q",
+	},
+	diff = {
+		close = "q", refresh = "r", next_file = "]f", prev_file = "[f",
+		next_hunk = "]c", prev_hunk = "[c",
+	},
+	review = {
+		next_file = "]f", prev_file = "[f", next_hunk = "]c", prev_hunk = "[c",
+		approve = "a", request_changes = "x", inline_comment = "c",
+		submit_review = "S", inline_comment_visual = "c", reply = "R",
+		toggle_thread = "<leader>t", toggle_inline = "<leader>i",
+		refresh = "r", back_to_pr = "<leader>b", close = "q",
+	},
+	conflict = {
+		open = "<CR>", refresh = "r", refresh_alias = "R",
+		continue = "C", abort = "A", close = "q",
+	},
+	issues = {
+		view = "<CR>", create = "c", comment = "C", close_issue = "x",
+		labels = "L", assign = "A", refresh = "r", back = "b", close = "q",
+	},
+	prs = {
+		view = "<CR>", create = "c", comment = "C", labels = "L",
+		assign = "A", merge = "m", checkout = "o", review = "v",
+		refresh = "r", back = "b", close = "q",
+	},
+	log = {
+		open_commit = "<CR>", refresh = "r", close = "q",
+	},
+	stash = {
+		pop = "P", drop = "D", stash = "S", refresh = "r", close = "q",
+	},
+	reset = {
+		select = "<CR>", soft_reset = "S", hard_reset = "H",
+		refresh = "r", close = "q",
+	},
+	revert = {
+		select = "<CR>", refresh = "r", close = "q",
+	},
+	cherry_pick = {
+		select = "<CR>", pick_into_branch = "B", branch_picker = "b",
+		refresh = "r", close = "q",
+	},
+}
+
+local PANEL_ACTION_MODES = {
+	review = {
+		inline_comment_visual = "v",
+	},
+}
+
+---@param panel string
+---@param action string
+---@return string
+local function panel_action_mode(panel, action)
+	local panel_modes = PANEL_ACTION_MODES[panel]
+	if panel_modes and panel_modes[action] then
+		return panel_modes[action]
+	end
+	return "n"
+end
+
 ---@param config GitflowConfig
 local function validate_panel_keybindings(config)
 	if type(config.panel_keybindings) ~= "table" then
@@ -197,7 +268,8 @@ local function validate_panel_keybindings(config)
 			)
 		end
 
-		local key_to_action = {}
+		local defaults = PANEL_DEFAULT_KEYS[panel] or {}
+		local resolved = vim.deepcopy(defaults)
 		for action, mapping in pairs(overrides) do
 			if not utils.is_non_empty_string(action) then
 				error(
@@ -215,19 +287,31 @@ local function validate_panel_keybindings(config)
 					3
 				)
 			end
-			if key_to_action[mapping] then
+			resolved[action] = mapping
+		end
+
+		local key_to_action = {
+			n = {},
+			v = {},
+		}
+		for action, mapping in pairs(resolved) do
+			local mode = panel_action_mode(panel, action)
+			local mode_key_map = key_to_action[mode] or {}
+			local existing = mode_key_map[mapping]
+			if existing and existing ~= action then
 				error(
 					("gitflow config error:"
 						.. " panel_keybindings.%s has conflicting"
 						.. " key '%s' for actions '%s' and"
 						.. " '%s'"):format(
-						panel, mapping,
-						key_to_action[mapping], action
-					),
+							panel, mapping,
+							existing, action
+						),
 					3
 				)
 			end
-			key_to_action[mapping] = action
+			mode_key_map[mapping] = action
+			key_to_action[mode] = mode_key_map
 		end
 	end
 end

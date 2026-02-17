@@ -215,8 +215,37 @@ assert_error(function()
 end, "conflicting key",
 	"should reject duplicate keys in same panel")
 
--- ── Test 11: Non-table panel_keybindings ────────────────────────────
-io.write("\n[11] Validation: non-table panel_keybindings\n")
+-- ── Test 11: Conflict detection with existing defaults ──────────────
+io.write("\n[11] Conflict detection against default keymaps\n")
+
+assert_error(function()
+	gitflow.setup({
+		panel_keybindings = {
+			status = {
+				stage = "u",
+			},
+		},
+	})
+end, "conflicting key",
+	"should reject override that collides with non-overridden default")
+
+local ok_no_conflict = pcall(function()
+	gitflow.setup({
+		panel_keybindings = {
+			status = {
+				stage = "u",
+				unstage = "U",
+			},
+		},
+	})
+end)
+assert_true(
+	ok_no_conflict,
+	"should allow overrides when all resulting panel keys are unique"
+)
+
+-- ── Test 12: Non-table panel_keybindings ────────────────────────────
+io.write("\n[12] Validation: non-table panel_keybindings\n")
 
 assert_error(function()
 	gitflow.setup({
@@ -225,8 +254,8 @@ assert_error(function()
 end, "must be a table",
 	"should reject non-table panel_keybindings")
 
--- ── Test 12: Valid panel names accepted ─────────────────────────────
-io.write("\n[12] All valid panel names accepted\n")
+-- ── Test 13: Valid panel names accepted ─────────────────────────────
+io.write("\n[13] All valid panel names accepted\n")
 
 local valid_panels = {
 	"status", "branch", "diff", "review", "conflict",
@@ -245,8 +274,8 @@ for _, panel in ipairs(valid_panels) do
 	assert_true(ok, "panel name '" .. panel .. "' should be valid")
 end
 
--- ── Test 13: E2E — overridden key works on status buffer ────────────
-io.write("\n[13] E2E: overridden status panel keybinding\n")
+-- ── Test 14: E2E — overridden key works on status buffer ────────────
+io.write("\n[14] E2E: overridden status panel keybinding\n")
 
 local e2e_cfg = gitflow.setup({
 	ui = {
