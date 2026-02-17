@@ -102,6 +102,7 @@ local registry = {
 		review = { nerd = NF.review_commented, ascii = "R" },
 		reset = { nerd = NF.commit, ascii = "R" },
 		revert = { nerd = NF.commit, ascii = "V" },
+		actions = { nerd = NF.staged, ascii = "A" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },

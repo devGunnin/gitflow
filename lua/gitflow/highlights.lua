@@ -102,6 +102,11 @@ local function build_default_groups(palette)
 		GitflowResetMergeBase = { link = "WarningMsg" },
 		-- Revert
 		GitflowRevertMergeBase = { link = "WarningMsg" },
+		-- Actions / CI
+		GitflowActionsPass = { link = "DiagnosticOk" },
+		GitflowActionsFail = { link = "DiagnosticError" },
+		GitflowActionsPending = { link = "DiagnosticWarn" },
+		GitflowActionsCancelled = { link = "Comment" },
 		-- Cherry Pick
 		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
 		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },

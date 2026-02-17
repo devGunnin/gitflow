@@ -89,6 +89,7 @@ function M.defaults()
 			revert = "gV",
 			cherry_pick = "gC",
 			conflict = "<leader>gm",
+			actions = "gA",
 			palette = "<leader>go",
 		},
 		ui = {
