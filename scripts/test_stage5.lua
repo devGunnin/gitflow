@@ -724,6 +724,109 @@ if cur_review_buf then
 	end
 end
 
+-- toggle_inline_comments test: verify <leader>i keymap and behavior
+assert_keymaps(
+	buffer.get("review"),
+	{ leader .. "i" }
+)
+
+-- Default state: show_inline_comments should be false
+assert_equals(
+	review_panel.state.show_inline_comments, false,
+	"show_inline_comments should default to false"
+)
+
+-- Find the diff line where comments are attached (line 11 in commands.lua)
+local inline_buf = buffer.get("review")
+assert_true(
+	inline_buf ~= nil,
+	"review buffer should exist for inline toggle test"
+)
+local ns_comments = vim.api.nvim_get_namespaces()
+	.gitflow_review_comments
+assert_true(
+	ns_comments ~= nil,
+	"gitflow_review_comments namespace should exist"
+)
+
+-- Before toggle: extmarks should NOT have virt_lines
+local pre_marks = vim.api.nvim_buf_get_extmarks(
+	inline_buf, ns_comments, 0, -1, { details = true }
+)
+local pre_has_virt_lines = false
+for _, mark in ipairs(pre_marks) do
+	local details = mark[4]
+	if details and details.virt_lines
+		and #details.virt_lines > 0 then
+		pre_has_virt_lines = true
+		break
+	end
+end
+assert_true(
+	not pre_has_virt_lines,
+	"inline comments should not show virt_lines before toggle"
+)
+
+-- Toggle inline comments on
+review_panel.toggle_inline_comments()
+assert_equals(
+	review_panel.state.show_inline_comments, true,
+	"show_inline_comments should be true after toggle"
+)
+
+-- After toggle: extmarks should have virt_lines with comment bodies
+local post_marks = vim.api.nvim_buf_get_extmarks(
+	inline_buf, ns_comments, 0, -1, { details = true }
+)
+local post_has_virt_lines = false
+local virt_lines_contain_body = false
+for _, mark in ipairs(post_marks) do
+	local details = mark[4]
+	if details and details.virt_lines
+		and #details.virt_lines > 0 then
+		post_has_virt_lines = true
+		for _, vl in ipairs(details.virt_lines) do
+			for _, chunk in ipairs(vl) do
+				if chunk[1]:find("Consider renaming", 1, true) then
+					virt_lines_contain_body = true
+				end
+			end
+		end
+	end
+end
+assert_true(
+	post_has_virt_lines,
+	"inline comments should show virt_lines after toggle on"
+)
+assert_true(
+	virt_lines_contain_body,
+	"inline virt_lines should contain comment body text"
+)
+
+-- Toggle inline comments off again
+review_panel.toggle_inline_comments()
+assert_equals(
+	review_panel.state.show_inline_comments, false,
+	"show_inline_comments should be false after second toggle"
+)
+
+local off_marks = vim.api.nvim_buf_get_extmarks(
+	inline_buf, ns_comments, 0, -1, { details = true }
+)
+local off_has_virt_lines = false
+for _, mark in ipairs(off_marks) do
+	local details = mark[4]
+	if details and details.virt_lines
+		and #details.virt_lines > 0 then
+		off_has_virt_lines = true
+		break
+	end
+end
+assert_true(
+	not off_has_virt_lines,
+	"inline comments should not show virt_lines after toggle off"
+)
+
 -- B3: close review panel to restore previous window
 review_panel.close()
 assert_true(
