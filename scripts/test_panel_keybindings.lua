@@ -343,6 +343,62 @@ assert_error(function()
 end, "conflicting key",
 	"should reject quick-select key collisions with list keys")
 
+-- ── Test 12b: Reserve positional shortcuts for commit-select panels ──
+io.write("\n[12b] Validation: reserved positional shortcuts\n")
+
+assert_error(function()
+	gitflow.setup({
+		panel_keybindings = {
+			reset = {
+				close = "1",
+			},
+		},
+	})
+end, "reserved positional key",
+	"should reject reset overrides that collide with fixed 1-9 shortcuts")
+
+assert_error(function()
+	gitflow.setup({
+		panel_keybindings = {
+			revert = {
+				refresh = "2",
+			},
+		},
+	})
+end, "reserved positional key",
+	"should reject revert overrides that collide with fixed 1-9 shortcuts")
+
+assert_error(function()
+	gitflow.setup({
+		panel_keybindings = {
+			cherry_pick = {
+				close = "9",
+			},
+		},
+	})
+end, "reserved positional key",
+	"should reject cherry-pick overrides that collide with fixed 1-9 shortcuts")
+
+local ok_no_positional_conflict = pcall(function()
+	gitflow.setup({
+		panel_keybindings = {
+			reset = {
+				close = "Q",
+			},
+			revert = {
+				refresh = "R",
+			},
+			cherry_pick = {
+				close = "C",
+			},
+		},
+	})
+end)
+assert_true(
+	ok_no_positional_conflict,
+	"should allow non-positional overrides for reset/revert/cherry_pick"
+)
+
 -- ── Test 13: Non-table panel_keybindings ────────────────────────────
 io.write("\n[13] Validation: non-table panel_keybindings\n")
 

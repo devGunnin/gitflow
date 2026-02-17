@@ -277,6 +277,32 @@ local PANEL_ACTION_MODES = {
 	},
 }
 
+local RESERVED_POSITIONAL_KEYS = {
+	["1"] = true,
+	["2"] = true,
+	["3"] = true,
+	["4"] = true,
+	["5"] = true,
+	["6"] = true,
+	["7"] = true,
+	["8"] = true,
+	["9"] = true,
+}
+
+local PANELS_WITH_RESERVED_POSITIONAL_KEYS = {
+	reset = true,
+	revert = true,
+	cherry_pick = true,
+}
+
+---@param panel string
+---@param mapping string
+---@return boolean
+local function has_reserved_positional_key(panel, mapping)
+	return PANELS_WITH_RESERVED_POSITIONAL_KEYS[panel]
+		and RESERVED_POSITIONAL_KEYS[mapping]
+end
+
 ---@param panel string
 ---@param action string
 ---@return string[]
@@ -337,6 +363,17 @@ local function validate_panel_keybindings(config)
 					("gitflow config error:"
 						.. " panel_keybindings.%s.%s must be a"
 						.. " non-empty string"):format(panel, action),
+					3
+				)
+			end
+			if has_reserved_positional_key(panel, mapping) then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s.%s uses reserved"
+						.. " positional key '%s' (1-9 are fixed"
+						.. " shortcuts for this panel)"):format(
+							panel, action, mapping
+						),
 					3
 				)
 			end
