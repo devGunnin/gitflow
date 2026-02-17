@@ -11,6 +11,7 @@
   "displayTitle": "CI: push to main",
   "jobs": [
     {
+      "databaseId": 9001,
       "name": "test",
       "status": "completed",
       "conclusion": "success",
@@ -21,20 +22,25 @@
           "name": "Checkout",
           "status": "completed",
           "conclusion": "success",
-          "number": 1
+          "number": 1,
+          "startedAt": "2026-02-17T10:00:31Z",
+          "completedAt": "2026-02-17T10:00:45Z"
         },
         {
           "name": "Run tests",
           "status": "completed",
           "conclusion": "success",
-          "number": 2
+          "number": 2,
+          "startedAt": "2026-02-17T10:00:46Z",
+          "completedAt": "2026-02-17T10:04:15Z"
         }
       ]
     },
     {
+      "databaseId": 9002,
       "name": "lint",
       "status": "completed",
-      "conclusion": "success",
+      "conclusion": "failure",
       "startedAt": "2026-02-17T10:00:30Z",
       "completedAt": "2026-02-17T10:02:45Z",
       "steps": [
@@ -42,13 +48,17 @@
           "name": "Checkout",
           "status": "completed",
           "conclusion": "success",
-          "number": 1
+          "number": 1,
+          "startedAt": "2026-02-17T10:00:31Z",
+          "completedAt": "2026-02-17T10:00:44Z"
         },
         {
           "name": "Lint check",
           "status": "completed",
-          "conclusion": "success",
-          "number": 2
+          "conclusion": "failure",
+          "number": 2,
+          "startedAt": "2026-02-17T10:00:45Z",
+          "completedAt": "2026-02-17T10:02:45Z"
         }
       ]
     }

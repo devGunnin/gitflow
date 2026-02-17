@@ -17,6 +17,66 @@ local ui = require("gitflow.ui")
 local gh_actions = require("gitflow.gh.actions")
 local actions_panel = require("gitflow.panels.actions")
 
+---@param patches table[]
+---@param fn fun()
+local function with_temporary_patches(patches, fn)
+	local originals = {}
+	for index, patch in ipairs(patches) do
+		originals[index] = patch.table[patch.key]
+		patch.table[patch.key] = patch.value
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+
+	for index = #patches, 1, -1 do
+		local patch = patches[index]
+		patch.table[patch.key] = originals[index]
+	end
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
+---@param fn fun(log_path: string)
+local function with_temp_gh_log(fn)
+	local log_path = vim.fn.tempname()
+	local previous = vim.env.GITFLOW_GH_LOG
+	vim.env.GITFLOW_GH_LOG = log_path
+
+	local ok, err = xpcall(function()
+		fn(log_path)
+	end, debug.traceback)
+
+	vim.env.GITFLOW_GH_LOG = previous
+	pcall(vim.fn.delete, log_path)
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
+---@param title string
+local function focus_run_by_title(title)
+	local winid = actions_panel.state.winid
+	local bufnr = actions_panel.state.bufnr
+	T.assert_true(
+		winid ~= nil and vim.api.nvim_win_is_valid(winid),
+		"actions window should be valid"
+	)
+	T.assert_true(
+		bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+		"actions buffer should be valid"
+	)
+	local line = T.buf_find_line(bufnr, title)
+	T.assert_true(
+		line ~= nil,
+		("actions list should contain run '%s'"):format(title)
+	)
+	vim.api.nvim_set_current_win(winid)
+	vim.api.nvim_win_set_cursor(winid, { line, 0 })
+end
+
 T.run_suite("E2E: GitHub Actions Panel", {
 
 	-- ── Subcommand registration ────────────────────────────────────────
@@ -164,6 +224,50 @@ T.run_suite("E2E: GitHub Actions Panel", {
 			type(first_job.steps) == "table" and #first_job.steps >= 2,
 			"first job should have >= 2 steps"
 		)
+
+		local second_job = run_result.jobs[2]
+		T.assert_equals(
+			second_job.conclusion, "failure",
+			"second job should be marked as failure"
+		)
+		local failing_step = second_job.steps[2]
+		T.assert_equals(
+			failing_step.conclusion, "failure",
+			"second job second step should be a failure"
+		)
+		T.assert_true(
+			type(failing_step.log_snippet) == "string"
+				and failing_step.log_snippet ~= "",
+			"failing step should include a log snippet"
+		)
+	end,
+
+	["view fetches failed logs via gh run view --log-failed"] = function()
+		with_temp_gh_log(function(log_path)
+			local err_result = nil
+			T.wait_async(function(done)
+				gh_actions.view(12345, nil, function(err)
+					err_result = err
+					done()
+				end)
+			end)
+			T.assert_true(
+				err_result == nil,
+				"view should not return error: " .. (err_result or "")
+			)
+
+			local lines = T.read_file(log_path)
+			local saw_log_failed = false
+			for _, line in ipairs(lines) do
+				if line:find("run view 12345 --log-failed", 1, true) then
+					saw_log_failed = true
+				end
+			end
+			T.assert_true(
+				saw_log_failed,
+				"view should call gh run view --log-failed"
+			)
+		end)
 	end,
 
 	-- ── Status icon rendering ───────────────────────────────────────────
@@ -272,6 +376,114 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		)
 
 		T.cleanup_panels()
+	end,
+
+	["detail view renders failed-step log snippets"] = function()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		focus_run_by_title("CI: PR #42")
+		actions_panel.open_detail_under_cursor()
+		T.drain_jobs(4000)
+
+		local bufnr = actions_panel.state.bufnr
+		local lines = T.buf_lines(bufnr)
+		T.assert_true(
+			T.find_line(lines, "Lint check") ~= nil,
+			"detail view should include failed lint step"
+		)
+		T.assert_true(
+			T.find_line(lines, "log: Error: style violation") ~= nil,
+			"detail view should render failed-step log snippet"
+		)
+
+		T.cleanup_panels()
+	end,
+
+	["actions panel refreshes on GitflowPostOperation while open"] = function()
+		local refresh_calls = 0
+		local original_refresh = actions_panel.refresh
+
+		with_temporary_patches({
+			{
+				table = actions_panel,
+				key = "refresh",
+				value = function(...)
+					refresh_calls = refresh_calls + 1
+					return original_refresh(...)
+				end,
+			},
+		}, function()
+			actions_panel.open(cfg)
+			T.drain_jobs(3000)
+			local baseline = refresh_calls
+
+			vim.api.nvim_exec_autocmds(
+				"User",
+				{ pattern = "GitflowPostOperation" }
+			)
+
+			T.wait_until(function()
+				return refresh_calls > baseline
+			end, "actions panel should refresh on GitflowPostOperation")
+
+			actions_panel.close()
+			local after_close = refresh_calls
+			vim.api.nvim_exec_autocmds(
+				"User",
+				{ pattern = "GitflowPostOperation" }
+			)
+			vim.wait(200, function()
+				return false
+			end, 20)
+			T.assert_equals(
+				refresh_calls,
+				after_close,
+				"closed actions panel should not refresh on post-operation events"
+			)
+		end)
+	end,
+
+	["stale delayed detail callback cannot overwrite list view"] = function()
+		local original_view = gh_actions.view
+		with_temporary_patches({
+			{
+				table = gh_actions,
+				key = "view",
+				value = function(run_id, opts, cb)
+					return original_view(run_id, opts, function(err, run)
+						vim.defer_fn(function()
+							cb(err, run)
+						end, 250)
+					end)
+				end,
+			},
+		}, function()
+			actions_panel.open(cfg)
+			T.drain_jobs(3000)
+
+			focus_run_by_title("CI: PR #42")
+			actions_panel.open_detail_under_cursor()
+			actions_panel.back_to_list()
+			T.drain_jobs(4500)
+
+			T.assert_equals(
+				actions_panel.state.view, "list",
+				"view should remain list after delayed detail callback"
+			)
+
+			local lines = T.buf_lines(actions_panel.state.bufnr)
+			T.assert_true(
+				T.find_line(lines, "CI: PR #42") ~= nil,
+				"list view should remain rendered after delayed detail callback"
+			)
+			T.assert_true(
+				T.find_line(lines, "Started:") == nil,
+				"detail content should not overwrite list view after back navigation"
+			)
+
+			actions_panel.close()
+		end)
 	end,
 
 	-- ── Panel state resets on close ─────────────────────────────────────

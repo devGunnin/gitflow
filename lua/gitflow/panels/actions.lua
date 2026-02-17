@@ -11,6 +11,8 @@ local ui_render = require("gitflow.ui.render")
 ---@field cfg GitflowConfig|nil
 ---@field view "list"|"detail"
 ---@field detail_run GitflowActionRun|nil
+---@field request_id integer
+---@field post_operation_augroup integer|nil
 
 local M = {}
 local ACTIONS_FLOAT_TITLE = "Gitflow Actions"
@@ -26,6 +28,8 @@ M.state = {
 	cfg = nil,
 	view = "list",
 	detail_run = nil,
+	request_id = 0,
+	post_operation_augroup = nil,
 }
 
 ---@return string
@@ -34,6 +38,55 @@ local function current_footer()
 		return ACTIONS_DETAIL_FOOTER
 	end
 	return ACTIONS_LIST_FOOTER
+end
+
+---@return integer
+local function next_request_id()
+	M.state.request_id = (M.state.request_id or 0) + 1
+	return M.state.request_id
+end
+
+---@param request_id integer
+---@param expected_view "list"|"detail"|nil
+---@return boolean
+local function is_active_request(request_id, expected_view)
+	if M.state.request_id ~= request_id then
+		return false
+	end
+	if expected_view and M.state.view ~= expected_view then
+		return false
+	end
+	return M.is_open()
+end
+
+local function clear_post_operation_autocmd()
+	if M.state.post_operation_augroup then
+		pcall(
+			vim.api.nvim_del_augroup_by_id,
+			M.state.post_operation_augroup
+		)
+		M.state.post_operation_augroup = nil
+	end
+end
+
+local function setup_post_operation_autocmd()
+	clear_post_operation_autocmd()
+
+	local augroup = vim.api.nvim_create_augroup(
+		"GitflowActionsPostOperation",
+		{ clear = true }
+	)
+	M.state.post_operation_augroup = augroup
+	vim.api.nvim_create_autocmd("User", {
+		group = augroup,
+		pattern = "GitflowPostOperation",
+		callback = function()
+			if not M.is_open() then
+				return
+			end
+			M.refresh()
+		end,
+	})
 end
 
 ---@param cfg GitflowConfig
@@ -104,6 +157,19 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---@param started_at string
+---@param completed_at string
+---@return string
+local function format_duration_range(started_at, completed_at)
+	if started_at ~= "" and completed_at ~= "" then
+		return ("  (%s → %s)"):format(
+			started_at:sub(12, 19) or "",
+			completed_at:sub(12, 19) or ""
+		)
+	end
+	return ""
+end
+
 ---@param run GitflowActionRun
 ---@return string
 local function format_run_line(run)
@@ -131,13 +197,7 @@ local function format_job_line(job)
 		icon = "●"
 	end
 
-	local duration = ""
-	if job.started_at ~= "" and job.completed_at ~= "" then
-		duration = ("  (%s → %s)"):format(
-			job.started_at:sub(12, 19) or "",
-			job.completed_at:sub(12, 19) or ""
-		)
-	end
+	local duration = format_duration_range(job.started_at, job.completed_at)
 	return ("  %s %s%s"):format(icon, job.name, duration)
 end
 
@@ -156,7 +216,21 @@ local function format_step_line(step)
 		or step.status == "waiting" then
 		icon = "●"
 	end
-	return ("    %s %d. %s"):format(icon, step.number, step.name)
+	local duration = format_duration_range(
+		step.started_at or "",
+		step.completed_at or ""
+	)
+	return ("    %s %d. %s%s"):format(icon, step.number, step.name, duration)
+end
+
+---@param step GitflowActionStep
+---@return string|nil
+local function format_step_snippet_line(step)
+	local snippet = vim.trim(step.log_snippet or "")
+	if snippet == "" then
+		return nil
+	end
+	return ("      log: %s"):format(snippet)
 end
 
 ---@param runs GitflowActionRun[]
@@ -238,8 +312,20 @@ local function render_detail(run)
 	else
 		for _, job in ipairs(jobs) do
 			lines[#lines + 1] = format_job_line(job)
+			local has_step_snippet = false
 			for _, step in ipairs(job.steps or {}) do
 				lines[#lines + 1] = format_step_line(step)
+				local snippet_line = format_step_snippet_line(step)
+				if snippet_line then
+					has_step_snippet = true
+					lines[#lines + 1] = snippet_line
+				end
+			end
+			if not has_step_snippet then
+				local job_snippet = vim.trim(job.log_snippet or "")
+				if job_snippet ~= "" then
+					lines[#lines + 1] = ("    log: %s"):format(job_snippet)
+				end
 			end
 			lines[#lines + 1] = ""
 		end
@@ -280,14 +366,21 @@ function M.open(cfg)
 	M.state.cfg = cfg
 	M.state.view = "list"
 	M.state.detail_run = nil
+	next_request_id()
 	ensure_window(cfg)
+	setup_post_operation_autocmd()
 	M.refresh()
 end
 
 function M.refresh()
+	local request_id = next_request_id()
+
 	if M.state.view == "detail" and M.state.detail_run then
 		local run_id = M.state.detail_run.id
 		gh_actions.view(run_id, nil, function(err, run)
+			if not is_active_request(request_id, "detail") then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				return
@@ -299,10 +392,16 @@ function M.refresh()
 	end
 
 	git_branch.current({}, function(_, branch)
+		if not is_active_request(request_id, "list") then
+			return
+		end
 		gh_actions.list(
 			{ branch = branch, limit = 20 },
 			nil,
 			function(err, runs)
+				if not is_active_request(request_id, "list") then
+					return
+				end
 				if err then
 					utils.notify(err, vim.log.levels.ERROR)
 					return
@@ -326,7 +425,12 @@ function M.open_detail_under_cursor()
 	end
 
 	M.state.view = "detail"
+	M.state.detail_run = run
+	local request_id = next_request_id()
 	gh_actions.view(run.id, nil, function(err, detailed_run)
+		if not is_active_request(request_id, "detail") then
+			return
+		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
@@ -365,6 +469,9 @@ function M.back_to_list()
 end
 
 function M.close()
+	next_request_id()
+	clear_post_operation_autocmd()
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else

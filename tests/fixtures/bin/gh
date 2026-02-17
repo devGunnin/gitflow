@@ -231,7 +231,18 @@ case "$subcmd" in
         cat "$FIXTURE_DIR/run_list.json"
         ;;
       view)
-        cat "$FIXTURE_DIR/run_view.json"
+        case " $* " in
+          *" --log-failed "*)
+            if [ -f "$FIXTURE_DIR/run_view_log_failed.txt" ]; then
+              cat "$FIXTURE_DIR/run_view_log_failed.txt"
+            else
+              echo ""
+            fi
+            ;;
+          *)
+            cat "$FIXTURE_DIR/run_view.json"
+            ;;
+        esac
         ;;
       *)
         echo "gh stub: unknown run subcommand '$sub2'" >&2
