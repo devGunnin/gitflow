@@ -1164,8 +1164,12 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands.blame = {
-		description = "Open git blame panel for current file",
+		description = "Toggle git blame panel for current file",
 		run = function()
+			if blame_panel.is_open() then
+				blame_panel.close()
+				return "Blame panel closed"
+			end
 			blame_panel.open(cfg, {
 				on_open_commit = function(sha)
 					diff_panel.open(cfg, { commit = sha })

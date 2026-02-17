@@ -197,7 +197,8 @@ run_git(repo_dir, { "config", "user.email", "blame@example.com" })
 run_git(repo_dir, { "config", "user.name", "Blame Tester" })
 
 write_file(repo_dir .. "/test.txt", { "line one", "line two", "line three" })
-run_git(repo_dir, { "add", "test.txt" })
+write_file(repo_dir .. "/other.txt", { "other file line" })
+run_git(repo_dir, { "add", "test.txt", "other.txt" })
 run_git(repo_dir, { "commit", "-m", "initial blame test commit" })
 
 local commit_sha = vim.trim(
@@ -408,7 +409,7 @@ test("blame panel close should clean up state", function()
 	)
 end)
 
--- Test toggle: open -> close -> open
+-- Test toggle: open -> dispatch again -> close
 test("blame panel should support toggle behavior", function()
 	vim.cmd("edit " .. repo_dir .. "/test.txt")
 	commands.dispatch({ "blame" }, cfg)
@@ -416,15 +417,37 @@ test("blame panel should support toggle behavior", function()
 		return blame_panel.is_open()
 	end, "blame panel should re-open")
 
-	blame_panel.close()
+	commands.dispatch({ "blame" }, cfg)
+	vim.wait(100, function() return false end, 10)
 	assert_true(
 		not blame_panel.is_open(),
 		"blame panel should be closed after toggle-off"
 	)
 end)
 
+test("blame panel should target the current buffer when reopened", function()
+	vim.cmd("edit " .. repo_dir .. "/other.txt")
+	commands.dispatch({ "blame" }, cfg)
+	wait_until(function()
+		local bufnr = blame_panel.state.bufnr
+		if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+			return false
+		end
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		return find_line(lines, "other file line") ~= nil
+	end, "blame should target other.txt when opened from that buffer")
+
+	assert_true(
+		blame_panel.state.filepath:match("other%.txt$") ~= nil,
+		"blame filepath should be updated to current buffer"
+	)
+end)
+
 -- Test blame is included in close-all
 test("close subcommand should close blame panel", function()
+	if blame_panel.is_open() then
+		blame_panel.close()
+	end
 	vim.cmd("edit " .. repo_dir .. "/test.txt")
 	commands.dispatch({ "blame" }, cfg)
 	wait_until(function()

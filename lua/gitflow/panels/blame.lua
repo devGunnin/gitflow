@@ -222,6 +222,16 @@ local function entry_under_cursor()
 	return M.state.line_entries[line]
 end
 
+---@return string|nil
+local function resolve_open_filepath()
+	local current_buf = vim.api.nvim_get_current_buf()
+	local name = vim.api.nvim_buf_get_name(current_buf)
+	if name and name ~= "" and not name:match("^gitflow://") then
+		return name
+	end
+	return M.state.filepath
+end
+
 ---@param cfg GitflowConfig
 ---@param opts table|nil
 function M.open(cfg, opts)
@@ -229,13 +239,10 @@ function M.open(cfg, opts)
 	M.state.cfg = cfg
 	M.state.on_open_commit = options.on_open_commit
 
-	-- Resolve filepath from current buffer before opening the panel
-	if not M.state.filepath or M.state.filepath == "" then
-		local current_buf = vim.api.nvim_get_current_buf()
-		local name = vim.api.nvim_buf_get_name(current_buf)
-		if name and name ~= "" then
-			M.state.filepath = name
-		end
+	-- Always target the current non-panel buffer when opening blame.
+	local filepath = resolve_open_filepath()
+	if filepath and filepath ~= "" then
+		M.state.filepath = filepath
 	end
 
 	ensure_window(cfg)
