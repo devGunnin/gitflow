@@ -103,6 +103,7 @@ local registry = {
 		reset = { nerd = NF.commit, ascii = "R" },
 		revert = { nerd = NF.commit, ascii = "V" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
+		notifications = { nerd = NF.conflict, ascii = "N" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
 	},

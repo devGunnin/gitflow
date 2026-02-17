@@ -16,7 +16,12 @@ end
 ---@param level integer|nil
 ---@param opts GitflowNotifyOpts|nil
 function M.notify(message, level, opts)
-	vim.notify(message, level or vim.log.levels.INFO, {
+	local resolved_level = level or vim.log.levels.INFO
+	local ok, notif = pcall(require, "gitflow.notifications")
+	if ok and notif and type(notif.push) == "function" then
+		notif.push(message, resolved_level)
+	end
+	vim.notify(message, resolved_level, {
 		title = (opts and opts.title) or "gitflow",
 	})
 end
