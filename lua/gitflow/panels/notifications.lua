@@ -183,7 +183,7 @@ local function render(entries)
 
 	local count_text = ("%d entries"):format(#filtered)
 	local footer_lines = ui_render.panel_footer(
-		count_text, nil, render_opts
+		nil, count_text, render_opts
 	)
 	for _, line in ipairs(footer_lines) do
 		lines[#lines + 1] = line

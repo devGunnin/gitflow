@@ -260,6 +260,8 @@ T.run_suite("E2E: Notification Center", {
 		local has_error_label = false
 		local has_warn_label = false
 		local has_info_label = false
+		local has_count_footer = false
+		local has_branch_footer = false
 		for _, line in ipairs(lines) do
 			if line:find("[ERROR]", 1, true) then
 				has_error_label = true
@@ -269,6 +271,12 @@ T.run_suite("E2E: Notification Center", {
 			end
 			if line:find("[INFO]", 1, true) then
 				has_info_label = true
+			end
+			if line:find("3 entries", 1, true) then
+				has_count_footer = true
+			end
+			if line:find("Current branch:", 1, true) then
+				has_branch_footer = true
 			end
 		end
 
@@ -283,6 +291,14 @@ T.run_suite("E2E: Notification Center", {
 		T.assert_true(
 			has_info_label,
 			"should show [INFO] severity label"
+		)
+		T.assert_true(
+			has_count_footer,
+			"should show entry count in footer"
+		)
+		T.assert_false(
+			has_branch_footer,
+			"notifications footer should not render a branch label"
 		)
 
 		T.cleanup_panels()
