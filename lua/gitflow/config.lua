@@ -166,6 +166,7 @@ local VALID_PANEL_NAMES = {
 	status = true, branch = true, diff = true, review = true,
 	conflict = true, issues = true, prs = true, log = true,
 	stash = true, reset = true, revert = true, cherry_pick = true,
+	labels = true, palette = true,
 }
 
 local PANEL_DEFAULT_KEYS = {
@@ -220,23 +221,75 @@ local PANEL_DEFAULT_KEYS = {
 		select = "<CR>", pick_into_branch = "B", branch_picker = "b",
 		refresh = "r", close = "q",
 	},
+	labels = {
+		create = "c", delete = "d", refresh = "r", close = "q",
+	},
+	palette = {
+		prompt_close = "<Esc>", prompt_submit = "<CR>",
+		prompt_next_down = "<Down>", prompt_next_ctrl_n = "<C-n>",
+		prompt_next_tab = "<Tab>", prompt_next_ctrl_j = "<C-j>",
+		prompt_prev_up = "<Up>", prompt_prev_ctrl_p = "<C-p>",
+		prompt_prev_shift_tab = "<S-Tab>",
+		prompt_prev_ctrl_k = "<C-k>",
+		list_submit = "<CR>",
+		list_next_j = "j", list_next_ctrl_n = "<C-n>",
+		list_prev_k = "k", list_prev_ctrl_p = "<C-p>",
+		list_close = "q", list_close_esc = "<Esc>",
+		quick_select_1 = "1", quick_select_2 = "2",
+		quick_select_3 = "3", quick_select_4 = "4",
+		quick_select_5 = "5", quick_select_6 = "6",
+		quick_select_7 = "7", quick_select_8 = "8",
+		quick_select_9 = "9",
+	},
 }
 
 local PANEL_ACTION_MODES = {
 	review = {
 		inline_comment_visual = "v",
 	},
+	palette = {
+		prompt_close = "prompt",
+		prompt_submit = "prompt",
+		prompt_next_down = "prompt",
+		prompt_next_ctrl_n = "prompt",
+		prompt_next_tab = "prompt",
+		prompt_next_ctrl_j = "prompt",
+		prompt_prev_up = "prompt",
+		prompt_prev_ctrl_p = "prompt",
+		prompt_prev_shift_tab = "prompt",
+		prompt_prev_ctrl_k = "prompt",
+		list_submit = "list",
+		list_next_j = "list",
+		list_next_ctrl_n = "list",
+		list_prev_k = "list",
+		list_prev_ctrl_p = "list",
+		list_close = "list",
+		list_close_esc = "list",
+		quick_select_1 = { "prompt", "list" },
+		quick_select_2 = { "prompt", "list" },
+		quick_select_3 = { "prompt", "list" },
+		quick_select_4 = { "prompt", "list" },
+		quick_select_5 = { "prompt", "list" },
+		quick_select_6 = { "prompt", "list" },
+		quick_select_7 = { "prompt", "list" },
+		quick_select_8 = { "prompt", "list" },
+		quick_select_9 = { "prompt", "list" },
+	},
 }
 
 ---@param panel string
 ---@param action string
----@return string
-local function panel_action_mode(panel, action)
+---@return string[]
+local function panel_action_contexts(panel, action)
 	local panel_modes = PANEL_ACTION_MODES[panel]
 	if panel_modes and panel_modes[action] then
-		return panel_modes[action]
+		local context = panel_modes[action]
+		if type(context) == "table" then
+			return context
+		end
+		return { context }
 	end
-	return "n"
+	return { "n" }
 end
 
 ---@param config GitflowConfig
@@ -290,28 +343,30 @@ local function validate_panel_keybindings(config)
 			resolved[action] = mapping
 		end
 
-		local key_to_action = {
-			n = {},
-			v = {},
-		}
+		local key_to_action = {}
 		for action, mapping in pairs(resolved) do
-			local mode = panel_action_mode(panel, action)
-			local mode_key_map = key_to_action[mode] or {}
-			local existing = mode_key_map[mapping]
-			if existing and existing ~= action then
-				error(
-					("gitflow config error:"
-						.. " panel_keybindings.%s has conflicting"
-						.. " key '%s' for actions '%s' and"
-						.. " '%s'"):format(
-							panel, mapping,
-							existing, action
-						),
-					3
-				)
+			local contexts = panel_action_contexts(panel, action)
+			for _, mode in ipairs(contexts) do
+				local mode_key_map = key_to_action[mode]
+				if not mode_key_map then
+					mode_key_map = {}
+					key_to_action[mode] = mode_key_map
+				end
+				local existing = mode_key_map[mapping]
+				if existing and existing ~= action then
+					error(
+						("gitflow config error:"
+							.. " panel_keybindings.%s has conflicting"
+							.. " key '%s' for actions '%s' and"
+							.. " '%s'"):format(
+								panel, mapping,
+								existing, action
+							),
+						3
+					)
+				end
+				mode_key_map[mapping] = action
 			end
-			mode_key_map[mapping] = action
-			key_to_action[mode] = mode_key_map
 		end
 	end
 end

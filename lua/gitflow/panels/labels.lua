@@ -5,6 +5,7 @@ local input = require("gitflow.ui.input")
 local form = require("gitflow.ui.form")
 local gh_labels = require("gitflow.gh.labels")
 local highlights = require("gitflow.highlights")
+local config = require("gitflow.config")
 
 local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
 local LABELS_FLOAT_TITLE = "Gitflow Labels"
@@ -71,19 +72,25 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "c", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "labels", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("create", "c"), function()
 		M.create_interactive()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "d", function()
+	vim.keymap.set("n", pk("delete", "d"), function()
 		M.delete_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

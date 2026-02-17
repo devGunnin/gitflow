@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
+local config = require("gitflow.config")
 
 ---@class GitflowPaletteEntry
 ---@field name string
@@ -652,6 +653,12 @@ local function apply_keymaps()
 	if not prompt_bufnr or not list_bufnr then
 		return
 	end
+	local cfg = M.state.cfg or config.current
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "palette", action, default
+		)
+	end
 
 	local prompt_normal_opts = {
 		buffer = prompt_bufnr, silent = true, nowait = true,
@@ -666,34 +673,40 @@ local function apply_keymaps()
 		buffer = list_bufnr, silent = true, nowait = true,
 	}
 	local prompt_navigation_keys = {
-		{ key = "<Down>", delta = 1 },
-		{ key = "<Up>", delta = -1 },
-		{ key = "<C-n>", delta = 1 },
-		{ key = "<C-p>", delta = -1 },
-		{ key = "<Tab>", delta = 1 },
-		{ key = "<S-Tab>", delta = -1 },
-		{ key = "<C-j>", delta = 1 },
-		{ key = "<C-k>", delta = -1 },
+		{ action = "prompt_next_down", key = "<Down>", delta = 1 },
+		{ action = "prompt_prev_up", key = "<Up>", delta = -1 },
+		{ action = "prompt_next_ctrl_n", key = "<C-n>", delta = 1 },
+		{ action = "prompt_prev_ctrl_p", key = "<C-p>", delta = -1 },
+		{ action = "prompt_next_tab", key = "<Tab>", delta = 1 },
+		{
+			action = "prompt_prev_shift_tab",
+			key = "<S-Tab>",
+			delta = -1,
+		},
+		{ action = "prompt_next_ctrl_j", key = "<C-j>", delta = 1 },
+		{ action = "prompt_prev_ctrl_k", key = "<C-k>", delta = -1 },
 	}
 
-	vim.keymap.set({ "n", "i" }, "<Esc>", function()
+	vim.keymap.set({ "n", "i" }, pk("prompt_close", "<Esc>"), function()
 		M.close()
 	end, prompt_normal_opts)
-	vim.keymap.set({ "n", "i" }, "<CR>", function()
+	vim.keymap.set({ "n", "i" }, pk("prompt_submit", "<CR>"), function()
 		execute_selected()
 	end, prompt_normal_opts)
 	for _, mapping in ipairs(prompt_navigation_keys) do
-		vim.keymap.set("n", mapping.key, function()
+		local key = pk(mapping.action, mapping.key)
+		vim.keymap.set("n", key, function()
 			move_selection(mapping.delta)
 		end, prompt_normal_opts)
-		vim.keymap.set("i", mapping.key, function()
+		vim.keymap.set("i", key, function()
 			move_selection(mapping.delta)
 			return ""
 		end, prompt_insert_opts)
 	end
 
 	for i = 1, 9 do
-		local num_key = tostring(i)
+		local action = ("quick_select_%d"):format(i)
+		local num_key = pk(action, tostring(i))
 		vim.keymap.set("n", num_key, function()
 			local entry = M.state.numbered_entries[i]
 			if entry then
@@ -717,25 +730,25 @@ local function apply_keymaps()
 		end, list_opts)
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	vim.keymap.set("n", pk("list_submit", "<CR>"), function()
 		execute_selected()
 	end, list_opts)
-	vim.keymap.set("n", "j", function()
+	vim.keymap.set("n", pk("list_next_j", "j"), function()
 		move_selection(1)
 	end, list_opts)
-	vim.keymap.set("n", "k", function()
+	vim.keymap.set("n", pk("list_prev_k", "k"), function()
 		move_selection(-1)
 	end, list_opts)
-	vim.keymap.set("n", "<C-n>", function()
+	vim.keymap.set("n", pk("list_next_ctrl_n", "<C-n>"), function()
 		move_selection(1)
 	end, list_opts)
-	vim.keymap.set("n", "<C-p>", function()
+	vim.keymap.set("n", pk("list_prev_ctrl_p", "<C-p>"), function()
 		move_selection(-1)
 	end, list_opts)
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("list_close", "q"), function()
 		M.close()
 	end, list_opts)
-	vim.keymap.set("n", "<Esc>", function()
+	vim.keymap.set("n", pk("list_close_esc", "<Esc>"), function()
 		M.close()
 	end, list_opts)
 end

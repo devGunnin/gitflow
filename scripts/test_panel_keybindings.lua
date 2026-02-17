@@ -64,6 +64,20 @@ local function assert_error(fn, pattern, message)
 	end
 end
 
+local function find_buf_map(buf, mode, lhs)
+	local maps = vim.api.nvim_buf_get_keymap(buf, mode)
+	local target = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+	for _, m in ipairs(maps) do
+		local mlhs = vim.api.nvim_replace_termcodes(
+			m.lhs, true, true, true
+		)
+		if mlhs == target then
+			return m
+		end
+	end
+	return nil
+end
+
 -- ── Test 1: Default setup with empty panel_keybindings ──────────────
 io.write("\n[1] Default panel_keybindings\n")
 
@@ -244,8 +258,48 @@ assert_true(
 	"should allow overrides when all resulting panel keys are unique"
 )
 
--- ── Test 12: Non-table panel_keybindings ────────────────────────────
-io.write("\n[12] Validation: non-table panel_keybindings\n")
+-- ── Test 12: Palette context-aware conflict detection ────────────────
+io.write("\n[12] Palette context-aware conflict detection\n")
+
+local ok_palette_context = pcall(function()
+	gitflow.setup({
+		panel_keybindings = {
+			palette = {
+				prompt_submit = "X",
+				list_submit = "X",
+			},
+		},
+	})
+end)
+assert_true(
+	ok_palette_context,
+	"should allow same key for palette prompt/list contexts"
+)
+
+assert_error(function()
+	gitflow.setup({
+		panel_keybindings = {
+			palette = {
+				list_submit = "q",
+			},
+		},
+	})
+end, "conflicting key",
+	"should reject palette duplicates within the same context")
+
+assert_error(function()
+	gitflow.setup({
+		panel_keybindings = {
+			palette = {
+				quick_select_1 = "q",
+			},
+		},
+	})
+end, "conflicting key",
+	"should reject quick-select key collisions with list keys")
+
+-- ── Test 13: Non-table panel_keybindings ────────────────────────────
+io.write("\n[13] Validation: non-table panel_keybindings\n")
 
 assert_error(function()
 	gitflow.setup({
@@ -254,13 +308,13 @@ assert_error(function()
 end, "must be a table",
 	"should reject non-table panel_keybindings")
 
--- ── Test 13: Valid panel names accepted ─────────────────────────────
-io.write("\n[13] All valid panel names accepted\n")
+-- ── Test 14: Valid panel names accepted ─────────────────────────────
+io.write("\n[14] All valid panel names accepted\n")
 
 local valid_panels = {
 	"status", "branch", "diff", "review", "conflict",
 	"issues", "prs", "log", "stash", "reset",
-	"revert", "cherry_pick",
+	"revert", "cherry_pick", "labels", "palette",
 }
 
 for _, panel in ipairs(valid_panels) do
@@ -274,8 +328,8 @@ for _, panel in ipairs(valid_panels) do
 	assert_true(ok, "panel name '" .. panel .. "' should be valid")
 end
 
--- ── Test 14: E2E — overridden key works on status buffer ────────────
-io.write("\n[14] E2E: overridden status panel keybinding\n")
+-- ── Test 15: E2E — overridden key works on status buffer ────────────
+io.write("\n[15] E2E: overridden status panel keybinding\n")
 
 local e2e_cfg = gitflow.setup({
 	ui = {
@@ -337,27 +391,12 @@ utils.system = function(cmd, opts)
 end
 
 local status_panel = require("gitflow.panels.status")
-local ui = require("gitflow.ui")
 
 -- Open the status panel
 status_panel.open(e2e_cfg)
 vim.wait(200, function() return false end)
 
 local bufnr = status_panel.state.bufnr
-
-local function find_buf_map(buf, mode, lhs)
-	local maps = vim.api.nvim_buf_get_keymap(buf, mode)
-	local target = vim.api.nvim_replace_termcodes(lhs, true, true, true)
-	for _, m in ipairs(maps) do
-		local mlhs = vim.api.nvim_replace_termcodes(
-			m.lhs, true, true, true
-		)
-		if mlhs == target then
-			return m
-		end
-	end
-	return nil
-end
 
 if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
 	-- The overridden key "S" should be mapped (for stage)
@@ -405,6 +444,160 @@ end
 -- Cleanup
 status_panel.close()
 utils.system = orig_system
+
+-- ── Test 16: E2E — overridden key works on labels buffer ────────────
+io.write("\n[16] E2E: overridden labels panel keybinding\n")
+
+local labels_cfg = gitflow.setup({
+	ui = {
+		default_layout = "split",
+		split = { orientation = "vertical", size = 40 },
+	},
+	panel_keybindings = {
+		labels = {
+			create = "n",
+			close = "Q",
+		},
+	},
+})
+
+local labels_panel = require("gitflow.panels.labels")
+local gh_labels = require("gitflow.gh.labels")
+local orig_labels_list = gh_labels.list
+gh_labels.list = function(_, cb)
+	cb(nil, {})
+end
+
+labels_panel.open(labels_cfg)
+vim.wait(200, function() return false end)
+
+local labels_bufnr = labels_panel.state.bufnr
+if labels_bufnr and vim.api.nvim_buf_is_valid(labels_bufnr) then
+	assert_true(
+		find_buf_map(labels_bufnr, "n", "n") ~= nil,
+		"overridden labels key 'n' should be mapped for create"
+	)
+	assert_true(
+		find_buf_map(labels_bufnr, "n", "c") == nil,
+		"default labels key 'c' should not remain mapped"
+	)
+	assert_true(
+		find_buf_map(labels_bufnr, "n", "Q") ~= nil,
+		"overridden labels key 'Q' should be mapped for close"
+	)
+	assert_true(
+		find_buf_map(labels_bufnr, "n", "q") == nil,
+		"default labels key 'q' should not remain mapped"
+	)
+else
+	assert_true(false, "labels panel buffer should be valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+end
+
+labels_panel.close()
+gh_labels.list = orig_labels_list
+
+-- ── Test 17: E2E — overridden key works on palette buffers ──────────
+io.write("\n[17] E2E: overridden palette panel keybinding\n")
+
+local palette_cfg = gitflow.setup({
+	panel_keybindings = {
+		palette = {
+			prompt_close = "Z",
+			prompt_submit = "X",
+			prompt_next_down = "N",
+			prompt_prev_up = "P",
+			list_submit = "L",
+			list_next_j = "J",
+			list_prev_k = "K",
+			list_close = "Q",
+			list_close_esc = "E",
+			quick_select_1 = "0",
+		},
+	},
+})
+
+local palette_panel = require("gitflow.panels.palette")
+palette_panel.open(palette_cfg, {
+	{
+		name = "status",
+		description = "Open status panel",
+		category = "Git",
+	},
+}, function() end)
+vim.wait(200, function() return false end)
+
+local prompt_bufnr = palette_panel.state.prompt_bufnr
+local list_bufnr = palette_panel.state.list_bufnr
+if prompt_bufnr and list_bufnr
+	and vim.api.nvim_buf_is_valid(prompt_bufnr)
+	and vim.api.nvim_buf_is_valid(list_bufnr) then
+	assert_true(
+		find_buf_map(prompt_bufnr, "n", "X") ~= nil,
+		"overridden palette prompt key 'X' should submit"
+	)
+	assert_true(
+		find_buf_map(prompt_bufnr, "n", "<CR>") == nil,
+		"default palette prompt '<CR>' should not remain mapped"
+	)
+	assert_true(
+		find_buf_map(prompt_bufnr, "n", "Z") ~= nil,
+		"overridden palette prompt key 'Z' should close"
+	)
+	assert_true(
+		find_buf_map(prompt_bufnr, "n", "<Esc>") == nil,
+		"default palette prompt '<Esc>' should not remain mapped"
+	)
+	assert_true(
+		find_buf_map(prompt_bufnr, "n", "0") ~= nil,
+		"overridden quick-select key '0' should be mapped"
+	)
+	assert_true(
+		find_buf_map(prompt_bufnr, "n", "1") == nil,
+		"default quick-select key '1' should not remain mapped"
+	)
+	assert_true(
+		find_buf_map(list_bufnr, "n", "L") ~= nil,
+		"overridden palette list key 'L' should submit"
+	)
+	assert_true(
+		find_buf_map(list_bufnr, "n", "<CR>") == nil,
+		"default palette list '<CR>' should not remain mapped"
+	)
+	assert_true(
+		find_buf_map(list_bufnr, "n", "Q") ~= nil,
+		"overridden palette list key 'Q' should close"
+	)
+	assert_true(
+		find_buf_map(list_bufnr, "n", "q") == nil,
+		"default palette list 'q' should not remain mapped"
+	)
+	assert_true(
+		find_buf_map(list_bufnr, "n", "E") ~= nil,
+		"overridden palette list key 'E' should close"
+	)
+	assert_true(
+		find_buf_map(list_bufnr, "n", "<Esc>") == nil,
+		"default palette list '<Esc>' should not remain mapped"
+	)
+else
+	assert_true(false, "palette prompt/list buffers should be valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+end
+
+palette_panel.close()
 
 -- ── Summary ─────────────────────────────────────────────────────────
 io.write(("\n%d passed, %d failed\n"):format(pass_count, fail_count))

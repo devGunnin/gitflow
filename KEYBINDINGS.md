@@ -236,12 +236,12 @@ Buffer-local bindings in the merged pane of the 3-way conflict editor.
 
 Buffer-local bindings active in the label panel (`:Gitflow label list`).
 
-| Key | Action |
-| --- | --- |
-| `c` | Create new label |
-| `d` | Delete label under cursor |
-| `r` | Refresh |
-| `q` | Close |
+| Key | Action | Action Name |
+| --- | --- | --- |
+| `c` | Create new label | `create` |
+| `d` | Delete label under cursor | `delete` |
+| `r` | Refresh | `refresh` |
+| `q` | Close | `close` |
 
 ## Command Palette
 
@@ -249,21 +249,32 @@ Bindings active in the command palette (`:Gitflow palette`).
 
 ### Prompt (Insert/Normal Mode)
 
-| Key | Action |
-| --- | --- |
-| `<CR>` | Select highlighted command |
-| `<Esc>` | Close palette |
-| `<Down>` / `<C-n>` / `<Tab>` / `<C-j>` | Move selection down |
-| `<Up>` / `<C-p>` / `<S-Tab>` / `<C-k>` | Move selection up |
+| Key | Action | Action Name |
+| --- | --- | --- |
+| `<CR>` | Select highlighted command | `prompt_submit` |
+| `<Esc>` | Close palette | `prompt_close` |
+| `<Down>` | Move selection down | `prompt_next_down` |
+| `<C-n>` | Move selection down | `prompt_next_ctrl_n` |
+| `<Tab>` | Move selection down | `prompt_next_tab` |
+| `<C-j>` | Move selection down | `prompt_next_ctrl_j` |
+| `<Up>` | Move selection up | `prompt_prev_up` |
+| `<C-p>` | Move selection up | `prompt_prev_ctrl_p` |
+| `<S-Tab>` | Move selection up | `prompt_prev_shift_tab` |
+| `<C-k>` | Move selection up | `prompt_prev_ctrl_k` |
+| `1`-`9` | Quick-select numbered entries | `quick_select_1` ... `quick_select_9` |
 
 ### List (Normal Mode)
 
-| Key | Action |
-| --- | --- |
-| `<CR>` | Select highlighted command |
-| `j` / `<C-n>` | Move selection down |
-| `k` / `<C-p>` | Move selection up |
-| `q` / `<Esc>` | Close palette |
+| Key | Action | Action Name |
+| --- | --- | --- |
+| `<CR>` | Select highlighted command | `list_submit` |
+| `j` | Move selection down | `list_next_j` |
+| `<C-n>` | Move selection down | `list_next_ctrl_n` |
+| `k` | Move selection up | `list_prev_k` |
+| `<C-p>` | Move selection up | `list_prev_ctrl_p` |
+| `q` | Close palette | `list_close` |
+| `<Esc>` | Close palette | `list_close_esc` |
+| `1`-`9` | Quick-select numbered entries | `quick_select_1` ... `quick_select_9` |
 
 ## Overriding Keybindings
 
@@ -315,4 +326,5 @@ defaults. Validation rejects duplicate keys within the same panel
 (e.g., mapping two actions to the same key).
 
 Valid panel names: `status`, `branch`, `diff`, `review`, `conflict`,
-`issues`, `prs`, `log`, `stash`, `reset`, `revert`, `cherry_pick`.
+`issues`, `prs`, `log`, `stash`, `reset`, `revert`, `cherry_pick`,
+`labels`, `palette`.
