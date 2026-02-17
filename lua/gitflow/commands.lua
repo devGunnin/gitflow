@@ -23,6 +23,8 @@ local palette_panel = require("gitflow.panels.palette")
 local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
+local tag_panel = require("gitflow.panels.tag")
+local git_tag = require("gitflow.git.tag")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -1022,6 +1024,8 @@ local function register_builtin_subcommands(cfg)
 			conflict_panel.close()
 			reset_panel.close()
 			cherry_pick_panel.close()
+			revert_panel.close()
+			tag_panel.close()
 			palette_panel.close()
 			return "Gitflow panels closed"
 		end,
@@ -1158,6 +1162,99 @@ local function register_builtin_subcommands(cfg)
 		run = function()
 			revert_panel.open(cfg)
 			return "Revert panel opened"
+		end,
+	}
+
+	M.subcommands.tag = {
+		description = "Tag operations: list|create|delete|push",
+		run = function(ctx)
+			local action = ctx.args[2] or "list"
+			if action == "list" then
+				tag_panel.open(cfg)
+				return "Tag panel opened"
+			end
+
+			if action == "create" then
+				local name = trimmed_or_nil(ctx.args[3])
+				if not name then
+					return "Usage: :Gitflow tag create <name> [message]"
+				end
+				local message = nil
+				if ctx.args[4] then
+					message = table.concat(ctx.args, " ", 4)
+					if vim.trim(message) == "" then
+						message = nil
+					end
+				end
+				git_tag.create(
+					name,
+					{ message = message },
+					function(err)
+						if err then
+							show_error(err)
+							return
+						end
+						local label = message
+							and "annotated" or "lightweight"
+						show_info(
+							("Created %s tag '%s'"):format(
+								label, name
+							)
+						)
+						if tag_panel.is_open() then
+							tag_panel.refresh()
+						end
+						emit_post_operation()
+					end
+				)
+				return ("Creating tag '%s'..."):format(name)
+			end
+
+			if action == "delete" then
+				local name = trimmed_or_nil(ctx.args[3])
+				if not name then
+					return "Usage: :Gitflow tag delete <name>"
+				end
+				git_tag.delete(name, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(
+						("Deleted tag '%s'"):format(name)
+					)
+					if tag_panel.is_open() then
+						tag_panel.refresh()
+					end
+					emit_post_operation()
+				end)
+				return ("Deleting tag '%s'..."):format(name)
+			end
+
+			if action == "push" then
+				local name = trimmed_or_nil(ctx.args[3])
+				if not name then
+					return "Usage: :Gitflow tag push <name> [remote]"
+				end
+				local remote = trimmed_or_nil(ctx.args[4])
+				git_tag.push(
+					name,
+					remote,
+					{},
+					function(err)
+						if err then
+							show_error(err)
+							return
+						end
+						show_info(
+							("Pushed tag '%s'"):format(name)
+						)
+					end
+				)
+				return ("Pushing tag '%s'..."):format(name)
+			end
+
+			return ("Unknown tag action: %s"):format(action)
 		end,
 	}
 
@@ -1916,6 +2013,7 @@ local pr_actions = {
 	"create", "comment", "merge", "checkout", "close", "edit",
 }
 local label_actions = { "list", "create", "delete" }
+local tag_actions = { "list", "create", "delete", "push" }
 
 ---@param cmdline string
 ---@param args string[]
@@ -2171,6 +2269,12 @@ function M.complete(arglead, cmdline, _cursorpos)
 		end
 		return complete_label(args[3], arglead)
 	end
+	if subcommand == "tag" then
+		if completing_action(cmdline, args) then
+			return filter_candidates(arglead, tag_actions)
+		end
+		return {}
+	end
 
 	return {}
 end
@@ -2213,6 +2317,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowPalette)", "<Cmd>Gitflow palette<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowReset)", "<Cmd>Gitflow reset<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowRevert)", "<Cmd>Gitflow revert<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowTag)", "<Cmd>Gitflow tag list<CR>", { silent = true })
 	vim.keymap.set(
 		"n",
 		"<Plug>(GitflowCherryPick)",
@@ -2243,6 +2348,7 @@ function M.setup(cfg)
 		label = "<Plug>(GitflowLabel)",
 		reset = "<Plug>(GitflowReset)",
 		revert = "<Plug>(GitflowRevert)",
+		tag = "<Plug>(GitflowTag)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",

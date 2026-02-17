@@ -15,6 +15,7 @@ local NF = {
 	unstaged = "\u{f444}",         -- nf-oct-circle_slash
 	untracked = "\u{f128}",        -- nf-fa-question
 	commit = "\u{f417}",           -- nf-oct-git_commit
+	tag = "\u{f412}",             -- nf-oct-tag
 	-- github
 	pr_open = "\u{f407}",          -- nf-oct-git_pull_request
 	pr_merged = "\u{f43f}",        -- nf-oct-git_merge
@@ -52,6 +53,7 @@ local registry = {
 		unstaged = { nerd = NF.unstaged, ascii = "U" },
 		untracked = { nerd = NF.untracked, ascii = "?" },
 		commit = { nerd = NF.commit, ascii = "*" },
+		tag = { nerd = NF.tag, ascii = "T" },
 	},
 	github = {
 		pr_open = { nerd = NF.pr_open, ascii = "[open]" },
@@ -102,6 +104,7 @@ local registry = {
 		review = { nerd = NF.review_commented, ascii = "R" },
 		reset = { nerd = NF.commit, ascii = "R" },
 		revert = { nerd = NF.commit, ascii = "V" },
+		tag = { nerd = NF.tag, ascii = "T" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
