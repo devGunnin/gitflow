@@ -23,8 +23,13 @@ local config = require("gitflow.config")
 
 local M = {}
 local CP_FLOAT_TITLE = "Gitflow Cherry Pick"
-local CP_FLOAT_FOOTER_COMMITS =
-	"<CR> pick  B into branch  b branches  r refresh  q close"
+local CP_FLOAT_FOOTER_HINTS = {
+	{ action = "select", default = "<CR>", label = "pick" },
+	{ action = "pick_into_branch", default = "B", label = "into branch" },
+	{ action = "branch_picker", default = "b", label = "branches" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 local CP_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_cherry_pick_hl")
 
@@ -103,6 +108,14 @@ local function emit_post_operation()
 end
 
 ---@param cfg GitflowConfig
+---@return string
+local function cherry_pick_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "cherry_pick", CP_FLOAT_FOOTER_HINTS
+	)
+end
+
+---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
 		and vim.api.nvim_buf_is_valid(M.state.bufnr)
@@ -136,7 +149,7 @@ local function ensure_window(cfg)
 			title = CP_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer
-				and CP_FLOAT_FOOTER_COMMITS or nil,
+				and cherry_pick_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

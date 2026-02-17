@@ -18,7 +18,11 @@ local config = require("gitflow.config")
 
 local M = {}
 local LOG_FLOAT_TITLE = "Gitflow Log"
-local LOG_FLOAT_FOOTER = "<CR> open commit diff  r refresh  q close"
+local LOG_FLOAT_FOOTER_HINTS = {
+	{ action = "open_commit", default = "<CR>", label = "open commit diff" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
@@ -29,6 +33,14 @@ M.state = {
 	cfg = nil,
 	opts = {},
 }
+
+---@param cfg GitflowConfig
+---@return string
+local function log_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "log", LOG_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -57,7 +69,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = LOG_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and LOG_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and log_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

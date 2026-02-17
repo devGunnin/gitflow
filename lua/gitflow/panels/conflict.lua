@@ -26,8 +26,13 @@ local config = require("gitflow.config")
 local M = {}
 local CONFLICT_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_conflict_hl")
 local CONFLICT_FLOAT_TITLE = "Gitflow Conflicts"
-local CONFLICT_FLOAT_FOOTER =
-	"<CR> open 3-way  r refresh  C continue  A abort  q close"
+local CONFLICT_FLOAT_FOOTER_HINTS = {
+	{ action = "open", default = "<CR>", label = "open 3-way" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "continue", default = "C", label = "continue" },
+	{ action = "abort", default = "A", label = "abort" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowConflictPanelState
 M.state = {
@@ -84,6 +89,14 @@ local function reset_auto_continue_prompt()
 end
 
 ---@param cfg GitflowConfig
+---@return string
+local function conflict_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "conflict", CONFLICT_FLOAT_FOOTER_HINTS
+	)
+end
+
+---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
 	if not bufnr then
@@ -110,7 +123,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = CONFLICT_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and CONFLICT_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and conflict_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

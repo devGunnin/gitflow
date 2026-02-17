@@ -18,8 +18,11 @@ local config = require("gitflow.config")
 
 local M = {}
 local REVERT_FLOAT_TITLE = "Gitflow Revert"
-local REVERT_FLOAT_FOOTER =
-	"<CR> revert  1-9 by position  r refresh  q close"
+local REVERT_FLOAT_FOOTER_HINTS = {
+	{ action = "select", default = "<CR>", label = "revert" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 local REVERT_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_revert_hl")
 
@@ -42,6 +45,33 @@ local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
 		"User", { pattern = "GitflowPostOperation" }
 	)
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function revert_float_footer(cfg)
+	local hints = {
+		{
+			key = config.resolve_panel_key(
+				cfg, "revert", "select", "<CR>"
+			),
+			action = "revert",
+		},
+		{ key = "1-9", action = "by position" },
+	}
+
+	for _, hint in ipairs(REVERT_FLOAT_FOOTER_HINTS) do
+		if hint.action ~= "select" then
+			hints[#hints + 1] = {
+				key = config.resolve_panel_key(
+					cfg, "revert", hint.action, hint.default
+				),
+				action = hint.label,
+			}
+		end
+	end
+
+	return ui_render.format_key_hints(hints)
 end
 
 ---@param cfg GitflowConfig
@@ -78,7 +108,7 @@ local function ensure_window(cfg)
 			title = REVERT_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer
-				and REVERT_FLOAT_FOOTER or nil,
+				and revert_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

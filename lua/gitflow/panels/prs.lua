@@ -27,9 +27,19 @@ local config = require("gitflow.config")
 local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
 local PRS_FLOAT_TITLE = "Gitflow Pull Requests"
-local PRS_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  L labels  A assign  m merge"
-	.. "  o checkout  v review  r refresh  b back  q close"
+local PRS_FLOAT_FOOTER_HINTS = {
+	{ action = "view", default = "<CR>", label = "view" },
+	{ action = "create", default = "c", label = "create" },
+	{ action = "comment", default = "C", label = "comment" },
+	{ action = "labels", default = "L", label = "labels" },
+	{ action = "assign", default = "A", label = "assign" },
+	{ action = "merge", default = "m", label = "merge" },
+	{ action = "checkout", default = "o", label = "checkout" },
+	{ action = "review", default = "v", label = "review" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "back", default = "b", label = "back" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -41,6 +51,14 @@ M.state = {
 	mode = "list",
 	active_pr_number = nil,
 }
+
+---@param cfg GitflowConfig
+---@return string
+local function prs_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "prs", PRS_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -69,7 +87,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = PRS_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and PRS_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and prs_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

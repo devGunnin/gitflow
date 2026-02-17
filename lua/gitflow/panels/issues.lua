@@ -25,9 +25,17 @@ local config = require("gitflow.config")
 local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "Gitflow Issues"
-local ISSUES_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  x close  L labels  A assign"
-	.. "  r refresh  b back  q close"
+local ISSUES_FLOAT_FOOTER_HINTS = {
+	{ action = "view", default = "<CR>", label = "view" },
+	{ action = "create", default = "c", label = "create" },
+	{ action = "comment", default = "C", label = "comment" },
+	{ action = "close_issue", default = "x", label = "close issue" },
+	{ action = "labels", default = "L", label = "labels" },
+	{ action = "assign", default = "A", label = "assign" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "back", default = "b", label = "back" },
+	{ action = "close", default = "q", label = "close panel" },
+}
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -39,6 +47,14 @@ M.state = {
 	mode = "list",
 	active_issue_number = nil,
 }
+
+---@param cfg GitflowConfig
+---@return string
+local function issues_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "issues", ISSUES_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -67,7 +83,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = ISSUES_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and ISSUES_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and issues_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

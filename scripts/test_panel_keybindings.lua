@@ -742,6 +742,56 @@ end
 
 palette_panel.close()
 
+-- ── Test 19: E2E — stash float footer reflects overrides ─────────────
+io.write("\n[19] E2E: stash float footer uses overridden keys\n")
+
+local stash_cfg = gitflow.setup({
+	panel_keybindings = {
+		stash = {
+			pop = "X",
+			close = "Q",
+		},
+	},
+})
+
+local stash_panel = require("gitflow.panels.stash")
+local git_stash = require("gitflow.git.stash")
+local git_branch = require("gitflow.git.branch")
+local orig_stash_list = git_stash.list
+local orig_branch_current = git_branch.current
+
+git_stash.list = function(_, cb)
+	cb(nil, {})
+end
+git_branch.current = function(_, cb)
+	cb(nil, "main")
+end
+
+stash_panel.open(stash_cfg)
+vim.wait(200, function() return false end)
+
+local stash_footer = window_footer_text(stash_panel.state.winid)
+assert_true(
+	stash_footer:find("X pop", 1, true) ~= nil,
+	"stash footer should show overridden pop key"
+)
+assert_true(
+	stash_footer:find("Q close", 1, true) ~= nil,
+	"stash footer should show overridden close key"
+)
+assert_true(
+	stash_footer:find("P pop", 1, true) == nil,
+	"stash footer should not show default pop key after override"
+)
+assert_true(
+	stash_footer:find("q close", 1, true) == nil,
+	"stash footer should not show default close key after override"
+)
+
+stash_panel.close()
+git_stash.list = orig_stash_list
+git_branch.current = orig_branch_current
+
 -- ── Summary ─────────────────────────────────────────────────────────
 io.write(("\n%d passed, %d failed\n"):format(pass_count, fail_count))
 if fail_count > 0 then

@@ -16,7 +16,13 @@ local config = require("gitflow.config")
 local M = {}
 local STASH_FLOAT_TITLE = "Gitflow Stash"
 local STASH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_stash_hl")
-local STASH_FLOAT_FOOTER = "P pop  D drop  S stash  r refresh  q close"
+local STASH_FLOAT_FOOTER_HINTS = {
+	{ action = "pop", default = "P", label = "pop" },
+	{ action = "drop", default = "D", label = "drop" },
+	{ action = "stash", default = "S", label = "stash" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowStashPanelState
 M.state = {
@@ -30,6 +36,14 @@ local function refresh_status_panel_if_open()
 	if status_panel.is_open() then
 		status_panel.refresh()
 	end
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function stash_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "stash", STASH_FLOAT_FOOTER_HINTS
+	)
 end
 
 ---@param cfg GitflowConfig
@@ -59,7 +73,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = STASH_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STASH_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and stash_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

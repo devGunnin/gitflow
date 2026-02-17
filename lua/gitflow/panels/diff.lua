@@ -17,8 +17,14 @@ local M = {}
 local DIFF_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_diff_hl")
 local DIFF_LINENR_NS = vim.api.nvim_create_namespace("gitflow_diff_linenr")
 local DIFF_FLOAT_TITLE = "Gitflow Diff"
-local DIFF_FLOAT_FOOTER =
-	"]f/[f files  ]c/[c hunks  r refresh  q close"
+local DIFF_FLOAT_FOOTER_HINTS = {
+	{ action = "next_file", default = "]f", label = "next file" },
+	{ action = "prev_file", default = "[f", label = "prev file" },
+	{ action = "next_hunk", default = "]c", label = "next hunk" },
+	{ action = "prev_hunk", default = "[c", label = "prev hunk" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowDiffPanelState
 M.state = {
@@ -124,6 +130,14 @@ function M.prev_hunk()
 end
 
 ---@param cfg GitflowConfig
+---@return string
+local function diff_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "diff", DIFF_FLOAT_FOOTER_HINTS
+	)
+end
+
+---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
 		and vim.api.nvim_buf_is_valid(M.state.bufnr)
@@ -162,7 +176,7 @@ local function ensure_window(cfg)
 			title = DIFF_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer
-				and DIFF_FLOAT_FOOTER or nil,
+				and diff_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
