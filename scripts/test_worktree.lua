@@ -627,6 +627,146 @@ test("line_entries populated after render", function()
 	wt_panel.close()
 end)
 
+test("switch_under_cursor changes cwd to selected worktree", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	local ui_input = require("gitflow.ui.input")
+	local wt_path = repo_dir .. "/wt-switch"
+	local previous_cwd = vim.fn.getcwd()
+
+	run_git(repo_dir, { "worktree", "add", wt_path, "feature" })
+
+	local original_confirm = ui_input.confirm
+	local ok, err = pcall(function()
+		wt_panel.open(cfg)
+		vim.wait(2000, function()
+			for _, entry in pairs(wt_panel.state.line_entries) do
+				if entry.path == wt_path then
+					return true
+				end
+			end
+			return false
+		end, 50)
+
+		local target_line = nil
+		for line_no, entry in pairs(wt_panel.state.line_entries) do
+			if entry.path == wt_path then
+				target_line = line_no
+				break
+			end
+		end
+		assert_true(
+			target_line ~= nil,
+			"switch target worktree should be rendered"
+		)
+
+		ui_input.confirm = function()
+			return true, 1
+		end
+		vim.api.nvim_set_current_win(wt_panel.state.winid)
+		vim.api.nvim_win_set_cursor(
+			wt_panel.state.winid,
+			{ target_line, 0 }
+		)
+		wt_panel.switch_under_cursor()
+		assert_equals(
+			vim.fn.getcwd(),
+			wt_path,
+			"switch should change cwd to selected worktree"
+		)
+	end)
+
+	ui_input.confirm = original_confirm
+	vim.fn.chdir(previous_cwd)
+	wt_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test("switch_under_cursor handles cd failures without throwing", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	local ui_input = require("gitflow.ui.input")
+	local utils = require("gitflow.utils")
+	local original_confirm = ui_input.confirm
+	local original_notify = utils.notify
+	local previous_cwd = vim.fn.getcwd()
+	local notifications = {}
+
+	local ok, err = pcall(function()
+		wt_panel.open(cfg)
+		vim.wait(1500, function()
+			return wt_panel.state.bufnr ~= nil
+		end, 50)
+
+		ui_input.confirm = function()
+			return true, 1
+		end
+		utils.notify = function(message, level)
+			notifications[#notifications + 1] = {
+				message = tostring(message),
+				level = level,
+			}
+		end
+
+		vim.api.nvim_set_current_win(wt_panel.state.winid)
+		vim.api.nvim_win_set_cursor(
+			wt_panel.state.winid,
+			{ 1, 0 }
+		)
+		wt_panel.state.line_entries[1] = {
+			path = repo_dir .. "/missing-worktree-path",
+			branch = "feature",
+			short_sha = "deadbee",
+			is_bare = false,
+			is_main = false,
+		}
+
+		local switched_ok, switched_err = pcall(function()
+			wt_panel.switch_under_cursor()
+		end)
+		assert_true(
+			switched_ok,
+			"switch should not throw on cd failure: "
+				.. tostring(switched_err)
+		)
+		assert_equals(
+			vim.fn.getcwd(),
+			previous_cwd,
+			"cwd should remain unchanged on cd failure"
+		)
+		assert_true(
+			wt_panel.is_open(),
+			"panel should remain open after failed switch"
+		)
+
+		local saw_error = false
+		for _, note in ipairs(notifications) do
+			if note.message:find(
+				"Failed to switch to worktree",
+				1,
+				true
+			) then
+				saw_error = true
+				break
+			end
+		end
+		assert_true(
+			saw_error,
+			"failed switch should emit a contextual error"
+		)
+	end)
+
+	ui_input.confirm = original_confirm
+	utils.notify = original_notify
+	vim.fn.chdir(previous_cwd)
+	wt_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 test("add_worktree uses branch picker before path prompt", function()
 	local wt_panel = require("gitflow.panels.worktree")
 	local git_branch = require("gitflow.git.branch")

@@ -265,7 +265,18 @@ function M.switch_under_cursor()
 		return
 	end
 
-	vim.cmd("cd " .. vim.fn.fnameescape(entry.path))
+	local ok, switch_err = pcall(vim.cmd.cd, entry.path)
+	if not ok then
+		utils.notify(
+			("Failed to switch to worktree '%s': %s"):format(
+				entry.path,
+				tostring(switch_err)
+			),
+			vim.log.levels.ERROR
+		)
+		return
+	end
+
 	utils.notify(
 		("Switched to worktree: %s"):format(entry.path),
 		vim.log.levels.INFO
