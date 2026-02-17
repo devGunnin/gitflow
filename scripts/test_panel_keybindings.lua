@@ -792,6 +792,242 @@ stash_panel.close()
 git_stash.list = orig_stash_list
 git_branch.current = orig_branch_current
 
+-- ── Test 20: E2E — PR detail legends reflect overrides ───────────────
+io.write("\n[20] E2E: PR detail legend uses overridden keys\n")
+
+local prs_cfg = gitflow.setup({
+	panel_keybindings = {
+		prs = {
+			back = "B",
+			comment = "K",
+			review = "V",
+		},
+	},
+})
+
+local prs_panel = require("gitflow.panels.prs")
+local gh_prs = require("gitflow.gh.prs")
+local orig_prs_view = gh_prs.view
+gh_prs.view = function(number, _, cb)
+	cb(nil, {
+		number = tonumber(number),
+		title = "Legend override smoke test",
+		state = "OPEN",
+		isDraft = false,
+		author = { login = "octocat" },
+		headRefName = "feature/prs-legend",
+		baseRefName = "main",
+		labels = {},
+		assignees = {},
+		body = "body",
+		reviewRequests = {},
+		reviews = {},
+		comments = {},
+		files = {},
+	})
+end
+
+prs_panel.open_view(7, prs_cfg)
+vim.wait(200, function() return false end)
+
+local prs_bufnr = prs_panel.state.bufnr
+if prs_bufnr and vim.api.nvim_buf_is_valid(prs_bufnr) then
+	assert_true(
+		buffer_contains(prs_bufnr, "B back"),
+		"PR detail legend should show overridden back key"
+	)
+	assert_true(
+		buffer_contains(prs_bufnr, "K comment"),
+		"PR detail legend should show overridden comment key"
+	)
+	assert_true(
+		buffer_contains(prs_bufnr, "V review"),
+		"PR detail legend should show overridden review key"
+	)
+	assert_true(
+		not buffer_contains(prs_bufnr, "b back"),
+		"PR detail legend should not show default back key after override"
+	)
+	assert_true(
+		not buffer_contains(prs_bufnr, "C comment"),
+		"PR detail legend should not show default comment key after override"
+	)
+	assert_true(
+		not buffer_contains(prs_bufnr, "v review"),
+		"PR detail legend should not show default review key after override"
+	)
+else
+	assert_true(false, "PR panel buffer should be valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+	assert_true(false, "skip: buffer not valid")
+end
+
+prs_panel.close()
+gh_prs.view = orig_prs_view
+
+-- ── Test 21: E2E — review submit hints reflect overrides ─────────────
+io.write("\n[21] E2E: review submit hints use overridden key\n")
+
+local review_cfg = gitflow.setup({
+	panel_keybindings = {
+		review = {
+			submit_review = "Z",
+		},
+	},
+})
+
+local review_panel = require("gitflow.panels.review")
+local input = require("gitflow.ui.input")
+local utils_mod = require("gitflow.utils")
+local orig_review_view = gh_prs.view
+local orig_review_diff = gh_prs.diff
+local orig_review_comments = gh_prs.review_comments
+local orig_input_prompt = input.prompt
+local orig_notify = utils_mod.notify
+local orig_vim_fn_line = vim.fn.line
+
+gh_prs.view = function(number, _, cb)
+	cb(nil, {
+		number = tonumber(number),
+		title = "Review hints smoke test",
+	})
+end
+
+gh_prs.diff = function(_, _, cb)
+	cb(nil, table.concat({
+		"diff --git a/lua/gitflow/commands.lua b/lua/gitflow/commands.lua",
+		"index 1111111..2222222 100644",
+		"--- a/lua/gitflow/commands.lua",
+		"+++ b/lua/gitflow/commands.lua",
+		"@@ -1,1 +1,1 @@",
+		"-old line",
+		"+new line",
+	}, "\n"))
+end
+
+gh_prs.review_comments = function(_, _, cb)
+	cb(nil, {})
+end
+
+review_panel.open(review_cfg, 7)
+vim.wait(200, function() return false end)
+
+local function find_first_diff_content_line()
+	local bufnr = review_panel.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return nil
+	end
+	for line = 1, vim.api.nvim_buf_line_count(bufnr) do
+		local ctx = review_panel.state.line_context[line]
+		if ctx and ctx.path and (ctx.new_line or ctx.old_line) then
+			return line
+		end
+	end
+	return nil
+end
+
+local review_line = find_first_diff_content_line()
+assert_true(
+	type(review_line) == "number",
+	"review panel should expose a diff content line"
+)
+
+if review_line then
+	review_panel.state.pending_comments = {
+		{
+			id = 1,
+			path = "lua/gitflow/commands.lua",
+			line = review_line,
+			body = "queued",
+		},
+	}
+	review_panel.re_render()
+
+	local review_bufnr = review_panel.state.bufnr
+	if review_bufnr and vim.api.nvim_buf_is_valid(review_bufnr) then
+		assert_true(
+			buffer_contains(
+				review_bufnr,
+				"Pending comments: 1 (press Z to submit)"
+			),
+			"review pending summary should show overridden submit key"
+		)
+		assert_true(
+			not buffer_contains(
+				review_bufnr,
+				"Pending comments: 1 (press S to submit)"
+			),
+			"review pending summary should not show default submit key"
+		)
+	end
+
+	local notified = {}
+	utils_mod.notify = function(message, _)
+		notified[#notified + 1] = tostring(message)
+	end
+	input.prompt = function(_, cb)
+		cb("looks good")
+	end
+
+	review_panel.state.pending_comments = {}
+	review_panel.re_render()
+	review_line = find_first_diff_content_line()
+	assert_true(
+		type(review_line) == "number",
+		"review panel should keep a diff content line after re-render"
+	)
+	if review_panel.state.winid
+		and vim.api.nvim_win_is_valid(review_panel.state.winid) then
+		vim.api.nvim_win_set_cursor(review_panel.state.winid, { review_line, 0 })
+	end
+	review_panel.inline_comment()
+
+	local inline_msg = notified[#notified] or ""
+	assert_true(
+		inline_msg:find("press Z to submit review", 1, true) ~= nil,
+		"inline comment notice should show overridden submit key"
+	)
+	assert_true(
+		inline_msg:find("press S to submit review", 1, true) == nil,
+		"inline comment notice should not show default submit key"
+	)
+
+	review_line = find_first_diff_content_line()
+	assert_true(
+		type(review_line) == "number",
+		"review panel should keep a diff content line after inline comment"
+	)
+
+	vim.fn.line = function(mark)
+		if mark == "v" or mark == "." then
+			return review_line
+		end
+		return orig_vim_fn_line(mark)
+	end
+	review_panel.inline_comment_visual()
+
+	local visual_msg = notified[#notified] or ""
+	assert_true(
+		visual_msg:find("press Z to submit review", 1, true) ~= nil,
+		"range comment notice should show overridden submit key"
+	)
+	assert_true(
+		visual_msg:find("press S to submit review", 1, true) == nil,
+		"range comment notice should not show default submit key"
+	)
+end
+
+review_panel.close()
+gh_prs.view = orig_review_view
+gh_prs.diff = orig_review_diff
+gh_prs.review_comments = orig_review_comments
+input.prompt = orig_input_prompt
+utils_mod.notify = orig_notify
+vim.fn.line = orig_vim_fn_line
+
 -- ── Summary ─────────────────────────────────────────────────────────
 io.write(("\n%d passed, %d failed\n"):format(pass_count, fail_count))
 if fail_count > 0 then

@@ -40,6 +40,16 @@ local PRS_FLOAT_FOOTER_HINTS = {
 	{ action = "back", default = "b", label = "back" },
 	{ action = "close", default = "q", label = "close" },
 }
+local PRS_VIEW_HINTS = {
+	{ action = "back", default = "b", label = "back" },
+	{ action = "comment", default = "C", label = "comment" },
+	{ action = "labels", default = "L", label = "labels" },
+	{ action = "assign", default = "A", label = "assign" },
+	{ action = "merge", default = "m", label = "merge" },
+	{ action = "checkout", default = "o", label = "checkout" },
+	{ action = "review", default = "v", label = "review" },
+	{ action = "refresh", default = "r", label = "refresh" },
+}
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -437,8 +447,9 @@ local function render_view(pr)
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
-		.. "  m: merge  o: checkout  v: review  r: refresh"
+	lines[#lines + 1] = ui_render.resolve_panel_key_hints(
+		M.state.cfg, "prs", PRS_VIEW_HINTS
+	)
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}

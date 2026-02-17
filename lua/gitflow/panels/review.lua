@@ -125,6 +125,16 @@ M.state = {
 	_cached_hunks = nil,
 }
 
+---@param action string
+---@param default string
+---@return string
+local function review_action_key(action, default)
+	local resolved_cfg = M.state.cfg or config.current
+	return config.resolve_panel_key(
+		resolved_cfg, "review", action, default
+	)
+end
+
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
@@ -210,7 +220,7 @@ local function ensure_window(cfg)
 		M.review_request_changes()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	-- c = inline comment per spec, S = submit review
+	-- c = inline comment per spec; submit key is configurable
 	vim.keymap.set(
 		"n", pk("inline_comment", "c"), function()
 			M.inline_comment()
@@ -413,8 +423,11 @@ local function render_review(
 	if #M.state.pending_comments > 0 then
 		lines[#lines + 1] = ""
 		lines[#lines + 1] =
-			("Pending comments: %d (press S to submit)")
-				:format(#M.state.pending_comments)
+			("Pending comments: %d (press %s to submit)")
+				:format(
+					#M.state.pending_comments,
+					review_action_key("submit_review", "S")
+				)
 	end
 	lines[#lines + 1] = ""
 
@@ -1051,7 +1064,10 @@ function M.inline_comment()
 		}
 		utils.notify(
 			("Inline comment queued (#%d)"
-				.. " — press S to submit review"):format(number),
+				.. " — press %s to submit review"):format(
+				number,
+				review_action_key("submit_review", "S")
+			),
 			vim.log.levels.INFO
 		)
 		M.re_render()
@@ -1125,8 +1141,11 @@ function M.inline_comment_visual()
 			}
 			utils.notify(
 				("Inline comment queued (#%d, lines %d-%d)"
-					.. " — press S to submit review"):format(
-					number, start_line, end_line
+					.. " — press %s to submit review"):format(
+					number,
+					start_line,
+					end_line,
+					review_action_key("submit_review", "S")
 				),
 				vim.log.levels.INFO
 			)
