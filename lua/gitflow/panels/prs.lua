@@ -22,6 +22,7 @@ local highlights = require("gitflow.highlights")
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_pr_number integer|nil
+---@field view_request_id integer
 
 local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
@@ -39,7 +40,20 @@ M.state = {
 	line_entries = {},
 	mode = "list",
 	active_pr_number = nil,
+	view_request_id = 0,
 }
+
+---@return integer
+local function next_view_request_id()
+	M.state.view_request_id = (M.state.view_request_id or 0) + 1
+	return M.state.view_request_id
+end
+
+---@param request_id integer
+---@return boolean
+local function is_active_view_request(request_id)
+	return M.state.view_request_id == request_id
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -530,6 +544,7 @@ function M.refresh()
 		return
 	end
 
+	next_view_request_id()
 	render_loading("Loading pull requests...")
 	gh_prs.list(M.state.filters, {}, function(err, prs)
 		if err then
@@ -552,14 +567,21 @@ function M.open_view(number, cfg)
 	end
 	ensure_window(M.state.cfg)
 
+	local request_id = next_view_request_id()
 	render_loading(("Loading PR #%s..."):format(tostring(number)))
 	gh_prs.view(number, {}, function(err, pr)
+		if not is_active_view_request(request_id) then
+			return
+		end
 		if err then
 			render_loading("Failed to load pull request")
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
 		gh_prs.review_comments(number, {}, function(rc_err, rc)
+			if not is_active_view_request(request_id) then
+				return
+			end
 			render_view(pr or {}, not rc_err and rc or nil)
 		end)
 	end)
@@ -1053,6 +1075,7 @@ function M.close()
 	M.state.line_entries = {}
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
+	next_view_request_id()
 end
 
 ---@return boolean

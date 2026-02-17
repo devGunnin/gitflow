@@ -828,6 +828,96 @@ T.run_suite("E2E: PR Creation Flow", {
 		T.cleanup_panels()
 	end,
 
+	["stale PR detail callbacks do not overwrite list view"] = function()
+		local pending_view_cb = nil
+		local pending_review_comments_cb = nil
+
+		with_temporary_patches({
+			{
+				table = gh_prs,
+				key = "view",
+				value = function(_, _, cb)
+					pending_view_cb = cb
+				end,
+			},
+			{
+				table = gh_prs,
+				key = "review_comments",
+				value = function(_, _, cb)
+					pending_review_comments_cb = cb
+				end,
+			},
+			{
+				table = gh_prs,
+				key = "list",
+				value = function(_, _, cb)
+					cb(nil, {
+						{
+							number = 42,
+							title = "List view should stay active",
+							state = "OPEN",
+							headRefName = "feature/stay-list",
+							baseRefName = "main",
+						},
+					})
+				end,
+			},
+		}, function()
+			prs_panel.open_view(42, cfg)
+			T.assert_true(
+				pending_view_cb ~= nil,
+				"open_view should start async pr view request"
+			)
+
+			commands.dispatch({ "pr", "list", "open" }, cfg)
+			T.drain_jobs(3000)
+
+			local list_bufnr = ui.buffer.get("prs")
+			T.assert_true(
+				list_bufnr ~= nil and vim.api.nvim_buf_is_valid(list_bufnr),
+				"prs buffer should remain valid after list refresh"
+			)
+			local list_lines = T.buf_lines(list_bufnr)
+			T.assert_true(
+				T.find_line(list_lines, "PRs (1)") ~= nil,
+				"list view should render PR summary rows"
+			)
+			T.assert_true(
+				T.find_line(list_lines, "List view should stay active") ~= nil,
+				"list view should show patched PR entry"
+			)
+
+			pending_view_cb(nil, {
+				number = 42,
+				title = "Stale detail callback",
+				state = "OPEN",
+				headRefName = "feature/stale",
+				baseRefName = "main",
+			})
+			T.assert_true(
+				pending_review_comments_cb == nil,
+				"stale detail callback should not request review comments"
+			)
+			T.drain_jobs(3000)
+
+			local final_lines = T.buf_lines(list_bufnr)
+			T.assert_true(
+				T.find_line(final_lines, "PRs (1)") ~= nil,
+				"stale callbacks should not switch panel away from list mode"
+			)
+			T.assert_true(
+				T.find_line(final_lines, "Stale detail callback") == nil,
+				"stale callback should not render PR detail title"
+			)
+			T.assert_true(
+				T.find_line(final_lines, "Review Comments") == nil,
+				"stale callback should not render Review Comments section"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
 	-- ── Buffer updates after creation ─────────────────────────────────
 
 	["buffer refreshes to list mode after PR creation"] = function()
