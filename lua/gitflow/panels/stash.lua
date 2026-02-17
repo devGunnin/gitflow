@@ -5,6 +5,7 @@ local git_stash = require("gitflow.git.stash")
 local git_branch = require("gitflow.git.branch")
 local status_panel = require("gitflow.panels.status")
 local ui_render = require("gitflow.ui.render")
+local config = require("gitflow.config")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -76,23 +77,29 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "P", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "stash", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("pop", "P"), function()
 		M.pop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "D", function()
+	vim.keymap.set("n", pk("drop", "D"), function()
 		M.drop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "S", function()
+	vim.keymap.set("n", pk("stash", "S"), function()
 		M.push_with_prompt()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

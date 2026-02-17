@@ -5,6 +5,7 @@ local ui_render = require("gitflow.ui.render")
 local gh_prs = require("gitflow.gh.prs")
 local icons = require("gitflow.icons")
 local git_diff = require("gitflow.git.diff")
+local config = require("gitflow.config")
 
 ---@class GitflowPrReviewDraftThread
 ---@field id integer
@@ -160,67 +161,85 @@ local function ensure_window(cfg)
 	})
 
 	-- ]c/[c for hunk nav per spec
-	vim.keymap.set("n", "]f", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "review", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("next_file", "]f"), function()
 		M.next_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[f", function()
+	vim.keymap.set("n", pk("prev_file", "[f"), function()
 		M.prev_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "]c", function()
+	vim.keymap.set("n", pk("next_hunk", "]c"), function()
 		M.next_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[c", function()
+	vim.keymap.set("n", pk("prev_hunk", "[c"), function()
 		M.prev_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "a", function()
+	vim.keymap.set("n", pk("approve", "a"), function()
 		M.review_approve()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "x", function()
+	vim.keymap.set("n", pk("request_changes", "x"), function()
 		M.review_request_changes()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	-- c = inline comment per spec, S = submit review
-	vim.keymap.set("n", "c", function()
-		M.inline_comment()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("inline_comment", "c"), function()
+			M.inline_comment()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "S", function()
-		M.submit_pending_review()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("submit_review", "S"), function()
+			M.submit_pending_review()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
 	-- visual mode c for multi-line inline comments
-	vim.keymap.set("v", "c", function()
-		M.inline_comment_visual()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"v", pk("inline_comment_visual", "c"), function()
+			M.inline_comment_visual()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "R", function()
+	vim.keymap.set("n", pk("reply", "R"), function()
 		M.reply_to_thread()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	-- F1: use <leader>t instead of t to avoid shadowing vim motion
-	vim.keymap.set("n", "<leader>t", function()
-		M.toggle_thread()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("toggle_thread", "<leader>t"), function()
+			M.toggle_thread()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "<leader>i", function()
-		M.toggle_inline_comments()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("toggle_inline", "<leader>i"), function()
+			M.toggle_inline_comments()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	-- F1: use <leader>b instead of b to avoid shadowing vim motion
-	vim.keymap.set("n", "<leader>b", function()
-		M.back_to_pr()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("back_to_pr", "<leader>b"), function()
+			M.back_to_pr()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close_with_guard()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

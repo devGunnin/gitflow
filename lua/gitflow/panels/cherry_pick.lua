@@ -8,6 +8,7 @@ local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
 local list_picker = require("gitflow.ui.list_picker")
 local status_panel = require("gitflow.panels.status")
+local config = require("gitflow.config")
 
 ---@class GitflowCherryPickPanelState
 ---@field bufnr integer|nil
@@ -153,7 +154,13 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "cherry_pick", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("select", "<CR>"), function()
 		M.select_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
@@ -163,21 +170,33 @@ local function ensure_window(cfg)
 		end, { buffer = bufnr, silent = true, nowait = true })
 	end
 
-	vim.keymap.set("n", "B", function()
-		M.cherry_pick_into_branch()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("pick_into_branch", "B"), function()
+			M.cherry_pick_into_branch()
+		end,
+		{ buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "b", function()
-		M.show_branch_picker()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("branch_picker", "b"), function()
+			M.show_branch_picker()
+		end,
+		{ buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("refresh", "r"), function()
+			M.refresh()
+		end,
+		{ buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("close", "q"), function()
+			M.close()
+		end,
+		{ buffer = bufnr, silent = true, nowait = true }
+	)
 end
 
 ---@param commits GitflowCherryPickEntry[]

@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local config = require("gitflow.config")
 
 ---@class GitflowBranchPanelState
 ---@field bufnr integer|nil
@@ -131,43 +132,53 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local key = config.resolve_panel_key(cfg, "branch", "switch", "<CR>")
+	vim.keymap.set("n", key, function()
 		M.switch_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "c", function()
+	key = config.resolve_panel_key(cfg, "branch", "create", "c")
+	vim.keymap.set("n", key, function()
 		M.create_branch()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "d", function()
+	key = config.resolve_panel_key(cfg, "branch", "delete", "d")
+	vim.keymap.set("n", key, function()
 		M.delete_under_cursor(false)
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "D", function()
+	key = config.resolve_panel_key(cfg, "branch", "force_delete", "D")
+	vim.keymap.set("n", key, function()
 		M.delete_under_cursor(true)
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	key = config.resolve_panel_key(cfg, "branch", "rename", "r")
+	vim.keymap.set("n", key, function()
 		M.rename_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "R", function()
+	key = config.resolve_panel_key(cfg, "branch", "refresh", "R")
+	vim.keymap.set("n", key, function()
 		M.refresh_with_fetch()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "f", function()
+	key = config.resolve_panel_key(cfg, "branch", "fetch", "f")
+	vim.keymap.set("n", key, function()
 		M.fetch_remotes()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "m", function()
+	key = config.resolve_panel_key(cfg, "branch", "merge", "m")
+	vim.keymap.set("n", key, function()
 		M.merge_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "G", function()
+	key = config.resolve_panel_key(cfg, "branch", "toggle_graph", "G")
+	vim.keymap.set("n", key, function()
 		M.toggle_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	key = config.resolve_panel_key(cfg, "branch", "close", "q")
+	vim.keymap.set("n", key, function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

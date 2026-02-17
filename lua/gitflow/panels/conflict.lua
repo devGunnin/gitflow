@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
 local conflict_view = require("gitflow.ui.conflict")
 local ui_render = require("gitflow.ui.render")
+local config = require("gitflow.config")
 
 ---@class GitflowConflictFileEntry
 ---@field path string
@@ -127,27 +128,33 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "conflict", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("open", "<CR>"), function()
 		M.open_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "R", function()
+	vim.keymap.set("n", pk("refresh_alias", "R"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "C", function()
+	vim.keymap.set("n", pk("continue", "C"), function()
 		M.continue_operation()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "A", function()
+	vim.keymap.set("n", pk("abort", "A"), function()
 		M.abort_operation()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

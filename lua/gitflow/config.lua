@@ -52,8 +52,12 @@ local utils = require("gitflow.utils")
 ---@class GitflowIconsConfig
 ---@field enable boolean
 
+---@class GitflowPanelKeybindingsConfig
+---@field [string] table<string, string>
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
+---@field panel_keybindings GitflowPanelKeybindingsConfig
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
 ---@field git GitflowGitConfig
@@ -91,6 +95,7 @@ function M.defaults()
 			conflict = "<leader>gm",
 			palette = "<leader>go",
 		},
+		panel_keybindings = {},
 		ui = {
 			default_layout = "float",
 			split = {
@@ -155,6 +160,89 @@ local function validate_keybindings(config)
 			error(("gitflow config error: keybinding '%s' must be a non-empty string"):format(action), 3)
 		end
 	end
+end
+
+local VALID_PANEL_NAMES = {
+	status = true, branch = true, diff = true, review = true,
+	conflict = true, issues = true, prs = true, log = true,
+	stash = true, reset = true, revert = true, cherry_pick = true,
+}
+
+---@param config GitflowConfig
+local function validate_panel_keybindings(config)
+	if type(config.panel_keybindings) ~= "table" then
+		error("gitflow config error: panel_keybindings must be a table", 3)
+	end
+
+	for panel, overrides in pairs(config.panel_keybindings) do
+		if not utils.is_non_empty_string(panel) then
+			error(
+				"gitflow config error: panel_keybindings keys must be"
+					.. " non-empty strings",
+				3
+			)
+		end
+		if not VALID_PANEL_NAMES[panel] then
+			error(
+				("gitflow config error: panel_keybindings.%s is not"
+					.. " a valid panel name"):format(panel),
+				3
+			)
+		end
+		if type(overrides) ~= "table" then
+			error(
+				("gitflow config error: panel_keybindings.%s must be"
+					.. " a table"):format(panel),
+				3
+			)
+		end
+
+		local key_to_action = {}
+		for action, mapping in pairs(overrides) do
+			if not utils.is_non_empty_string(action) then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s keys must be"
+						.. " non-empty strings"):format(panel),
+					3
+				)
+			end
+			if not utils.is_non_empty_string(mapping) then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s.%s must be a"
+						.. " non-empty string"):format(panel, action),
+					3
+				)
+			end
+			if key_to_action[mapping] then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s has conflicting"
+						.. " key '%s' for actions '%s' and"
+						.. " '%s'"):format(
+						panel, mapping,
+						key_to_action[mapping], action
+					),
+					3
+				)
+			end
+			key_to_action[mapping] = action
+		end
+	end
+end
+
+---@param cfg GitflowConfig
+---@param panel string
+---@param action string
+---@param default string
+---@return string
+function M.resolve_panel_key(cfg, panel, action, default)
+	local overrides = cfg.panel_keybindings[panel]
+	if overrides and overrides[action] then
+		return overrides[action]
+	end
+	return default
 end
 
 ---@param config GitflowConfig
@@ -370,6 +458,7 @@ end
 ---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
+	validate_panel_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
 	validate_git(config)

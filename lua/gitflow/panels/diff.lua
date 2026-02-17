@@ -3,6 +3,7 @@ local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
 local git_branch = require("gitflow.git.branch")
+local config = require("gitflow.config")
 
 ---@class GitflowDiffPanelState
 ---@field bufnr integer|nil
@@ -179,29 +180,35 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "q", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "diff", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		if M.state.request then
 			M.open(cfg, M.state.request)
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "]f", function()
+	vim.keymap.set("n", pk("next_file", "]f"), function()
 		M.next_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[f", function()
+	vim.keymap.set("n", pk("prev_file", "[f"), function()
 		M.prev_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "]c", function()
+	vim.keymap.set("n", pk("next_hunk", "]c"), function()
 		M.next_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[c", function()
+	vim.keymap.set("n", pk("prev_hunk", "[c"), function()
 		M.prev_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

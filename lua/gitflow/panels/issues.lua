@@ -11,6 +11,7 @@ local label_picker = require("gitflow.ui.label_picker")
 local list_picker = require("gitflow.ui.list_picker")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
+local config = require("gitflow.config")
 
 ---@class GitflowIssuePanelState
 ---@field bufnr integer|nil
@@ -84,31 +85,37 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "issues", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("view", "<CR>"), function()
 		M.view_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "c", function()
+	vim.keymap.set("n", pk("create", "c"), function()
 		M.create_interactive()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "C", function()
+	vim.keymap.set("n", pk("comment", "C"), function()
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "x", function()
+	vim.keymap.set("n", pk("close_issue", "x"), function()
 		M.close_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "L", function()
+	vim.keymap.set("n", pk("labels", "L"), function()
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "A", function()
+	vim.keymap.set("n", pk("assign", "A"), function()
 		M.edit_assignees_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		if M.state.mode == "view" and M.state.active_issue_number then
 			M.open_view(M.state.active_issue_number)
 			return
@@ -116,14 +123,14 @@ local function ensure_window(cfg)
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "b", function()
+	vim.keymap.set("n", pk("back", "b"), function()
 		if M.state.mode == "view" then
 			M.state.mode = "list"
 			M.refresh()
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

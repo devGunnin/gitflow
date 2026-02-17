@@ -13,6 +13,7 @@ local review_panel = require("gitflow.panels.review")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
+local config = require("gitflow.config")
 
 ---@class GitflowPrPanelState
 ---@field bufnr integer|nil
@@ -86,39 +87,45 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "prs", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("view", "<CR>"), function()
 		M.view_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "c", function()
+	vim.keymap.set("n", pk("create", "c"), function()
 		M.create_interactive()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "C", function()
+	vim.keymap.set("n", pk("comment", "C"), function()
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "L", function()
+	vim.keymap.set("n", pk("labels", "L"), function()
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "A", function()
+	vim.keymap.set("n", pk("assign", "A"), function()
 		M.edit_assignees_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "m", function()
+	vim.keymap.set("n", pk("merge", "m"), function()
 		M.merge_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "o", function()
+	vim.keymap.set("n", pk("checkout", "o"), function()
 		M.checkout_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "v", function()
+	vim.keymap.set("n", pk("review", "v"), function()
 		M.review_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		if M.state.mode == "view" and M.state.active_pr_number then
 			M.open_view(M.state.active_pr_number)
 			return
@@ -126,14 +133,14 @@ local function ensure_window(cfg)
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "b", function()
+	vim.keymap.set("n", pk("back", "b"), function()
 		if M.state.mode == "view" then
 			M.state.mode = "list"
 			M.refresh()
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

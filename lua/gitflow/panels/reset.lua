@@ -6,6 +6,7 @@ local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
 local status_panel = require("gitflow.panels.status")
+local config = require("gitflow.config")
 
 ---@class GitflowResetPanelState
 ---@field bufnr integer|nil
@@ -86,7 +87,13 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "reset", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("select", "<CR>"), function()
 		M.select_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
@@ -96,19 +103,19 @@ local function ensure_window(cfg)
 		end, { buffer = bufnr, silent = true, nowait = true })
 	end
 
-	vim.keymap.set("n", "S", function()
+	vim.keymap.set("n", pk("soft_reset", "S"), function()
 		M.reset_under_cursor("soft")
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "H", function()
+	vim.keymap.set("n", pk("hard_reset", "H"), function()
 		M.reset_under_cursor("hard")
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
