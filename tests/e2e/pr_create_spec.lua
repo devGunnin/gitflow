@@ -62,6 +62,32 @@ local function with_temp_gh_log(fn)
 	end
 end
 
+---@param bufnr integer
+---@param line_no integer
+---@param group string
+---@return boolean
+local function line_has_highlight(bufnr, line_no, group)
+	local ns = vim.api.nvim_get_namespaces().gitflow_prs_hl
+	if not ns then
+		return false
+	end
+
+	local marks = vim.api.nvim_buf_get_extmarks(
+		bufnr,
+		ns,
+		{ line_no - 1, 0 },
+		{ line_no - 1, -1 },
+		{ details = true }
+	)
+	for _, mark in ipairs(marks) do
+		local details = mark[4]
+		if details and details.hl_group == group then
+			return true
+		end
+	end
+	return false
+end
+
 T.run_suite("E2E: PR Creation Flow", {
 
 	-- ── PR panel opens and shows PR list ──────────────────────────────
@@ -772,6 +798,31 @@ T.run_suite("E2E: PR Creation Flow", {
 		T.assert_true(
 			T.find_line(lines, "Body") ~= nil,
 			"view should show Body section"
+		)
+		local review_header = T.find_line(lines, "Review Comments")
+		T.assert_true(
+			review_header ~= nil,
+			"view should show Review Comments section"
+		)
+		local review_author =
+			T.find_line(lines, "@reviewer1 on lua/gitflow/highlights.lua:")
+		T.assert_true(
+			review_author ~= nil,
+			"view should show review comment author and path"
+		)
+		local review_body =
+			T.find_line(lines, "  >> Consider renaming this variable.")
+		T.assert_true(
+			review_body ~= nil,
+			"view should show review comment body"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_author, "GitflowReviewAuthor"),
+			"review author should use GitflowReviewAuthor highlight"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_body, "GitflowReviewComment"),
+			"review body should use GitflowReviewComment highlight"
 		)
 
 		T.cleanup_panels()

@@ -353,6 +353,8 @@ end
 local function render_view(pr, review_comments)
 	local view_state = pr_state(pr)
 	local view_icon = icons.get("github", "pr_" .. view_state)
+	local review_author_lines = {}
+	local review_body_lines = {}
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -426,13 +428,16 @@ local function render_view(pr, review_comments)
 				author = "unknown"
 			end
 			local path = maybe_text(c.path)
-			lines[#lines + 1] = ("%s on %s:"):format(author, path)
+			lines[#lines + 1] = ("@%s on %s:"):format(author, path)
+			review_author_lines[#review_author_lines + 1] = #lines
 			local body_lines = split_lines(tostring(c.body or ""))
 			if #body_lines == 0 then
-				lines[#lines + 1] = "  (empty)"
+				lines[#lines + 1] = "  >> (empty)"
+				review_body_lines[#review_body_lines + 1] = #lines
 			else
 				for _, bl in ipairs(body_lines) do
-					lines[#lines + 1] = ("  %s"):format(bl)
+					lines[#lines + 1] = ("  >> %s"):format(bl)
+					review_body_lines[#review_body_lines + 1] = #lines
 				end
 			end
 			lines[#lines + 1] = ""
@@ -461,6 +466,12 @@ local function render_view(pr, review_comments)
 			or line == "Review Comments" then
 			entry_highlights[line_no] = "GitflowHeader"
 		end
+	end
+	for _, line_no in ipairs(review_author_lines) do
+		entry_highlights[line_no] = "GitflowReviewAuthor"
+	end
+	for _, line_no in ipairs(review_body_lines) do
+		entry_highlights[line_no] = "GitflowReviewComment"
 	end
 
 	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
