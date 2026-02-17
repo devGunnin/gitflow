@@ -45,13 +45,13 @@ function M.parse(output)
 	return entries
 end
 
----List tags sorted by version/refname descending.
+---List tags sorted by creator date descending (newest first).
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, entries: GitflowTagEntry[]|nil, result: GitflowGitResult)
 function M.list(opts, cb)
 	git.git({
 		"for-each-ref",
-		"--sort=-version:refname",
+		"--sort=-creatordate",
 		"--format=%(refname:short)\t%(objecttype)\t%(*objectname)\t%(subject)",
 		"refs/tags",
 	}, opts or {}, function(result)
@@ -124,15 +124,16 @@ function M.delete_remote(name, remote, opts, cb)
 		error("gitflow tag error: delete_remote requires name", 2)
 	end
 	local r = remote and vim.trim(remote) ~= "" and remote or "origin"
+	local tag_ref = "refs/tags/" .. name
 	git.git(
-		{ "push", r, "--delete", name },
+		{ "push", r, "--delete", tag_ref },
 		opts or {},
 		function(result)
 			if result.code ~= 0 then
 				cb(
 					error_from_result(
 						result,
-						"push " .. r .. " --delete " .. name
+						"push " .. r .. " --delete " .. tag_ref
 					),
 					result
 				)
@@ -153,10 +154,11 @@ function M.push(name, remote, opts, cb)
 		error("gitflow tag error: push requires name", 2)
 	end
 	local r = remote and vim.trim(remote) ~= "" and remote or "origin"
-	git.git({ "push", r, name }, opts or {}, function(result)
+	local tag_ref = "refs/tags/" .. name
+	git.git({ "push", r, tag_ref }, opts or {}, function(result)
 		if result.code ~= 0 then
 			cb(
-				error_from_result(result, "push " .. r .. " " .. name),
+				error_from_result(result, "push " .. r .. " " .. tag_ref),
 				result
 			)
 			return

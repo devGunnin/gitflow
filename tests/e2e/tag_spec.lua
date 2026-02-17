@@ -207,6 +207,36 @@ T.run_suite("E2E: Tag Panel", {
 		)
 	end,
 
+	["list uses creatordate sorting"] = function()
+		with_temp_git_log(function(log_path)
+			local done = false
+			local call_err = nil
+			git_tag.list({}, function(err)
+				call_err = err
+				done = true
+			end)
+
+			T.wait_until(
+				function()
+					return done
+				end,
+				"git_tag.list callback should run",
+				3000
+			)
+			T.assert_true(
+				call_err == nil,
+				"git_tag.list should succeed with stub"
+			)
+
+			local lines = T.read_file(log_path)
+			T.assert_true(
+				T.find_line(lines, "for-each-ref --sort=-creatordate")
+					~= nil,
+				"list should request creatordate sorting"
+			)
+		end)
+	end,
+
 	-- ── Command dispatch ────────────────────────────────────────────
 
 	["tag create without name returns usage"] = function()
@@ -293,7 +323,7 @@ T.run_suite("E2E: Tag Panel", {
 		)
 	end,
 
-	["tag push dispatches git push origin <tag>"] = function()
+	["tag push dispatches git push origin refs/tags/<tag>"] = function()
 		with_temp_git_log(function(log_path)
 			local result = commands.dispatch(
 				{ "tag", "push", "v1.0.0" }, cfg
@@ -306,8 +336,47 @@ T.run_suite("E2E: Tag Panel", {
 
 			local lines = T.read_file(log_path)
 			T.assert_true(
-				T.find_line(lines, "push origin v1.0.0") ~= nil,
-				"should invoke git push origin v1.0.0"
+				T.find_line(
+					lines, "push origin refs/tags/v1.0.0"
+				) ~= nil,
+				"should invoke git push origin refs/tags/v1.0.0"
+			)
+		end)
+	end,
+
+	["tag delete_remote uses git push --delete refs/tags/<tag>"] = function()
+		with_temp_git_log(function(log_path)
+			local done = false
+			local call_err = nil
+			git_tag.delete_remote(
+				"v1.0.0",
+				nil,
+				{},
+				function(err)
+					call_err = err
+					done = true
+				end
+			)
+
+			T.wait_until(
+				function()
+					return done
+				end,
+				"git_tag.delete_remote callback should run",
+				3000
+			)
+			T.assert_true(
+				call_err == nil,
+				"delete_remote should succeed with stub"
+			)
+
+			local lines = T.read_file(log_path)
+			T.assert_true(
+				T.find_line(
+					lines,
+					"push origin --delete refs/tags/v1.0.0"
+				) ~= nil,
+				"should invoke git push --delete refs/tags/<tag>"
 			)
 		end)
 	end,
