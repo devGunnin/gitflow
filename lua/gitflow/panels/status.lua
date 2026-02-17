@@ -42,9 +42,27 @@ local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 local STATUS_FLOAT_TITLE = "Gitflow Status"
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
-local STATUS_FLOAT_FOOTER =
-	"s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
-	.. "  cx conflicts  p push  X revert  r refresh  q close"
+local STATUS_FLOAT_FOOTER_HINTS = {
+	{ action = "stage", default = "s", label = "stage" },
+	{ action = "unstage", default = "u", label = "unstage" },
+	{ action = "stage_all", default = "a", label = "stage all" },
+	{ action = "unstage_all", default = "A", label = "unstage all" },
+	{ action = "commit", default = "cc", label = "commit" },
+	{ action = "diff", default = "dd", label = "diff" },
+	{ action = "conflicts", default = "cx", label = "conflicts" },
+	{ action = "push", default = "p", label = "push" },
+	{ action = "revert", default = "X", label = "revert" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
+
+---@param cfg GitflowConfig
+---@return string
+local function status_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "status", STATUS_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@type GitflowStatusPanelState
 M.state = {
@@ -215,7 +233,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = STATUS_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STATUS_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and status_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil

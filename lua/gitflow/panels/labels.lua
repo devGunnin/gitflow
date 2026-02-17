@@ -9,7 +9,12 @@ local config = require("gitflow.config")
 
 local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
 local LABELS_FLOAT_TITLE = "Gitflow Labels"
-local LABELS_FLOAT_FOOTER = "c create  d delete  r refresh  q close"
+local LABELS_KEY_HINTS = {
+	{ action = "create", default = "c", label = "create" },
+	{ action = "delete", default = "d", label = "delete" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@class GitflowLabelPanelState
 ---@field bufnr integer|nil
@@ -26,6 +31,14 @@ M.state = {
 	cfg = nil,
 	line_entries = {},
 }
+
+---@param cfg GitflowConfig|nil
+---@return string
+local function labels_key_hints(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg or config.current, "labels", LABELS_KEY_HINTS
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -54,7 +67,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = LABELS_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and LABELS_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and labels_key_hints(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -147,12 +160,7 @@ local function render_list(labels)
 		end
 	end
 
-	local key_hints = ui_render.format_key_hints({
-		{ "c", "create" },
-		{ "d", "delete" },
-		{ "r", "refresh" },
-		{ "q", "quit" },
-	})
+	local key_hints = labels_key_hints(M.state.cfg or config.current)
 	local footer_lines = ui_render.panel_footer(nil, key_hints, render_opts)
 	for _, line in ipairs(footer_lines) do
 		lines[#lines + 1] = line

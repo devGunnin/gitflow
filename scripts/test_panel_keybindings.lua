@@ -78,6 +78,51 @@ local function find_buf_map(buf, mode, lhs)
 	return nil
 end
 
+---@param bufnr integer
+---@param needle string
+---@return boolean
+local function buffer_contains(bufnr, needle)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	for _, line in ipairs(lines) do
+		if line:find(needle, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+---@param winid integer|nil
+---@return string
+local function window_footer_text(winid)
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return ""
+	end
+
+	local ok, win_cfg = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(win_cfg) ~= "table" then
+		return ""
+	end
+
+	local footer = win_cfg.footer
+	if type(footer) == "string" then
+		return footer
+	end
+
+	if type(footer) ~= "table" then
+		return ""
+	end
+
+	local parts = {}
+	for _, chunk in ipairs(footer) do
+		if type(chunk) == "string" then
+			parts[#parts + 1] = chunk
+		elseif type(chunk) == "table" and type(chunk[1]) == "string" then
+			parts[#parts + 1] = chunk[1]
+		end
+	end
+	return table.concat(parts, "")
+end
+
 -- ── Test 1: Default setup with empty panel_keybindings ──────────────
 io.write("\n[1] Default panel_keybindings\n")
 
@@ -443,10 +488,45 @@ end
 
 -- Cleanup
 status_panel.close()
+
+-- ── Test 16: E2E — status float footer reflects overrides ───────────
+io.write("\n[16] E2E: status float footer uses overridden keys\n")
+
+local status_float_cfg = gitflow.setup({
+	panel_keybindings = {
+		status = {
+			stage = "S",
+			close = "Q",
+		},
+	},
+})
+
+status_panel.open(status_float_cfg)
+vim.wait(200, function() return false end)
+
+local status_footer = window_footer_text(status_panel.state.winid)
+assert_true(
+	status_footer:find("S stage", 1, true) ~= nil,
+	"status footer should show overridden stage key"
+)
+assert_true(
+	status_footer:find("Q close", 1, true) ~= nil,
+	"status footer should show overridden close key"
+)
+assert_true(
+	status_footer:find("s stage", 1, true) == nil,
+	"status footer should not show default stage key after override"
+)
+assert_true(
+	status_footer:find("q close", 1, true) == nil,
+	"status footer should not show default close key after override"
+)
+
+status_panel.close()
 utils.system = orig_system
 
--- ── Test 16: E2E — overridden key works on labels buffer ────────────
-io.write("\n[16] E2E: overridden labels panel keybinding\n")
+-- ── Test 17: E2E — overridden key works on labels buffer ────────────
+io.write("\n[17] E2E: overridden labels panel keybinding\n")
 
 local labels_cfg = gitflow.setup({
 	ui = {
@@ -489,6 +569,22 @@ if labels_bufnr and vim.api.nvim_buf_is_valid(labels_bufnr) then
 		find_buf_map(labels_bufnr, "n", "q") == nil,
 		"default labels key 'q' should not remain mapped"
 	)
+	assert_true(
+		buffer_contains(labels_bufnr, "n create"),
+		"labels footer hints should show overridden create key"
+	)
+	assert_true(
+		buffer_contains(labels_bufnr, "Q close"),
+		"labels footer hints should show overridden close key"
+	)
+	assert_true(
+		not buffer_contains(labels_bufnr, "c create"),
+		"labels footer hints should not show default create key"
+	)
+	assert_true(
+		not buffer_contains(labels_bufnr, "q close"),
+		"labels footer hints should not show default close key"
+	)
 else
 	assert_true(false, "labels panel buffer should be valid")
 	assert_true(false, "skip: buffer not valid")
@@ -499,8 +595,8 @@ end
 labels_panel.close()
 gh_labels.list = orig_labels_list
 
--- ── Test 17: E2E — overridden key works on palette buffers ──────────
-io.write("\n[17] E2E: overridden palette panel keybinding\n")
+-- ── Test 18: E2E — overridden key works on palette buffers ──────────
+io.write("\n[18] E2E: overridden palette panel keybinding\n")
 
 local palette_cfg = gitflow.setup({
 	panel_keybindings = {
@@ -581,6 +677,53 @@ if prompt_bufnr and list_bufnr
 	assert_true(
 		find_buf_map(list_bufnr, "n", "<Esc>") == nil,
 		"default palette list '<Esc>' should not remain mapped"
+	)
+
+	local prompt_footer = window_footer_text(palette_panel.state.prompt_winid)
+	local list_footer = window_footer_text(palette_panel.state.list_winid)
+	assert_true(
+		prompt_footer:find("X confirm", 1, true) ~= nil,
+		"palette prompt footer should show overridden submit key"
+	)
+	assert_true(
+		prompt_footer:find("Z close", 1, true) ~= nil,
+		"palette prompt footer should show overridden close key"
+	)
+	assert_true(
+		prompt_footer:find("[0/2/3/4/5/6/7/8/9] quick select", 1, true) ~= nil,
+		"palette prompt footer should show overridden quick-select key"
+	)
+	assert_true(
+		prompt_footer:find("<CR> confirm", 1, true) == nil,
+		"palette prompt footer should not show default submit key"
+	)
+	assert_true(
+		prompt_footer:find("<Esc> close", 1, true) == nil,
+		"palette prompt footer should not show default close key"
+	)
+	assert_true(
+		list_footer:find("L select", 1, true) ~= nil,
+		"palette list footer should show overridden submit key"
+	)
+	assert_true(
+		list_footer:find("J/K move", 1, true) ~= nil,
+		"palette list footer should show overridden move keys"
+	)
+	assert_true(
+		list_footer:find("Q/E close", 1, true) ~= nil,
+		"palette list footer should show overridden close keys"
+	)
+	assert_true(
+		list_footer:find("<CR> select", 1, true) == nil,
+		"palette list footer should not show default submit key"
+	)
+	assert_true(
+		list_footer:find("j/k move", 1, true) == nil,
+		"palette list footer should not show default move keys"
+	)
+	assert_true(
+		list_footer:find("q/<Esc> close", 1, true) == nil,
+		"palette list footer should not show default close keys"
 	)
 else
 	assert_true(false, "palette prompt/list buffers should be valid")

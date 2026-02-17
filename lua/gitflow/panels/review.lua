@@ -61,11 +61,30 @@ local config = require("gitflow.config")
 
 local M = {}
 local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
-local REVIEW_FLOAT_FOOTER =
-	"]f/[f files  ]c/[c hunks  c comment  S submit"
-	.. "  a approve  x changes  R reply"
-	.. "  <leader>t toggle  <leader>i inline"
-	.. "  <leader>b back  r refresh  q close"
+local REVIEW_FLOAT_FOOTER_HINTS = {
+	{ action = "next_file", default = "]f", label = "next file" },
+	{ action = "prev_file", default = "[f", label = "prev file" },
+	{ action = "next_hunk", default = "]c", label = "next hunk" },
+	{ action = "prev_hunk", default = "[c", label = "prev hunk" },
+	{ action = "inline_comment", default = "c", label = "comment" },
+	{ action = "submit_review", default = "S", label = "submit" },
+	{ action = "approve", default = "a", label = "approve" },
+	{ action = "request_changes", default = "x", label = "changes" },
+	{ action = "reply", default = "R", label = "reply" },
+	{ action = "toggle_thread", default = "<leader>t", label = "toggle" },
+	{ action = "toggle_inline", default = "<leader>i", label = "inline" },
+	{ action = "back_to_pr", default = "<leader>b", label = "back" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
+
+---@param cfg GitflowConfig
+---@return string
+local function review_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "review", REVIEW_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param line string
 ---@return boolean
@@ -153,7 +172,7 @@ local function ensure_window(cfg)
 		border = cfg.ui.float.border,
 		title = title,
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer and REVIEW_FLOAT_FOOTER or nil,
+		footer = cfg.ui.float.footer and review_float_footer(cfg) or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 		on_close = function()
 			M.state.winid = nil

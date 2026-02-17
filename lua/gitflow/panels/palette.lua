@@ -29,10 +29,7 @@ local config = require("gitflow.config")
 
 local M = {}
 local SELECTION_HIGHLIGHT = "GitflowPaletteSelection"
-local PALETTE_PROMPT_FOOTER =
-	"[1-9] quick select \u{2502} <CR> confirm \u{2502} / search \u{2502} q close"
-local PALETTE_LIST_FOOTER =
-	"[1-9] quick select \u{2502} <CR> select \u{2502} j/k move \u{2502} q close"
+local PALETTE_FOOTER_SEP = " \u{2502} "
 
 ---@type GitflowPalettePanelState
 M.state = {
@@ -80,6 +77,80 @@ local NUMBERED_ORDER = {
 	"diff",
 	"stash",
 }
+
+---@param cfg GitflowConfig
+---@param action string
+---@param default string
+---@return string
+local function palette_key(cfg, action, default)
+	return config.resolve_panel_key(cfg, "palette", action, default)
+end
+
+---@param keys string[]
+---@param sep string
+---@return string
+local function join_distinct(keys, sep)
+	local deduped = {}
+	local seen = {}
+	for _, key in ipairs(keys) do
+		if key ~= "" and not seen[key] then
+			seen[key] = true
+			deduped[#deduped + 1] = key
+		end
+	end
+	return table.concat(deduped, sep)
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function quick_select_keys(cfg)
+	local keys = {}
+	for i = 1, 9 do
+		keys[#keys + 1] =
+			palette_key(cfg, ("quick_select_%d"):format(i), tostring(i))
+	end
+	return join_distinct(keys, "/")
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function prompt_footer(cfg)
+	local quick_keys = quick_select_keys(cfg)
+	local submit_key = palette_key(cfg, "prompt_submit", "<CR>")
+	local close_key = palette_key(cfg, "prompt_close", "<Esc>")
+	return ("[%s] quick select%s%s confirm%s/ search%s%s close"):format(
+		quick_keys,
+		PALETTE_FOOTER_SEP,
+		submit_key,
+		PALETTE_FOOTER_SEP,
+		PALETTE_FOOTER_SEP,
+		close_key
+	)
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function list_footer(cfg)
+	local quick_keys = quick_select_keys(cfg)
+	local submit_key = palette_key(cfg, "list_submit", "<CR>")
+	local next_key = palette_key(cfg, "list_next_j", "j")
+	local prev_key = palette_key(cfg, "list_prev_k", "k")
+	local close_keys = join_distinct({
+		palette_key(cfg, "list_close", "q"),
+		palette_key(cfg, "list_close_esc", "<Esc>"),
+	}, "/")
+	local move_keys = join_distinct({ next_key, prev_key }, "/")
+
+	return ("[%s] quick select%s%s select%s%s move%s%s close"):format(
+		quick_keys,
+		PALETTE_FOOTER_SEP,
+		submit_key,
+		PALETTE_FOOTER_SEP,
+		move_keys,
+		PALETTE_FOOTER_SEP,
+		close_keys
+	)
+end
 
 ---@param text string
 ---@return string
@@ -907,8 +978,7 @@ function M.open(cfg, entries, on_select)
 		border = cfg.ui.float.border,
 		title = "  Gitflow  ",
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer
-			and PALETTE_PROMPT_FOOTER or nil,
+		footer = cfg.ui.float.footer and prompt_footer(cfg) or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
@@ -922,8 +992,7 @@ function M.open(cfg, entries, on_select)
 		border = cfg.ui.float.border,
 		title = "  Command Palette  ",
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer
-			and PALETTE_LIST_FOOTER or nil,
+		footer = cfg.ui.float.footer and list_footer(cfg) or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
