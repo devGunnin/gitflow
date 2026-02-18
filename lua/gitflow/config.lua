@@ -87,6 +87,7 @@ function M.defaults()
 			pr = "<leader>gr",
 			reset = "gR",
 			revert = "gV",
+			tag = "gT",
 			blame = "gB",
 			cherry_pick = "gC",
 			conflict = "<leader>gm",

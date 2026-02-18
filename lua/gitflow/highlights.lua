@@ -107,6 +107,8 @@ local function build_default_groups(palette)
 		GitflowResetMergeBase = { link = "WarningMsg" },
 		-- Revert
 		GitflowRevertMergeBase = { link = "WarningMsg" },
+		-- Tag
+		GitflowTagAnnotated = { fg = palette.stash_ref, bold = true },
 		-- Actions / CI
 		GitflowActionsPass = { link = "DiagnosticOk" },
 		GitflowActionsFail = { link = "DiagnosticError" },
