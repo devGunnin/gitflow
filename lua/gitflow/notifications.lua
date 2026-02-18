@@ -11,10 +11,17 @@ local buffer = {}
 ---@type integer
 local max_entries = 200
 
+local function trim_to_capacity()
+	while #buffer > max_entries do
+		table.remove(buffer, 1)
+	end
+end
+
 ---Configure the ring buffer capacity.
 ---@param max integer
 function M.setup(max)
 	max_entries = max or 200
+	trim_to_capacity()
 end
 
 ---Push a new notification into the ring buffer.
@@ -26,9 +33,7 @@ function M.push(message, level)
 		level = level or vim.log.levels.INFO,
 		timestamp = os.time(),
 	}
-	if #buffer > max_entries then
-		table.remove(buffer, 1)
-	end
+	trim_to_capacity()
 end
 
 ---Return all entries in chronological order (oldest first).

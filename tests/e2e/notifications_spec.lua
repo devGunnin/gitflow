@@ -86,6 +86,36 @@ T.run_suite("E2E: Notification Center", {
 		notifications.clear()
 	end,
 
+	["lowering capacity trims existing entries immediately"] = function()
+		notifications.clear()
+		notifications.setup(10)
+		for i = 1, 10 do
+			notifications.push(
+				("msg%d"):format(i), vim.log.levels.INFO
+			)
+		end
+
+		notifications.setup(3)
+
+		T.assert_equals(
+			notifications.count(), 3,
+			"buffer should trim immediately when max_entries is lowered"
+		)
+
+		local entries = notifications.entries()
+		T.assert_equals(
+			entries[1].message, "msg8",
+			"oldest surviving entry should respect lowered cap"
+		)
+		T.assert_equals(
+			entries[3].message, "msg10",
+			"newest surviving entry should remain present"
+		)
+
+		notifications.setup(200)
+		notifications.clear()
+	end,
+
 	["entries returns a copy, not a reference"] = function()
 		notifications.clear()
 		notifications.push("original", vim.log.levels.INFO)
