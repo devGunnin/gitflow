@@ -396,6 +396,7 @@ local ALL_PANELS = {
 	"palette", "cherry_pick", "reset", "revert", "tag",
 	"notifications",
 	"actions",
+	"reflog",
 }
 
 --- Close all open panel windows and reset shared state.
