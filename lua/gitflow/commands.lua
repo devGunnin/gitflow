@@ -1187,7 +1187,7 @@ local function register_builtin_subcommands(cfg)
 				end,
 			})
 			return "Blame panel opened"
-			end,
+		end,
 	}
 
 	M.subcommands.stash = {
