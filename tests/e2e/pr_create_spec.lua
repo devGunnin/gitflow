@@ -62,6 +62,32 @@ local function with_temp_gh_log(fn)
 	end
 end
 
+---@param bufnr integer
+---@param line_no integer
+---@param group string
+---@return boolean
+local function line_has_highlight(bufnr, line_no, group)
+	local ns = vim.api.nvim_get_namespaces().gitflow_prs_hl
+	if not ns then
+		return false
+	end
+
+	local marks = vim.api.nvim_buf_get_extmarks(
+		bufnr,
+		ns,
+		{ line_no - 1, 0 },
+		{ line_no - 1, -1 },
+		{ details = true }
+	)
+	for _, mark in ipairs(marks) do
+		local details = mark[4]
+		if details and details.hl_group == group then
+			return true
+		end
+	end
+	return false
+end
+
 T.run_suite("E2E: PR Creation Flow", {
 
 	-- ── PR panel opens and shows PR list ──────────────────────────────
@@ -773,6 +799,139 @@ T.run_suite("E2E: PR Creation Flow", {
 			T.find_line(lines, "Body") ~= nil,
 			"view should show Body section"
 		)
+		local review_summary_author = T.find_line(lines, "@reviewer1 [APPROVED]:")
+		T.assert_true(
+			review_summary_author ~= nil,
+			"view should show review summary author and state"
+		)
+		local review_summary_body = T.find_line(lines, "  >> LGTM")
+		T.assert_true(
+			review_summary_body ~= nil,
+			"view should show review summary body text"
+		)
+		local review_header = T.find_line(lines, "Review Comments")
+		T.assert_true(
+			review_header ~= nil,
+			"view should show Review Comments section"
+		)
+		local review_author =
+			T.find_line(lines, "@reviewer1 on lua/gitflow/highlights.lua:")
+		T.assert_true(
+			review_author ~= nil,
+			"view should show review comment author and path"
+		)
+		local review_body =
+			T.find_line(lines, "  >> Consider renaming this variable.")
+		T.assert_true(
+			review_body ~= nil,
+			"view should show review comment body"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_author, "GitflowReviewAuthor"),
+			"review author should use GitflowReviewAuthor highlight"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_summary_author, "GitflowReviewAuthor"),
+			"review summary author should use GitflowReviewAuthor highlight"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_body, "GitflowReviewComment"),
+			"review body should use GitflowReviewComment highlight"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_summary_body, "GitflowReviewComment"),
+			"review summary body should use GitflowReviewComment highlight"
+		)
+
+		T.cleanup_panels()
+	end,
+
+	["stale PR detail callbacks do not overwrite list view"] = function()
+		local pending_view_cb = nil
+		local pending_review_comments_cb = nil
+
+		with_temporary_patches({
+			{
+				table = gh_prs,
+				key = "view",
+				value = function(_, _, cb)
+					pending_view_cb = cb
+				end,
+			},
+			{
+				table = gh_prs,
+				key = "review_comments",
+				value = function(_, _, cb)
+					pending_review_comments_cb = cb
+				end,
+			},
+			{
+				table = gh_prs,
+				key = "list",
+				value = function(_, _, cb)
+					cb(nil, {
+						{
+							number = 42,
+							title = "List view should stay active",
+							state = "OPEN",
+							headRefName = "feature/stay-list",
+							baseRefName = "main",
+						},
+					})
+				end,
+			},
+		}, function()
+			prs_panel.open_view(42, cfg)
+			T.assert_true(
+				pending_view_cb ~= nil,
+				"open_view should start async pr view request"
+			)
+
+			commands.dispatch({ "pr", "list", "open" }, cfg)
+			T.drain_jobs(3000)
+
+			local list_bufnr = ui.buffer.get("prs")
+			T.assert_true(
+				list_bufnr ~= nil and vim.api.nvim_buf_is_valid(list_bufnr),
+				"prs buffer should remain valid after list refresh"
+			)
+			local list_lines = T.buf_lines(list_bufnr)
+			T.assert_true(
+				T.find_line(list_lines, "PRs (1)") ~= nil,
+				"list view should render PR summary rows"
+			)
+			T.assert_true(
+				T.find_line(list_lines, "List view should stay active") ~= nil,
+				"list view should show patched PR entry"
+			)
+
+			pending_view_cb(nil, {
+				number = 42,
+				title = "Stale detail callback",
+				state = "OPEN",
+				headRefName = "feature/stale",
+				baseRefName = "main",
+			})
+			T.assert_true(
+				pending_review_comments_cb == nil,
+				"stale detail callback should not request review comments"
+			)
+			T.drain_jobs(3000)
+
+			local final_lines = T.buf_lines(list_bufnr)
+			T.assert_true(
+				T.find_line(final_lines, "PRs (1)") ~= nil,
+				"stale callbacks should not switch panel away from list mode"
+			)
+			T.assert_true(
+				T.find_line(final_lines, "Stale detail callback") == nil,
+				"stale callback should not render PR detail title"
+			)
+			T.assert_true(
+				T.find_line(final_lines, "Review Comments") == nil,
+				"stale callback should not render Review Comments section"
+			)
+		end)
 
 		T.cleanup_panels()
 	end,
