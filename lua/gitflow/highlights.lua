@@ -71,6 +71,7 @@ local function build_default_groups(palette)
 		-- Review
 		GitflowReviewApproved = { link = "DiagnosticOk" },
 		GitflowReviewChangesRequested = { link = "WarningMsg" },
+		GitflowReviewAuthor = { fg = palette.accent_secondary, bold = true },
 		GitflowReviewComment = { link = "Comment" },
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },
@@ -114,6 +115,10 @@ local function build_default_groups(palette)
 		-- Cherry Pick
 		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
 		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },
+		-- Notifications
+		GitflowNotificationError = { link = "ErrorMsg" },
+		GitflowNotificationWarn = { link = "WarningMsg" },
+		GitflowNotificationInfo = { link = "Normal" },
 		-- Form
 		GitflowFormLabel = { fg = palette.accent_primary, bold = true },
 		GitflowFormActiveField = { link = "CursorLine" },

@@ -22,6 +22,7 @@ local highlights = require("gitflow.highlights")
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_pr_number integer|nil
+---@field view_request_id integer
 
 local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
@@ -39,7 +40,20 @@ M.state = {
 	line_entries = {},
 	mode = "list",
 	active_pr_number = nil,
+	view_request_id = 0,
 }
+
+---@return integer
+local function next_view_request_id()
+	M.state.view_request_id = (M.state.view_request_id or 0) + 1
+	return M.state.view_request_id
+end
+
+---@param request_id integer
+---@return boolean
+local function is_active_view_request(request_id)
+	return M.state.view_request_id == request_id
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -189,6 +203,20 @@ local function split_lines(text)
 		return {}
 	end
 	return vim.split(text, "\n", { plain = true, trimempty = false })
+end
+
+---@param review table
+---@return string
+local function review_author(review)
+	local author = maybe_text(type(review.author) == "table" and review.author.login or review.author)
+	if author ~= "-" then
+		return author
+	end
+	author = maybe_text(type(review.user) == "table" and review.user.login or review.user)
+	if author ~= "-" then
+		return author
+	end
+	return "unknown"
 end
 
 ---@param pr table
@@ -349,9 +377,12 @@ local function render_list(prs)
 end
 
 ---@param pr table
-local function render_view(pr)
+---@param review_comments table[]|nil
+local function render_view(pr, review_comments)
 	local view_state = pr_state(pr)
 	local view_icon = icons.get("github", "pr_" .. view_state)
+	local review_author_lines = {}
+	local review_body_lines = {}
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -388,6 +419,36 @@ local function render_view(pr)
 	lines[#lines + 1] = ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
 
+	local reviews = pr.reviews or {}
+	if type(reviews) == "table" and #reviews > 0 then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "Reviews"
+		lines[#lines + 1] = "-------"
+		for _, review in ipairs(reviews) do
+			local author = review_author(review)
+			local state = maybe_text(review.state)
+			local submitted_at = maybe_text(review.submittedAt)
+			local header = ("@%s [%s]"):format(author, state)
+			if submitted_at ~= "-" then
+				header = ("%s (%s)"):format(header, submitted_at)
+			end
+			lines[#lines + 1] = ("%s:"):format(header)
+			review_author_lines[#review_author_lines + 1] = #lines
+
+			local review_message_lines = split_lines(tostring(review.body or ""))
+			if #review_message_lines == 0 then
+				lines[#lines + 1] = "  >> (empty)"
+				review_body_lines[#review_body_lines + 1] = #lines
+			else
+				for _, review_body_line in ipairs(review_message_lines) do
+					lines[#lines + 1] = ("  >> %s"):format(review_body_line)
+					review_body_lines[#review_body_lines + 1] = #lines
+				end
+			end
+			lines[#lines + 1] = ""
+		end
+	end
+
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = "Comments"
 	lines[#lines + 1] = "--------"
@@ -412,6 +473,31 @@ local function render_view(pr)
 		end
 	end
 
+	local rc = review_comments or {}
+	if type(rc) == "table" and #rc > 0 then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "Review Comments"
+		lines[#lines + 1] = "---------------"
+
+		for _, c in ipairs(rc) do
+			local author = review_author(c)
+			local path = maybe_text(c.path)
+			lines[#lines + 1] = ("@%s on %s:"):format(author, path)
+			review_author_lines[#review_author_lines + 1] = #lines
+			local body_lines = split_lines(tostring(c.body or ""))
+			if #body_lines == 0 then
+				lines[#lines + 1] = "  >> (empty)"
+				review_body_lines[#review_body_lines + 1] = #lines
+			else
+				for _, bl in ipairs(body_lines) do
+					lines[#lines + 1] = ("  >> %s"):format(bl)
+					review_body_lines[#review_body_lines + 1] = #lines
+				end
+			end
+			lines[#lines + 1] = ""
+		end
+	end
+
 	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
 		.. "  m: merge  o: checkout  v: review  r: refresh"
 
@@ -430,9 +516,16 @@ local function render_view(pr)
 
 	-- Mark section headers in detail view
 	for line_no, line in ipairs(lines) do
-		if line == "Body" or line == "Comments" then
+		if line == "Body" or line == "Comments"
+			or line == "Reviews" or line == "Review Comments" then
 			entry_highlights[line_no] = "GitflowHeader"
 		end
+	end
+	for _, line_no in ipairs(review_author_lines) do
+		entry_highlights[line_no] = "GitflowReviewAuthor"
+	end
+	for _, line_no in ipairs(review_body_lines) do
+		entry_highlights[line_no] = "GitflowReviewComment"
 	end
 
 	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
@@ -491,6 +584,7 @@ function M.refresh()
 		return
 	end
 
+	next_view_request_id()
 	render_loading("Loading pull requests...")
 	gh_prs.list(M.state.filters, {}, function(err, prs)
 		if err then
@@ -513,14 +607,23 @@ function M.open_view(number, cfg)
 	end
 	ensure_window(M.state.cfg)
 
+	local request_id = next_view_request_id()
 	render_loading(("Loading PR #%s..."):format(tostring(number)))
 	gh_prs.view(number, {}, function(err, pr)
+		if not is_active_view_request(request_id) then
+			return
+		end
 		if err then
 			render_loading("Failed to load pull request")
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		render_view(pr or {})
+		gh_prs.review_comments(number, {}, function(rc_err, rc)
+			if not is_active_view_request(request_id) then
+				return
+			end
+			render_view(pr or {}, not rc_err and rc or nil)
+		end)
 	end)
 end
 
@@ -1012,6 +1115,7 @@ function M.close()
 	M.state.line_entries = {}
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
+	next_view_request_id()
 end
 
 ---@return boolean

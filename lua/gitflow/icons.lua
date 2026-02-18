@@ -104,6 +104,7 @@ local registry = {
 		revert = { nerd = NF.commit, ascii = "V" },
 		blame = { nerd = NF.commit, ascii = "B" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
+		notifications = { nerd = NF.conflict, ascii = "N" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
 	},
