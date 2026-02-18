@@ -450,6 +450,97 @@ test("bisect start, good, bad, and reset work", function()
 	)
 end)
 
+test("panel detects active bisect session on open", function()
+	local git_bisect = require("gitflow.git.bisect")
+	local bisect_panel = require("gitflow.panels.bisect")
+
+	local good_sha = vim.trim(
+		run_git(repo_dir, { "rev-parse", "HEAD~3" })
+	)
+	local bad_sha = vim.trim(
+		run_git(repo_dir, { "rev-parse", "HEAD" })
+	)
+
+	local start_err = wait_async(function(done)
+		git_bisect.start(bad_sha, good_sha, function(e, _)
+			done(e)
+		end)
+	end)
+	assert_true(
+		start_err == nil,
+		"bisect start should not error: " .. tostring(start_err)
+	)
+
+	bisect_panel.open(cfg)
+	local entered_bisect_phase = vim.wait(2000, function()
+		return bisect_panel.state.phase == "bisecting"
+	end, 50)
+	assert_true(
+		entered_bisect_phase,
+		"panel should switch to bisecting phase when session is active"
+	)
+
+	bisect_panel.close()
+	local reset_err = wait_async(function(done)
+		git_bisect.reset_bisect(function(e, _)
+			done(e)
+		end)
+	end)
+	assert_true(
+		reset_err == nil,
+		"bisect reset should not error: " .. tostring(reset_err)
+	)
+end)
+
+test("select_test_file runs bisect test in active phase", function()
+	local bisect_panel = require("gitflow.panels.bisect")
+	local ui = require("gitflow.ui")
+	local git_bisect = require("gitflow.git.bisect")
+
+	local previous_cfg = bisect_panel.state.cfg
+	local old_prompt = ui.input.prompt
+	local old_run = git_bisect.run
+
+	local run_called = false
+	local run_path = nil
+
+	local ok, err = pcall(function()
+		bisect_panel.state.cfg = nil
+		bisect_panel.state.phase = "bisecting"
+		bisect_panel.state.test_script = nil
+
+		ui.input.prompt = function(_, cb)
+			cb("scripts/bisect_test.sh")
+		end
+
+		git_bisect.run = function(path, cb)
+			run_called = true
+			run_path = path
+			cb(nil, "Bisecting: 0 revisions left to test")
+		end
+
+		bisect_panel.select_test_file()
+
+		assert_true(
+			run_called,
+			"select_test_file should run bisect in active phase"
+		)
+		assert_equals(
+			run_path,
+			"scripts/bisect_test.sh",
+			"bisect run should receive selected script path"
+		)
+	end)
+
+	ui.input.prompt = old_prompt
+	git_bisect.run = old_run
+	bisect_panel.state.cfg = previous_cfg
+
+	if not ok then
+		error(err, 2)
+	end
+end)
+
 -- ─── Panel lifecycle tests ───
 
 test("bisect panel opens and shows commits", function()
@@ -549,6 +640,16 @@ test("bisect panel close cleans up state", function()
 	assert_true(
 		not bisect_panel.is_open(),
 		"is_open should return false after close"
+	)
+	assert_equals(
+		bisect_panel.state.phase, "select_bad",
+		"phase should reset after close"
+	)
+	assert_true(
+		bisect_panel.state.bad_sha == nil
+			and bisect_panel.state.good_sha == nil
+			and bisect_panel.state.first_bad_sha == nil,
+		"selection SHAs should reset after close"
 	)
 end)
 

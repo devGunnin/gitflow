@@ -46,6 +46,27 @@ local function emit_post_operation()
 	)
 end
 
+local function sync_phase_with_repo_state(is_active)
+	M.state.bisect_active = is_active
+	if is_active then
+		if M.state.phase == "select_bad"
+			or M.state.phase == "select_good"
+		then
+			M.state.phase = "bisecting"
+		end
+		return
+	end
+
+	if M.state.phase == "bisecting"
+		or M.state.phase == "found"
+	then
+		M.state.bad_sha = nil
+		M.state.good_sha = nil
+		M.state.first_bad_sha = nil
+		M.state.phase = "select_bad"
+	end
+end
+
 ---@return string
 local function current_footer()
 	if M.state.phase == "bisecting"
@@ -524,6 +545,12 @@ function M.select_test_file()
 				vim.log.levels.INFO
 			)
 		end
+		if M.state.phase == "bisecting"
+			and M.state.test_script
+		then
+			M.run_test()
+			return
+		end
 		M.refresh()
 	end)
 end
@@ -624,16 +651,19 @@ function M.refresh()
 		return
 	end
 
-	git_branch.current({}, function(_, branch)
-		git_bisect.list_commits({
-			count = cfg.git.log.count,
-		}, function(log_err, entries)
-			if log_err then
-				utils.notify(log_err, vim.log.levels.ERROR)
-				return
-			end
+	git_bisect.is_bisecting(function(is_active)
+		sync_phase_with_repo_state(is_active)
+		git_branch.current({}, function(_, branch)
+			git_bisect.list_commits({
+				count = cfg.git.log.count,
+			}, function(log_err, entries)
+				if log_err then
+					utils.notify(log_err, vim.log.levels.ERROR)
+					return
+				end
 
-			render(entries or {}, branch or "(unknown)")
+				render(entries or {}, branch or "(unknown)")
+			end)
 		end)
 	end)
 end
@@ -678,6 +708,12 @@ function M.close()
 	M.state.bufnr = nil
 	M.state.winid = nil
 	M.state.line_entries = {}
+	M.state.bisect_active = false
+	M.state.bad_sha = nil
+	M.state.good_sha = nil
+	M.state.first_bad_sha = nil
+	M.state.test_script = nil
+	M.state.phase = "select_bad"
 end
 
 ---@return boolean
