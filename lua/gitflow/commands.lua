@@ -24,6 +24,7 @@ local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
 local notifications_panel = require("gitflow.panels.notifications")
+local blame_panel = require("gitflow.panels.blame")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -1023,6 +1024,7 @@ local function register_builtin_subcommands(cfg)
 			conflict_panel.close()
 			reset_panel.close()
 			cherry_pick_panel.close()
+			blame_panel.close()
 			palette_panel.close()
 			notifications_panel.close()
 			return "Gitflow panels closed"
@@ -1169,6 +1171,22 @@ local function register_builtin_subcommands(cfg)
 		run = function()
 			notifications_panel.open(cfg)
 			return "Notifications panel opened"
+		end,
+	}
+
+	M.subcommands.blame = {
+		description = "Toggle git blame panel for current file",
+		run = function()
+			if blame_panel.is_open() then
+				blame_panel.close()
+				return "Blame panel closed"
+			end
+			blame_panel.open(cfg, {
+				on_open_commit = function(sha)
+					diff_panel.open(cfg, { commit = sha })
+				end,
+			})
+			return "Blame panel opened"
 		end,
 	}
 
@@ -2230,6 +2248,7 @@ function M.setup(cfg)
 		"<Cmd>Gitflow cherry-pick-panel<CR>",
 		{ silent = true }
 	)
+	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set(
@@ -2260,6 +2279,7 @@ function M.setup(cfg)
 		label = "<Plug>(GitflowLabel)",
 		reset = "<Plug>(GitflowReset)",
 		revert = "<Plug>(GitflowRevert)",
+		blame = "<Plug>(GitflowBlame)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
