@@ -1258,18 +1258,18 @@ local function register_builtin_subcommands(cfg)
 				return ("Pushing tag '%s'..."):format(name)
 			end
 
-				return ("Unknown tag action: %s"):format(action)
-			end,
-		}
+			return ("Unknown tag action: %s"):format(action)
+		end,
+	}
 
-		M.subcommands.notifications = {
-			description = "Open notification center",
-			category = "UI",
-			run = function()
-				notifications_panel.open(cfg)
-				return "Notifications panel opened"
-			end,
-		}
+	M.subcommands.notifications = {
+		description = "Open notification center",
+		category = "UI",
+		run = function()
+			notifications_panel.open(cfg)
+			return "Notifications panel opened"
+		end,
+	}
 
 	M.subcommands.blame = {
 		description = "Toggle git blame panel for current file",
