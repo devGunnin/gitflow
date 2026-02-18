@@ -90,6 +90,7 @@ function M.defaults()
 			tag = "gT",
 			blame = "gB",
 			cherry_pick = "gC",
+			rebase_interactive = "gI",
 			conflict = "<leader>gm",
 			actions = "gA",
 			palette = "<leader>go",
