@@ -46,6 +46,14 @@ local function format_time(ts)
 	return os.date("%H:%M:%S", ts)
 end
 
+---@param message any
+---@return string[]
+local function split_message_lines(message)
+	local text = tostring(message or "")
+	text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+	return vim.split(text, "\n", { plain = true, trimempty = false })
+end
+
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
@@ -169,14 +177,23 @@ local function render(entries)
 			local severity = level_label[entry.level]
 				or "INFO"
 			local ts = format_time(entry.timestamp)
+			local message_lines = split_message_lines(entry.message)
 			lines[#lines + 1] = ui_render.entry(
 				("%s [%s] %s"):format(
-					ts, severity, entry.message
+					ts, severity, message_lines[1] or ""
 				)
 			)
 			local hl = level_hl[entry.level]
 			if hl then
 				entry_highlights[#lines] = hl
+			end
+			for idx = 2, #message_lines do
+				lines[#lines + 1] = ui_render.entry(
+					("    %s"):format(message_lines[idx])
+				)
+				if hl then
+					entry_highlights[#lines] = hl
+				end
 			end
 		end
 	end

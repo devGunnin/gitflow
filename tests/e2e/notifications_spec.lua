@@ -175,6 +175,33 @@ T.run_suite("E2E: Notification Center", {
 		T.cleanup_panels()
 	end,
 
+	["panel safely renders multiline messages"] = function()
+		notifications.clear()
+		notifications.push("line one\nline two", vim.log.levels.WARN)
+		notifications_panel.open(cfg)
+
+		local bufnr = ui.buffer.get("notifications")
+		T.assert_true(bufnr ~= nil, "notifications buffer should exist")
+
+		local lines = T.buf_lines(bufnr)
+		local has_line_one = false
+		local has_line_two = false
+		for _, line in ipairs(lines) do
+			if line:find("line one", 1, true) then
+				has_line_one = true
+			end
+			if line:find("line two", 1, true) then
+				has_line_two = true
+			end
+		end
+
+		T.assert_true(has_line_one, "panel should render first line")
+		T.assert_true(has_line_two, "panel should render continuation line")
+
+		T.cleanup_panels()
+		notifications.clear()
+	end,
+
 	-- ── Panel keymaps ─────────────────────────────────────────────────
 
 	["panel has expected buffer-local keymaps"] = function()
