@@ -23,15 +23,22 @@ end
 ---@param panel_name "issues"|"prs"
 ---@param message string
 ---@param predicate fun(lines: string[]): boolean
+---@return string[]
 local function wait_for_detail_render(panel_name, message, predicate)
+	local matched_lines = {}
 	T.wait_until(function()
 		local bufnr = ui.buffer.get(panel_name)
 		if bufnr == nil or not vim.api.nvim_buf_is_valid(bufnr) then
 			return false
 		end
 		local lines = T.buf_lines(bufnr)
-		return predicate(lines)
+		if not predicate(lines) then
+			return false
+		end
+		matched_lines = vim.deepcopy(lines)
+		return true
 	end, message, 5000)
+	return matched_lines
 end
 
 ---@param bufnr integer
@@ -55,7 +62,7 @@ T.run_suite("detail_title_spec", {
 	["issue view shows Title field"] = function()
 		T.cleanup_panels()
 		issues_panel.open_view(1, cfg)
-		wait_for_detail_render("issues", "issue view should render Title line", function(lines)
+		local lines = wait_for_detail_render("issues", "issue view should render Title line", function(lines)
 			return T.find_line(lines, "Title:") ~= nil
 		end)
 
@@ -65,7 +72,6 @@ T.run_suite("detail_title_spec", {
 			"issue view should render Title/Body lines"
 		)
 
-		local lines = T.buf_lines(bufnr)
 		local title_line = T.find_line(
 			lines, "Title:"
 		)
@@ -87,7 +93,7 @@ T.run_suite("detail_title_spec", {
 	["issue view Title appears before Body"] = function()
 		T.cleanup_panels()
 		issues_panel.open_view(1, cfg)
-		wait_for_detail_render("issues", "issue view should render Title and Body", function(lines)
+		local lines = wait_for_detail_render("issues", "issue view should render Title and Body", function(lines)
 			local title_idx = T.find_line(lines, "Title:")
 			local body_idx = T.find_line(lines, "Body")
 			return title_idx ~= nil and body_idx ~= nil
@@ -99,7 +105,6 @@ T.run_suite("detail_title_spec", {
 			"issue view should render Title/Body lines"
 		)
 
-		local lines = T.buf_lines(bufnr)
 		local title_idx = T.find_line(lines, "Title:")
 		local body_idx = T.find_line(lines, "Body")
 		T.assert_true(
@@ -119,7 +124,7 @@ T.run_suite("detail_title_spec", {
 	["pr view shows Title field"] = function()
 		T.cleanup_panels()
 		prs_panel.open_view(42, cfg)
-		wait_for_detail_render("prs", "PR view should render Title line", function(lines)
+		local lines = wait_for_detail_render("prs", "PR view should render Title line", function(lines)
 			return T.find_line(lines, "Title:") ~= nil
 		end)
 
@@ -129,7 +134,6 @@ T.run_suite("detail_title_spec", {
 			"pr view should render Title/Body lines"
 		)
 
-		local lines = T.buf_lines(bufnr)
 		local title_line = T.find_line(
 			lines, "Title:"
 		)
@@ -151,7 +155,7 @@ T.run_suite("detail_title_spec", {
 	["pr view Title appears before Body"] = function()
 		T.cleanup_panels()
 		prs_panel.open_view(42, cfg)
-		wait_for_detail_render("prs", "PR view should render Title and Body", function(lines)
+		local lines = wait_for_detail_render("prs", "PR view should render Title and Body", function(lines)
 			local title_idx = T.find_line(lines, "Title:")
 			local body_idx = T.find_line(lines, "Body")
 			return title_idx ~= nil and body_idx ~= nil
@@ -163,7 +167,6 @@ T.run_suite("detail_title_spec", {
 			"pr view should render Title/Body lines"
 		)
 
-		local lines = T.buf_lines(bufnr)
 		local title_idx = T.find_line(lines, "Title:")
 		local body_idx = T.find_line(lines, "Body")
 		T.assert_true(

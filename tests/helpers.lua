@@ -395,6 +395,7 @@ local ALL_PANELS = {
 	"conflict", "issues", "prs", "labels", "review",
 	"palette", "cherry_pick", "reset", "revert",
 	"notifications",
+	"actions",
 }
 
 --- Close all open panel windows and reset shared state.
