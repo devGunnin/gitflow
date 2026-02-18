@@ -71,6 +71,7 @@ local function build_default_groups(palette)
 		-- Review
 		GitflowReviewApproved = { link = "DiagnosticOk" },
 		GitflowReviewChangesRequested = { link = "WarningMsg" },
+		GitflowReviewAuthor = { fg = palette.accent_secondary, bold = true },
 		GitflowReviewComment = { link = "Comment" },
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },

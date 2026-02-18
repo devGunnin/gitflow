@@ -323,8 +323,9 @@ T.run_suite("E2E: Async Determinism", {
 		commands.dispatch({ "push" }, cfg)
 		T.drain_jobs(3000)
 
-		T.assert_true(
-			event_fired,
+		T.wait_until(function()
+			return event_fired
+		end,
 			"GitflowPostOperation should fire after successful push"
 		)
 
