@@ -91,6 +91,7 @@ function M.defaults()
 			cherry_pick = "gC",
 			worktree = "gW",
 			conflict = "<leader>gm",
+			actions = "gA",
 			palette = "<leader>go",
 			notifications = "gN",
 		},

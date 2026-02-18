@@ -1,0 +1,66 @@
+{
+  "databaseId": 12345,
+  "name": "CI",
+  "headBranch": "main",
+  "status": "completed",
+  "conclusion": "success",
+  "event": "push",
+  "createdAt": "2026-02-17T10:00:00Z",
+  "updatedAt": "2026-02-17T10:05:00Z",
+  "url": "https://github.com/devGunnin/Gitflow/actions/runs/12345",
+  "displayTitle": "CI: push to main",
+  "jobs": [
+    {
+      "databaseId": 9001,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-02-17T10:00:30Z",
+      "completedAt": "2026-02-17T10:04:15Z",
+      "steps": [
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "startedAt": "2026-02-17T10:00:31Z",
+          "completedAt": "2026-02-17T10:00:45Z"
+        },
+        {
+          "name": "Run tests",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "startedAt": "2026-02-17T10:00:46Z",
+          "completedAt": "2026-02-17T10:04:15Z"
+        }
+      ]
+    },
+    {
+      "databaseId": 9002,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "failure",
+      "startedAt": "2026-02-17T10:00:30Z",
+      "completedAt": "2026-02-17T10:02:45Z",
+      "steps": [
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "startedAt": "2026-02-17T10:00:31Z",
+          "completedAt": "2026-02-17T10:00:44Z"
+        },
+        {
+          "name": "Lint check",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 2,
+          "startedAt": "2026-02-17T10:00:45Z",
+          "completedAt": "2026-02-17T10:02:45Z"
+        }
+      ]
+    }
+  ]
+}
