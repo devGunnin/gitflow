@@ -30,6 +30,27 @@ M.state = {
 	cfg = nil,
 }
 
+---@param winid integer
+---@return boolean
+local function is_gitflow_window(winid)
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return false
+	end
+
+	local bufnr = vim.api.nvim_win_get_buf(winid)
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return false
+	end
+
+	local name = vim.api.nvim_buf_get_name(bufnr)
+	if name:match("^gitflow://") then
+		return true
+	end
+
+	local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+	return filetype:match("^gitflow") ~= nil
+end
+
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
 		"User", { pattern = "GitflowPostOperation" }
@@ -214,17 +235,38 @@ end
 local function resolve_switch_target_win()
 	local panel_winid = M.state.winid
 	local source_winid = M.state.source_winid
+
+	local function valid_target(winid, allow_gitflow)
+		if not winid or not vim.api.nvim_win_is_valid(winid) then
+			return false
+		end
+		if winid == panel_winid then
+			return false
+		end
+		if not allow_gitflow and is_gitflow_window(winid) then
+			return false
+		end
+		return true
+	end
+
 	if source_winid
-		and vim.api.nvim_win_is_valid(source_winid)
-		and source_winid ~= panel_winid
+		and valid_target(source_winid, false)
 	then
 		return source_winid
 	end
 
 	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-		if winid ~= panel_winid
-			and vim.api.nvim_win_is_valid(winid)
-		then
+		if valid_target(winid, false) then
+			return winid
+		end
+	end
+
+	if source_winid and valid_target(source_winid, true) then
+		return source_winid
+	end
+
+	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if valid_target(winid, true) then
 			return winid
 		end
 	end
@@ -238,7 +280,18 @@ function M.open(cfg)
 	if vim.api.nvim_win_is_valid(current_win)
 		and current_win ~= M.state.winid
 	then
-		M.state.source_winid = current_win
+		if is_gitflow_window(current_win) then
+			local resolved = nil
+			for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+				if winid ~= current_win and not is_gitflow_window(winid) then
+					resolved = winid
+					break
+				end
+			end
+			M.state.source_winid = resolved or current_win
+		else
+			M.state.source_winid = current_win
+		end
 	end
 
 	M.state.cfg = cfg

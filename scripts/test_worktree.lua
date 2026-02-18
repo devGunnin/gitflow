@@ -86,6 +86,38 @@ local function write_file(path, lines)
 	vim.fn.writefile(lines, path)
 end
 
+---@param winid integer
+---@return string
+local function get_window_cwd(winid)
+	local current = vim.api.nvim_get_current_win()
+	if winid ~= current then
+		vim.api.nvim_set_current_win(winid)
+	end
+
+	local cwd = vim.fn.getcwd()
+
+	if winid ~= current and vim.api.nvim_win_is_valid(current) then
+		vim.api.nvim_set_current_win(current)
+	end
+
+	return cwd
+end
+
+---@param winid integer
+---@param path string
+local function set_window_lcd(winid, path)
+	local current = vim.api.nvim_get_current_win()
+	if winid ~= current then
+		vim.api.nvim_set_current_win(winid)
+	end
+
+	vim.cmd.lcd(path)
+
+	if winid ~= current and vim.api.nvim_win_is_valid(current) then
+		vim.api.nvim_set_current_win(current)
+	end
+end
+
 local function assert_mapping(lhs, expected_rhs, message)
 	local mapping = vim.fn.maparg(lhs, "n", false, true)
 	assert_true(
@@ -690,18 +722,14 @@ test("switch_under_cursor updates source window cwd with local-dir setups", func
 	local source_win = vim.api.nvim_get_current_win()
 	local local_branch = "feature-local-switch"
 	local wt_path = repo_dir .. "/wt-switch-local"
-	local previous_cwd = vim.api.nvim_win_call(source_win, function()
-		return vim.fn.getcwd()
-	end)
+	local previous_cwd = get_window_cwd(source_win)
 
 	run_git(repo_dir, { "branch", local_branch })
 	run_git(repo_dir, { "worktree", "add", wt_path, local_branch })
 
 	local original_confirm = ui_input.confirm
 	local ok, err = pcall(function()
-		vim.api.nvim_win_call(source_win, function()
-			vim.cmd.lcd(previous_cwd)
-		end)
+		set_window_lcd(source_win, previous_cwd)
 
 		wt_panel.open(cfg)
 		vim.wait(2000, function()
@@ -735,9 +763,7 @@ test("switch_under_cursor updates source window cwd with local-dir setups", func
 		)
 		wt_panel.switch_under_cursor()
 
-		local source_cwd = vim.api.nvim_win_call(source_win, function()
-			return vim.fn.getcwd()
-		end)
+		local source_cwd = get_window_cwd(source_win)
 		assert_equals(
 			source_cwd,
 			wt_path,
@@ -748,12 +774,109 @@ test("switch_under_cursor updates source window cwd with local-dir setups", func
 	ui_input.confirm = original_confirm
 	if vim.api.nvim_win_is_valid(source_win) then
 		vim.api.nvim_set_current_win(source_win)
-		vim.api.nvim_win_call(source_win, function()
-			vim.cmd.lcd(previous_cwd)
-		end)
+		set_window_lcd(source_win, previous_cwd)
 	end
 	vim.fn.chdir(previous_cwd)
 	wt_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test("switch_under_cursor ignores gitflow panel windows as source", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	local ui_input = require("gitflow.ui.input")
+	local source_win = vim.api.nvim_get_current_win()
+	local local_branch = "feature-panel-source"
+	local wt_path = repo_dir .. "/wt-switch-panel-source"
+	local previous_cwd = vim.fn.getcwd()
+	local previous_source_cwd = get_window_cwd(source_win)
+	local fake_panel_buf = nil
+	local fake_panel_win = nil
+
+	run_git(repo_dir, { "branch", local_branch })
+	run_git(repo_dir, { "worktree", "add", wt_path, local_branch })
+
+	local original_confirm = ui_input.confirm
+	local ok, err = pcall(function()
+		set_window_lcd(source_win, previous_source_cwd)
+
+		fake_panel_buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_name(
+			fake_panel_buf,
+			"gitflow://fake-status-panel"
+		)
+		vim.api.nvim_set_option_value(
+			"filetype",
+			"gitflowstatus",
+			{ buf = fake_panel_buf }
+		)
+		vim.cmd("vsplit")
+		fake_panel_win = vim.api.nvim_get_current_win()
+		vim.api.nvim_win_set_buf(fake_panel_win, fake_panel_buf)
+
+		wt_panel.open(cfg)
+		assert_equals(
+			wt_panel.state.source_winid,
+			source_win,
+			"source window should prefer non-gitflow buffers"
+		)
+
+		vim.wait(2000, function()
+			for _, entry in pairs(wt_panel.state.line_entries) do
+				if entry.path == wt_path then
+					return true
+				end
+			end
+			return false
+		end, 50)
+
+		local target_line = nil
+		for line_no, entry in pairs(wt_panel.state.line_entries) do
+			if entry.path == wt_path then
+				target_line = line_no
+				break
+			end
+		end
+		assert_true(
+			target_line ~= nil,
+			"switch target worktree should be rendered"
+		)
+
+		ui_input.confirm = function()
+			return true, 1
+		end
+		vim.api.nvim_set_current_win(wt_panel.state.winid)
+		vim.api.nvim_win_set_cursor(
+			wt_panel.state.winid,
+			{ target_line, 0 }
+		)
+		wt_panel.switch_under_cursor()
+
+		local source_cwd = get_window_cwd(source_win)
+		assert_equals(
+			source_cwd,
+			wt_path,
+			"switch should update non-panel source window cwd"
+		)
+	end)
+
+	ui_input.confirm = original_confirm
+	if wt_panel.is_open() then
+		wt_panel.close()
+	end
+	if fake_panel_win and vim.api.nvim_win_is_valid(fake_panel_win) then
+		pcall(vim.api.nvim_win_close, fake_panel_win, true)
+	end
+	if fake_panel_buf and vim.api.nvim_buf_is_valid(fake_panel_buf) then
+		pcall(vim.api.nvim_buf_delete, fake_panel_buf, { force = true })
+	end
+	if vim.api.nvim_win_is_valid(source_win) then
+		vim.api.nvim_set_current_win(source_win)
+		set_window_lcd(source_win, previous_source_cwd)
+	end
+	vim.fn.chdir(previous_cwd)
 
 	if not ok then
 		error(err, 0)
