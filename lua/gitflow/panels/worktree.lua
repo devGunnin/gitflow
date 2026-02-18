@@ -10,6 +10,7 @@ local list_picker = require("gitflow.ui.list_picker")
 ---@class GitflowWorktreePanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
+---@field source_winid integer|nil
 ---@field line_entries table<integer, GitflowWorktreeEntry>
 ---@field cfg GitflowConfig|nil
 
@@ -24,6 +25,7 @@ local WT_HIGHLIGHT_NS =
 M.state = {
 	bufnr = nil,
 	winid = nil,
+	source_winid = nil,
 	line_entries = {},
 	cfg = nil,
 }
@@ -208,8 +210,37 @@ local function entry_under_cursor()
 	return M.state.line_entries[line]
 end
 
+---@return integer|nil
+local function resolve_switch_target_win()
+	local panel_winid = M.state.winid
+	local source_winid = M.state.source_winid
+	if source_winid
+		and vim.api.nvim_win_is_valid(source_winid)
+		and source_winid ~= panel_winid
+	then
+		return source_winid
+	end
+
+	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if winid ~= panel_winid
+			and vim.api.nvim_win_is_valid(winid)
+		then
+			return winid
+		end
+	end
+
+	return panel_winid
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
+	local current_win = vim.api.nvim_get_current_win()
+	if vim.api.nvim_win_is_valid(current_win)
+		and current_win ~= M.state.winid
+	then
+		M.state.source_winid = current_win
+	end
+
 	M.state.cfg = cfg
 	ensure_window(cfg)
 	M.refresh()
@@ -265,7 +296,20 @@ function M.switch_under_cursor()
 		return
 	end
 
-	local ok, switch_err = pcall(vim.cmd.cd, entry.path)
+	local target_winid = resolve_switch_target_win()
+	local ok, switch_err = pcall(function()
+		if target_winid
+			and vim.api.nvim_win_is_valid(target_winid)
+		then
+			vim.api.nvim_win_call(target_winid, function()
+				vim.cmd.cd(entry.path)
+				vim.cmd.lcd(entry.path)
+			end)
+			return
+		end
+		vim.cmd.cd(entry.path)
+		vim.cmd.lcd(entry.path)
+	end)
 	if not ok then
 		utils.notify(
 			("Failed to switch to worktree '%s': %s"):format(
@@ -422,6 +466,7 @@ function M.close()
 
 	M.state.bufnr = nil
 	M.state.winid = nil
+	M.state.source_winid = nil
 	M.state.line_entries = {}
 end
 

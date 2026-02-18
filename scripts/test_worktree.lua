@@ -684,6 +684,82 @@ test("switch_under_cursor changes cwd to selected worktree", function()
 	end
 end)
 
+test("switch_under_cursor updates source window cwd with local-dir setups", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	local ui_input = require("gitflow.ui.input")
+	local source_win = vim.api.nvim_get_current_win()
+	local local_branch = "feature-local-switch"
+	local wt_path = repo_dir .. "/wt-switch-local"
+	local previous_cwd = vim.api.nvim_win_call(source_win, function()
+		return vim.fn.getcwd()
+	end)
+
+	run_git(repo_dir, { "branch", local_branch })
+	run_git(repo_dir, { "worktree", "add", wt_path, local_branch })
+
+	local original_confirm = ui_input.confirm
+	local ok, err = pcall(function()
+		vim.api.nvim_win_call(source_win, function()
+			vim.cmd.lcd(previous_cwd)
+		end)
+
+		wt_panel.open(cfg)
+		vim.wait(2000, function()
+			for _, entry in pairs(wt_panel.state.line_entries) do
+				if entry.path == wt_path then
+					return true
+				end
+			end
+			return false
+		end, 50)
+
+		local target_line = nil
+		for line_no, entry in pairs(wt_panel.state.line_entries) do
+			if entry.path == wt_path then
+				target_line = line_no
+				break
+			end
+		end
+		assert_true(
+			target_line ~= nil,
+			"switch target worktree should be rendered"
+		)
+
+		ui_input.confirm = function()
+			return true, 1
+		end
+		vim.api.nvim_set_current_win(wt_panel.state.winid)
+		vim.api.nvim_win_set_cursor(
+			wt_panel.state.winid,
+			{ target_line, 0 }
+		)
+		wt_panel.switch_under_cursor()
+
+		local source_cwd = vim.api.nvim_win_call(source_win, function()
+			return vim.fn.getcwd()
+		end)
+		assert_equals(
+			source_cwd,
+			wt_path,
+			"switch should update source window cwd even with local cwd"
+		)
+	end)
+
+	ui_input.confirm = original_confirm
+	if vim.api.nvim_win_is_valid(source_win) then
+		vim.api.nvim_set_current_win(source_win)
+		vim.api.nvim_win_call(source_win, function()
+			vim.cmd.lcd(previous_cwd)
+		end)
+	end
+	vim.fn.chdir(previous_cwd)
+	wt_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 test("switch_under_cursor handles cd failures without throwing", function()
 	local wt_panel = require("gitflow.panels.worktree")
 	local ui_input = require("gitflow.ui.input")
