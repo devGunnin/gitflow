@@ -2417,7 +2417,6 @@ function M.setup(cfg)
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		worktree = "<Plug>(GitflowWorktree)",
 		actions = "<Plug>(GitflowActions)",
-		worktree = "<Plug>(GitflowWorktree)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 		notifications = "<Plug>(GitflowNotifications)",
