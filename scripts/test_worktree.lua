@@ -883,6 +883,111 @@ test("switch_under_cursor ignores gitflow panel windows as source", function()
 	end
 end)
 
+test("switch_under_cursor targets source editor window across tabs", function()
+	local wt_panel = require("gitflow.panels.worktree")
+	local ui_input = require("gitflow.ui.input")
+	local source_win = vim.api.nvim_get_current_win()
+	local source_tab = vim.api.nvim_get_current_tabpage()
+	local local_branch = "feature-cross-tab-source"
+	local wt_path = repo_dir .. "/wt-switch-cross-tab"
+	local previous_cwd = vim.fn.getcwd()
+	local fake_panel_buf = nil
+	local panel_tab = nil
+	local switch_target_winid = nil
+
+	run_git(repo_dir, { "branch", local_branch })
+	run_git(repo_dir, { "worktree", "add", wt_path, local_branch })
+
+	local original_confirm = ui_input.confirm
+	local original_win_call = vim.api.nvim_win_call
+	local ok, err = pcall(function()
+		vim.cmd("tabnew")
+		panel_tab = vim.api.nvim_get_current_tabpage()
+		vim.cmd.cd(repo_dir)
+
+		fake_panel_buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_name(
+			fake_panel_buf,
+			"gitflow://fake-issues-panel"
+		)
+		vim.api.nvim_set_option_value(
+			"filetype",
+			"gitflowissues",
+			{ buf = fake_panel_buf }
+		)
+		vim.api.nvim_win_set_buf(0, fake_panel_buf)
+
+		wt_panel.open(cfg)
+		assert_equals(
+			wt_panel.state.source_winid,
+			source_win,
+			"source window should resolve across tabs"
+		)
+
+		vim.wait(2000, function()
+			for _, entry in pairs(wt_panel.state.line_entries) do
+				if entry.path == wt_path then
+					return true
+				end
+			end
+			return false
+		end, 50)
+
+		local target_line = nil
+		for line_no, entry in pairs(wt_panel.state.line_entries) do
+			if entry.path == wt_path then
+				target_line = line_no
+				break
+			end
+		end
+		assert_true(
+			target_line ~= nil,
+			"switch target worktree should be rendered"
+		)
+
+		ui_input.confirm = function()
+			return true, 1
+		end
+		vim.api.nvim_win_call = function(winid, fn)
+			switch_target_winid = winid
+			return original_win_call(winid, fn)
+		end
+		vim.api.nvim_set_current_win(wt_panel.state.winid)
+		vim.api.nvim_win_set_cursor(
+			wt_panel.state.winid,
+			{ target_line, 0 }
+		)
+		wt_panel.switch_under_cursor()
+
+		assert_equals(
+			switch_target_winid,
+			source_win,
+			"switch should execute in source editor window"
+		)
+	end)
+
+	ui_input.confirm = original_confirm
+	vim.api.nvim_win_call = original_win_call
+	if wt_panel.is_open() then
+		wt_panel.close()
+	end
+	if panel_tab and vim.api.nvim_tabpage_is_valid(panel_tab) then
+		vim.api.nvim_set_current_tabpage(panel_tab)
+		vim.cmd("tabclose")
+	end
+	if vim.api.nvim_tabpage_is_valid(source_tab) then
+		vim.api.nvim_set_current_tabpage(source_tab)
+	end
+	if fake_panel_buf and vim.api.nvim_buf_is_valid(fake_panel_buf) then
+		pcall(vim.api.nvim_buf_delete, fake_panel_buf, { force = true })
+	end
+	vim.fn.chdir(previous_cwd)
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 test("switch_under_cursor handles cd failures without throwing", function()
 	local wt_panel = require("gitflow.panels.worktree")
 	local ui_input = require("gitflow.ui.input")

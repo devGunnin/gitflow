@@ -51,6 +51,26 @@ local function is_gitflow_window(winid)
 	return filetype:match("^gitflow") ~= nil
 end
 
+---@return integer[]
+local function list_candidate_windows()
+	local wins = {}
+	local current_tab = vim.api.nvim_get_current_tabpage()
+
+	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(current_tab)) do
+		wins[#wins + 1] = winid
+	end
+
+	for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+		if tabpage ~= current_tab then
+			for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+				wins[#wins + 1] = winid
+			end
+		end
+	end
+
+	return wins
+end
+
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
 		"User", { pattern = "GitflowPostOperation" }
@@ -236,42 +256,32 @@ local function resolve_switch_target_win()
 	local panel_winid = M.state.winid
 	local source_winid = M.state.source_winid
 
-	local function valid_target(winid, allow_gitflow)
+	local function valid_target(winid)
 		if not winid or not vim.api.nvim_win_is_valid(winid) then
 			return false
 		end
 		if winid == panel_winid then
 			return false
 		end
-		if not allow_gitflow and is_gitflow_window(winid) then
+		if is_gitflow_window(winid) then
 			return false
 		end
 		return true
 	end
 
 	if source_winid
-		and valid_target(source_winid, false)
+		and valid_target(source_winid)
 	then
 		return source_winid
 	end
 
-	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-		if valid_target(winid, false) then
+	for _, winid in ipairs(list_candidate_windows()) do
+		if valid_target(winid) then
 			return winid
 		end
 	end
 
-	if source_winid and valid_target(source_winid, true) then
-		return source_winid
-	end
-
-	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-		if valid_target(winid, true) then
-			return winid
-		end
-	end
-
-	return panel_winid
+	return nil
 end
 
 ---@param cfg GitflowConfig
@@ -282,13 +292,13 @@ function M.open(cfg)
 	then
 		if is_gitflow_window(current_win) then
 			local resolved = nil
-			for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			for _, winid in ipairs(list_candidate_windows()) do
 				if winid ~= current_win and not is_gitflow_window(winid) then
 					resolved = winid
 					break
 				end
 			end
-			M.state.source_winid = resolved or current_win
+			M.state.source_winid = resolved
 		else
 			M.state.source_winid = current_win
 		end
@@ -350,18 +360,19 @@ function M.switch_under_cursor()
 	end
 
 	local target_winid = resolve_switch_target_win()
+	if not target_winid then
+		utils.notify(
+			"Cannot switch worktree: no non-Gitflow editor window found",
+			vim.log.levels.ERROR
+		)
+		return
+	end
+
 	local ok, switch_err = pcall(function()
-		if target_winid
-			and vim.api.nvim_win_is_valid(target_winid)
-		then
-			vim.api.nvim_win_call(target_winid, function()
-				vim.cmd.cd(entry.path)
-				vim.cmd.lcd(entry.path)
-			end)
-			return
-		end
-		vim.cmd.cd(entry.path)
-		vim.cmd.lcd(entry.path)
+		vim.api.nvim_win_call(target_winid, function()
+			vim.cmd.cd(entry.path)
+			vim.cmd.lcd(entry.path)
+		end)
 	end)
 	if not ok then
 		utils.notify(
