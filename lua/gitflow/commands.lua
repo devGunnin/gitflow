@@ -24,6 +24,7 @@ local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
 local actions_panel = require("gitflow.panels.actions")
+local blame_panel = require("gitflow.panels.blame")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -1025,6 +1026,7 @@ local function register_builtin_subcommands(cfg)
 			reset_panel.close()
 			cherry_pick_panel.close()
 			actions_panel.close()
+			blame_panel.close()
 			palette_panel.close()
 			return "Gitflow panels closed"
 		end,
@@ -1170,6 +1172,22 @@ local function register_builtin_subcommands(cfg)
 			actions_panel.open(cfg)
 			return "Actions panel opened"
 		end,
+	}
+
+	M.subcommands.blame = {
+		description = "Toggle git blame panel for current file",
+		run = function()
+			if blame_panel.is_open() then
+				blame_panel.close()
+				return "Blame panel closed"
+			end
+			blame_panel.open(cfg, {
+				on_open_commit = function(sha)
+					diff_panel.open(cfg, { commit = sha })
+				end,
+			})
+			return "Blame panel opened"
+			end,
 	}
 
 	M.subcommands.stash = {
@@ -2231,6 +2249,7 @@ function M.setup(cfg)
 		{ silent = true }
 	)
 	vim.keymap.set("n", "<Plug>(GitflowActions)", "<Cmd>Gitflow actions<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 
@@ -2255,6 +2274,7 @@ function M.setup(cfg)
 		label = "<Plug>(GitflowLabel)",
 		reset = "<Plug>(GitflowReset)",
 		revert = "<Plug>(GitflowRevert)",
+		blame = "<Plug>(GitflowBlame)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		actions = "<Plug>(GitflowActions)",
 		palette = "<Plug>(GitflowPalette)",
