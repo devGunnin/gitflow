@@ -105,6 +105,7 @@ local registry = {
 		reset = { nerd = NF.commit, ascii = "R" },
 		revert = { nerd = NF.commit, ascii = "V" },
 		tag = { nerd = NF.tag, ascii = "T" },
+		blame = { nerd = NF.commit, ascii = "B" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
