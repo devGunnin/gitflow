@@ -2,6 +2,11 @@
 ---@field message string
 ---@field level integer
 ---@field timestamp integer
+---@field context GitflowNotificationContext|nil
+
+---@class GitflowNotificationContext
+---@field command_args string[]
+---@field label string|nil
 
 local M = {}
 
@@ -27,11 +32,14 @@ end
 ---Push a new notification into the ring buffer.
 ---@param message string
 ---@param level integer|nil
-function M.push(message, level)
+---@param context GitflowNotificationContext|nil
+function M.push(message, level, context)
 	buffer[#buffer + 1] = {
 		message = message,
 		level = level or vim.log.levels.INFO,
 		timestamp = os.time(),
+		context = type(context) == "table" and vim.deepcopy(context)
+			or nil,
 	}
 	trim_to_capacity()
 end
@@ -45,6 +53,8 @@ function M.entries()
 			message = entry.message,
 			level = entry.level,
 			timestamp = entry.timestamp,
+			context = type(entry.context) == "table"
+				and vim.deepcopy(entry.context) or nil,
 		}
 	end
 	return copy

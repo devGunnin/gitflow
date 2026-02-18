@@ -8,11 +8,12 @@ local notifications = require("gitflow.notifications")
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
 ---@field filter_level integer|nil
+---@field line_context table<integer, GitflowNotificationContext>
 
 local M = {}
 local NOTIF_FLOAT_TITLE = "Gitflow Notifications"
 local NOTIF_FLOAT_FOOTER =
-	"r refresh  c clear  1 error  2 warn  3 info  0 all  q close"
+	"<CR> open  r refresh  c clear  1 error  2 warn  3 info  0 all  q close"
 local NOTIF_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_notifications_hl")
 
@@ -22,6 +23,7 @@ M.state = {
 	winid = nil,
 	cfg = nil,
 	filter_level = nil,
+	line_context = {},
 }
 
 ---@type table<integer, string>
@@ -52,6 +54,24 @@ local function split_message_lines(message)
 	local text = tostring(message or "")
 	text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
 	return vim.split(text, "\n", { plain = true, trimempty = false })
+end
+
+---@param context GitflowNotificationContext|nil
+---@return boolean
+local function has_linked_context(context)
+	return type(context) == "table"
+		and type(context.command_args) == "table"
+		and #context.command_args > 0
+end
+
+---@param context GitflowNotificationContext
+---@return string
+local function context_label(context)
+	local label = context.label
+	if type(label) == "string" and label ~= "" then
+		return label
+	end
+	return table.concat(context.command_args, " ")
 end
 
 ---@param cfg GitflowConfig
@@ -138,6 +158,10 @@ local function ensure_window(cfg)
 	vim.keymap.set("n", "q", function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "<CR>", function()
+		M.open_context_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
 ---@param entries GitflowNotificationEntry[]
@@ -150,6 +174,7 @@ local function render(entries)
 		"Gitflow Notifications", render_opts
 	)
 	local entry_highlights = {}
+	local line_context = {}
 
 	local filter = M.state.filter_level
 	if filter then
@@ -178,11 +203,21 @@ local function render(entries)
 				or "INFO"
 			local ts = format_time(entry.timestamp)
 			local message_lines = split_message_lines(entry.message)
+			local context_hint = ""
+			if has_linked_context(entry.context) then
+				context_hint = (" [<CR> %s]"):format(
+					context_label(entry.context)
+				)
+			end
 			lines[#lines + 1] = ui_render.entry(
 				("%s [%s] %s"):format(
-					ts, severity, message_lines[1] or ""
+					ts, severity,
+					(message_lines[1] or "") .. context_hint
 				)
 			)
+			if has_linked_context(entry.context) then
+				line_context[#lines] = entry.context
+			end
 			local hl = level_hl[entry.level]
 			if hl then
 				entry_highlights[#lines] = hl
@@ -219,14 +254,62 @@ local function render(entries)
 			entry_highlights = entry_highlights,
 		}
 	)
+	M.state.line_context = line_context
 end
 
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
 	M.state.filter_level = nil
+	M.state.line_context = {}
 	ensure_window(cfg)
 	M.refresh()
+end
+
+function M.open_context_under_cursor()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		utils.notify("Notifications window is not open", vim.log.levels.WARN)
+		return
+	end
+
+	local line = vim.api.nvim_win_get_cursor(winid)[1]
+	local context = M.state.line_context[line]
+	if not has_linked_context(context) then
+		utils.notify("No linked context for this entry", vim.log.levels.WARN)
+		return
+	end
+	if not M.state.cfg then
+		utils.notify(
+			"Gitflow config unavailable for context navigation",
+			vim.log.levels.ERROR
+		)
+		return
+	end
+
+	local ok, commands = pcall(require, "gitflow.commands")
+	if not ok or type(commands.dispatch) ~= "function" then
+		utils.notify(
+			"Gitflow commands unavailable for context navigation",
+			vim.log.levels.ERROR
+		)
+		return
+	end
+
+	local cfg = M.state.cfg
+	local args = vim.deepcopy(context.command_args)
+	M.close()
+	local dispatch_ok, dispatch_err = pcall(
+		commands.dispatch, args, cfg
+	)
+	if not dispatch_ok then
+		utils.notify(
+			("Failed to open linked context: %s"):format(
+				tostring(dispatch_err)
+			),
+			vim.log.levels.ERROR
+		)
+	end
 end
 
 function M.refresh()
@@ -249,6 +332,7 @@ function M.close()
 	M.state.bufnr = nil
 	M.state.winid = nil
 	M.state.filter_level = nil
+	M.state.line_context = {}
 end
 
 ---@return boolean

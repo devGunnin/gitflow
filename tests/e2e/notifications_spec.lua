@@ -15,6 +15,7 @@ local cfg = _G.TestConfig
 
 local notifications = require("gitflow.notifications")
 local notifications_panel = require("gitflow.panels.notifications")
+local status_panel = require("gitflow.panels.status")
 local commands = require("gitflow.commands")
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
@@ -133,7 +134,12 @@ T.run_suite("E2E: Notification Center", {
 
 	["utils.notify captures into ring buffer"] = function()
 		notifications.clear()
-		utils.notify("hello from utils", vim.log.levels.WARN)
+		utils.notify("hello from utils", vim.log.levels.WARN, {
+			context = {
+				command_args = { "status" },
+				label = "status",
+			},
+		})
 		local entries = notifications.entries()
 		T.assert_equals(#entries, 1, "should capture 1 entry")
 		T.assert_equals(
@@ -143,6 +149,11 @@ T.run_suite("E2E: Notification Center", {
 		T.assert_equals(
 			entries[1].level, vim.log.levels.WARN,
 			"captured level should be WARN"
+		)
+		T.assert_equals(
+			entries[1].context.command_args[1],
+			"status",
+			"captured context should be stored"
 		)
 		notifications.clear()
 	end,
@@ -246,10 +257,58 @@ T.run_suite("E2E: Notification Center", {
 
 		T.assert_keymaps(
 			bufnr,
-			{ "r", "c", "q", "0", "1", "2", "3" }
+			{ "<CR>", "r", "c", "q", "0", "1", "2", "3" }
 		)
 
 		T.cleanup_panels()
+	end,
+
+	["linked entry opens related context"] = function()
+		T.cleanup_panels()
+		notifications.clear()
+		notifications.push(
+			"open status context",
+			vim.log.levels.INFO,
+			{
+				command_args = { "status" },
+				label = "status",
+			}
+		)
+		notifications_panel.open(cfg)
+
+		local bufnr = ui.buffer.get("notifications")
+		T.assert_true(bufnr ~= nil, "notifications buffer should exist")
+
+		local lines = T.buf_lines(bufnr)
+		local target_line = nil
+		for i, line in ipairs(lines) do
+			if line:find("open status context", 1, true) then
+				target_line = i
+				break
+			end
+		end
+		T.assert_true(
+			target_line ~= nil,
+			"linked entry should render in notification panel"
+		)
+
+		vim.api.nvim_win_set_cursor(
+			notifications_panel.state.winid,
+			{ target_line, 0 }
+		)
+		notifications_panel.open_context_under_cursor()
+
+		T.assert_true(
+			status_panel.is_open(),
+			"linked context navigation should open status panel"
+		)
+		T.assert_false(
+			notifications_panel.is_open(),
+			"notification panel should close after navigating"
+		)
+
+		T.cleanup_panels()
+		notifications.clear()
 	end,
 
 	-- ── Severity filter rendering ─────────────────────────────────────
