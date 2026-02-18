@@ -110,6 +110,10 @@ local function build_default_groups(palette)
 		-- Cherry Pick
 		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
 		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },
+		-- Notifications
+		GitflowNotificationError = { link = "ErrorMsg" },
+		GitflowNotificationWarn = { link = "WarningMsg" },
+		GitflowNotificationInfo = { link = "Normal" },
 		-- Form
 		GitflowFormLabel = { fg = palette.accent_primary, bold = true },
 		GitflowFormActiveField = { link = "CursorLine" },

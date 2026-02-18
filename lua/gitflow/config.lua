@@ -91,6 +91,7 @@ function M.defaults()
 			cherry_pick = "gC",
 			conflict = "<leader>gm",
 			palette = "<leader>go",
+			notifications = "gN",
 		},
 		ui = {
 			default_layout = "float",
@@ -135,6 +136,9 @@ function M.defaults()
 		},
 		icons = {
 			enable = true,
+		},
+		notifications = {
+			max_entries = 200,
 		},
 	}
 end
@@ -369,6 +373,25 @@ local function validate_icons(config)
 end
 
 ---@param config GitflowConfig
+local function validate_notifications(config)
+	if type(config.notifications) ~= "table" then
+		error(
+			"gitflow config error: notifications must be a table",
+			3
+		)
+	end
+	if type(config.notifications.max_entries) ~= "number"
+		or config.notifications.max_entries < 1
+	then
+		error(
+			"gitflow config error: notifications.max_entries"
+				.. " must be a positive number",
+			3
+		)
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
@@ -379,6 +402,7 @@ function M.validate(config)
 	validate_highlights(config)
 	validate_signs(config)
 	validate_icons(config)
+	validate_notifications(config)
 end
 
 ---@param opts table|nil
