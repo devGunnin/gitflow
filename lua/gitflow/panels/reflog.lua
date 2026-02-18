@@ -16,7 +16,7 @@ local REFLOG_FLOAT_TITLE = "Gitflow Reflog"
 local REFLOG_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_reflog_hl")
 local REFLOG_FLOAT_FOOTER =
-	"<CR> checkout  R reset  r refresh  q close"
+	"<CR> checkout  1-9 quick checkout  R reset  r refresh  q close"
 
 ---@type GitflowReflogPanelState
 M.state = {
@@ -88,6 +88,12 @@ local function ensure_window(cfg)
 		M.checkout_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	for i = 1, 9 do
+		vim.keymap.set("n", tostring(i), function()
+			M.select_by_position(i)
+		end, { buffer = bufnr, silent = true, nowait = true })
+	end
+
 	vim.keymap.set("n", "R", function()
 		M.reset_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -116,9 +122,14 @@ local function render(entries, current_branch)
 	if #entries == 0 then
 		lines[#lines + 1] = ui_render.empty("no reflog entries")
 	else
-		for _, entry in ipairs(entries) do
+		for idx, entry in ipairs(entries) do
+			local position_marker = ""
+			if idx <= 9 then
+				position_marker = ("[%d] "):format(idx)
+			end
 			lines[#lines + 1] = ui_render.entry(
-				("%s %s %s"):format(
+				("%s%s %s %s"):format(
+					position_marker,
 					entry.short_sha,
 					entry.selector,
 					entry.description
@@ -177,6 +188,51 @@ local function entry_under_cursor()
 	return M.state.line_entries[line]
 end
 
+---@param position integer
+---@return GitflowReflogEntry|nil
+local function entry_by_position(position)
+	local sorted_lines = {}
+	for line_no, _ in pairs(M.state.line_entries) do
+		sorted_lines[#sorted_lines + 1] = line_no
+	end
+	table.sort(sorted_lines)
+
+	if position < 1 or position > #sorted_lines then
+		return nil
+	end
+	return M.state.line_entries[sorted_lines[position]]
+end
+
+---@param entry GitflowReflogEntry
+local function execute_checkout(entry)
+	local confirmed = vim.fn.confirm(
+		("Checkout %s? This will detach HEAD."):format(
+			entry.short_sha
+		),
+		"&Yes\n&No", 2
+	) == 1
+	if not confirmed then
+		return
+	end
+
+	git_reflog.checkout(
+		entry.sha, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Checked out %s (detached HEAD)"):format(
+					entry.short_sha
+				),
+				vim.log.levels.INFO
+			)
+			M.refresh()
+			emit_post_operation()
+		end
+	)
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
@@ -209,33 +265,20 @@ function M.checkout_under_cursor()
 		)
 		return
 	end
+	execute_checkout(entry)
+end
 
-	local confirmed = vim.fn.confirm(
-		("Checkout %s? This will detach HEAD."):format(
-			entry.short_sha
-		),
-		"&Yes\n&No", 2
-	) == 1
-	if not confirmed then
+---@param position integer
+function M.select_by_position(position)
+	local entry = entry_by_position(position)
+	if not entry then
+		utils.notify(
+			("No reflog entry at position %d"):format(position),
+			vim.log.levels.WARN
+		)
 		return
 	end
-
-	git_reflog.checkout(
-		entry.sha, {}, function(err)
-			if err then
-				utils.notify(err, vim.log.levels.ERROR)
-				return
-			end
-			utils.notify(
-				("Checked out %s (detached HEAD)"):format(
-					entry.short_sha
-				),
-				vim.log.levels.INFO
-			)
-			M.refresh()
-			emit_post_operation()
-		end
-	)
+	execute_checkout(entry)
 end
 
 function M.reset_under_cursor()

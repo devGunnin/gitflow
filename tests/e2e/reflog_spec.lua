@@ -102,7 +102,10 @@ T.run_suite("E2E: Reflog Panel", {
 
 		local bufnr = ui.buffer.get("reflog")
 		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
-		T.assert_keymaps(bufnr, { "q", "r", "R", "<CR>" })
+		T.assert_keymaps(bufnr, {
+			"q", "r", "R", "<CR>", "1", "2", "3", "4", "5",
+			"6", "7", "8", "9",
+		})
 
 		reflog_panel.close()
 	end,
@@ -175,6 +178,27 @@ T.run_suite("E2E: Reflog Panel", {
 		T.assert_true(
 			found_head1 ~= nil,
 			"should render HEAD@{1} selector"
+		)
+
+		reflog_panel.close()
+	end,
+
+	["reflog panel shows quick-access markers for first entries"] = function()
+		local reflog_panel = require("gitflow.panels.reflog")
+		commands.dispatch({ "reflog" }, cfg)
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("reflog")
+		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
+
+		local lines = T.buf_lines(bufnr)
+		T.assert_true(
+			T.find_line(lines, "[1] abc1234") ~= nil,
+			"first reflog entry should have [1] marker"
+		)
+		T.assert_true(
+			T.find_line(lines, "[2] def5678") ~= nil,
+			"second reflog entry should have [2] marker"
 		)
 
 		reflog_panel.close()
