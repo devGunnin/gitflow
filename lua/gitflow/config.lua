@@ -91,6 +91,7 @@ function M.defaults()
 			pr = "<leader>gr",
 			reset = "gR",
 			revert = "gV",
+			blame = "gB",
 			cherry_pick = "gC",
 			conflict = "<leader>gm",
 			palette = "<leader>go",

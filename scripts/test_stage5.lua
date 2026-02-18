@@ -338,6 +338,56 @@ local pr_buf = buffer.get("prs")
 assert_true(pr_buf ~= nil, "pr panel should open")
 assert_keymaps(pr_buf, { "v" })
 
+-- #302: verify PR detail view shows review comments
+pr_panel.open_view(7, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_line(lines, "Review Comments") ~= nil
+end, "pr detail view should show Review Comments section")
+
+local pr_view_buf = buffer.get("prs")
+local pr_view_lines =
+	vim.api.nvim_buf_get_lines(pr_view_buf, 0, -1, false)
+assert_true(
+	find_line(pr_view_lines, "reviewer1 on lua/gitflow/commands.lua:")
+		~= nil,
+	"pr detail should show reviewer1 review comment"
+)
+assert_true(
+	find_line(pr_view_lines, "reviewer2 on lua/gitflow/commands.lua:")
+		~= nil,
+	"pr detail should show reviewer2 review comment"
+)
+assert_true(
+	find_line(pr_view_lines, "Consider renaming this variable") ~= nil,
+	"pr detail should show review comment body"
+)
+
+-- Verify Review Comments header gets GitflowHeader highlight
+local prs_hl_ns = vim.api.nvim_get_namespaces().gitflow_prs_hl
+assert_true(prs_hl_ns ~= nil, "prs highlight namespace should exist")
+local rc_header_line = find_line(pr_view_lines, "Review Comments")
+assert_true(
+	line_has_highlight(pr_view_buf, prs_hl_ns, rc_header_line,
+		"GitflowHeader"),
+	"Review Comments header should use GitflowHeader"
+)
+
+-- Go back to list for subsequent tests
+commands.dispatch({ "pr", "list", "open" }, cfg)
+wait_until(function()
+	local bufnr = buffer.get("prs")
+	if not bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	return find_pr_row(lines, 7, "Stage5 PR") ~= nil
+end, "pr list should render after returning from detail view")
+
 commands.dispatch({ "pr", "review", "7" }, cfg)
 wait_until(function()
 	local bufnr = buffer.get("review")
@@ -680,10 +730,10 @@ assert_keymaps(
 	{ leader .. "i" }
 )
 
--- Default state: show_inline_comments should be false
+-- Default state: show_inline_comments should be true
 assert_equals(
-	review_panel.state.show_inline_comments, false,
-	"show_inline_comments should default to false"
+	review_panel.state.show_inline_comments, true,
+	"show_inline_comments should default to true"
 )
 
 -- Find the diff line where comments are attached (line 11 in commands.lua)
@@ -699,65 +749,66 @@ assert_true(
 	"gitflow_review_comments namespace should exist"
 )
 
--- Before toggle: extmarks should NOT have virt_lines
+-- Before toggle: extmarks should include virt_lines with comment bodies
 local pre_marks = vim.api.nvim_buf_get_extmarks(
 	inline_buf, ns_comments, 0, -1, { details = true }
 )
 local pre_has_virt_lines = false
+local pre_virt_lines_contain_body = false
 for _, mark in ipairs(pre_marks) do
 	local details = mark[4]
 	if details and details.virt_lines
 		and #details.virt_lines > 0 then
 		pre_has_virt_lines = true
+		for _, vl in ipairs(details.virt_lines) do
+			for _, chunk in ipairs(vl) do
+				if chunk[1]:find("Consider renaming", 1, true) then
+					pre_virt_lines_contain_body = true
+				end
+			end
+		end
 		break
 	end
 end
 assert_true(
-	not pre_has_virt_lines,
-	"inline comments should not show virt_lines before toggle"
+	pre_has_virt_lines,
+	"inline comments should show virt_lines by default"
+)
+assert_true(
+	pre_virt_lines_contain_body,
+	"inline virt_lines should contain comment body text by default"
 )
 
--- Toggle inline comments on
+-- Toggle inline comments off
 review_panel.toggle_inline_comments()
 assert_equals(
-	review_panel.state.show_inline_comments, true,
-	"show_inline_comments should be true after toggle"
+	review_panel.state.show_inline_comments, false,
+	"show_inline_comments should be false after toggle"
 )
 
--- After toggle: extmarks should have virt_lines with comment bodies
+-- After toggle off: extmarks should not have virt_lines
 local post_marks = vim.api.nvim_buf_get_extmarks(
 	inline_buf, ns_comments, 0, -1, { details = true }
 )
 local post_has_virt_lines = false
-local virt_lines_contain_body = false
 for _, mark in ipairs(post_marks) do
 	local details = mark[4]
 	if details and details.virt_lines
 		and #details.virt_lines > 0 then
 		post_has_virt_lines = true
-		for _, vl in ipairs(details.virt_lines) do
-			for _, chunk in ipairs(vl) do
-				if chunk[1]:find("Consider renaming", 1, true) then
-					virt_lines_contain_body = true
-				end
-			end
-		end
+		break
 	end
 end
 assert_true(
-	post_has_virt_lines,
-	"inline comments should show virt_lines after toggle on"
-)
-assert_true(
-	virt_lines_contain_body,
-	"inline virt_lines should contain comment body text"
+	not post_has_virt_lines,
+	"inline comments should not show virt_lines after toggle off"
 )
 
--- Toggle inline comments off again
+-- Toggle inline comments on again
 review_panel.toggle_inline_comments()
 assert_equals(
-	review_panel.state.show_inline_comments, false,
-	"show_inline_comments should be false after second toggle"
+	review_panel.state.show_inline_comments, true,
+	"show_inline_comments should be true after second toggle"
 )
 
 local off_marks = vim.api.nvim_buf_get_extmarks(
@@ -773,8 +824,8 @@ for _, mark in ipairs(off_marks) do
 	end
 end
 assert_true(
-	not off_has_virt_lines,
-	"inline comments should not show virt_lines after toggle off"
+	off_has_virt_lines,
+	"inline comments should show virt_lines after toggle on"
 )
 
 -- B3: close review panel to restore previous window

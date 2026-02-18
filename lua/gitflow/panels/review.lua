@@ -117,7 +117,7 @@ M.state = {
 	comment_threads = {},
 	thread_line_map = {},
 	pending_comments = {},
-	show_inline_comments = false,
+	show_inline_comments = true,
 	-- Cached data for local re-renders (avoids API round-trips)
 	_cached_title = nil,
 	_cached_diff_text = nil,
@@ -400,6 +400,42 @@ local function render_thread_lines(thread)
 	return out
 end
 
+---@param count integer
+---@return string
+local function comment_count_label(count)
+	return ("%d comment%s"):format(count, count == 1 and "" or "s")
+end
+
+---@param text string|nil
+---@param max_len integer
+---@return string
+local function preview_text(text, max_len)
+	local value = vim.trim(tostring(text or "")):gsub("%s+", " ")
+	if value == "" then
+		return "(empty)"
+	end
+	if #value <= max_len then
+		return value
+	end
+	return value:sub(1, max_len - 3) .. "..."
+end
+
+---@param thread GitflowPrReviewCommentThread
+---@return string
+local function thread_preview_label(thread)
+	local first = thread.comments[1] or {}
+	local author = vim.trim(tostring(first.user or "unknown"))
+	if author == "" then
+		author = "unknown"
+	end
+	local preview = preview_text(first.body, 72)
+	return (" [%s] @%s: %s"):format(
+		comment_count_label(#thread.comments),
+		author,
+		preview
+	)
+end
+
 ---@param title string
 ---@param diff_text string
 ---@param files GitflowPrReviewFileMarker[]
@@ -577,9 +613,7 @@ local function render_review(
 				end
 			end
 			if target_line then
-				local label = (" [%d comments]"):format(
-					#thread.comments
-				)
+				local label = thread_preview_label(thread)
 				local extmark_opts = {
 					virt_text = {
 						{
@@ -596,19 +630,30 @@ local function render_review(
 							c.body, "\n",
 							{ plain = true, trimempty = true }
 						)
+						if #body_lines == 0 then
+							body_lines = { "(empty)" }
+						end
 						for bi, bl in ipairs(body_lines) do
 							if #bl > 96 then
 								bl = bl:sub(1, 93) .. "..."
 							end
-							local prefix = bi == 1
-								and ("  @%s: "):format(c.user)
-								or "        "
-							virt_lines[#virt_lines + 1] = {
-								{
-									prefix .. bl,
-									"GitflowReviewComment",
-								},
-							}
+							if bi == 1 then
+								virt_lines[#virt_lines + 1] = {
+									{
+										("  @%s: "):format(c.user),
+										"GitflowReviewAuthor",
+									},
+									{
+										bl,
+										"GitflowReviewComment",
+									},
+								}
+							else
+								virt_lines[#virt_lines + 1] = {
+									{ "        ", "GitflowReviewComment" },
+									{ bl, "GitflowReviewComment" },
+								}
+							end
 						end
 					end
 					extmark_opts.virt_lines = virt_lines
@@ -1595,7 +1640,7 @@ function M.close()
 	M.state.comment_threads = {}
 	M.state.thread_line_map = {}
 	M.state.pending_comments = {}
-	M.state.show_inline_comments = false
+	M.state.show_inline_comments = true
 	M.state._cached_title = nil
 	M.state._cached_diff_text = nil
 	M.state._cached_files = nil

@@ -71,6 +71,7 @@ local function build_default_groups(palette)
 		-- Review
 		GitflowReviewApproved = { link = "DiagnosticOk" },
 		GitflowReviewChangesRequested = { link = "WarningMsg" },
+		GitflowReviewAuthor = { fg = palette.accent_secondary, bold = true },
 		GitflowReviewComment = { link = "Comment" },
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },
@@ -98,6 +99,10 @@ local function build_default_groups(palette)
 		},
 		GitflowPaletteEntryIcon = { fg = palette.accent_primary },
 		GitflowPaletteBackdrop = { bg = palette.backdrop_bg },
+		-- Blame
+		GitflowBlameHash = { fg = palette.log_hash, bold = true },
+		GitflowBlameAuthor = { fg = palette.accent_primary },
+		GitflowBlameDate = { link = "Comment" },
 		-- Reset
 		GitflowResetMergeBase = { link = "WarningMsg" },
 		-- Revert
