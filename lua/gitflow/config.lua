@@ -91,6 +91,7 @@ function M.defaults()
 			blame = "gB",
 			cherry_pick = "gC",
 			conflict = "<leader>gm",
+			actions = "gA",
 			palette = "<leader>go",
 			notifications = "gN",
 		},

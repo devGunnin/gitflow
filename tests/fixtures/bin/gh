@@ -220,6 +220,37 @@ case "$subcmd" in
     esac
     ;;
 
+  # ── run ───────────────────────────────────────────────────────────────
+  run)
+    if [ "$fail_cmd" = "run" ]; then
+      echo "gh run failed" >&2
+      exit 1
+    fi
+    case "$sub2" in
+      list)
+        cat "$FIXTURE_DIR/run_list.json"
+        ;;
+      view)
+        case " $* " in
+          *" --log-failed "*)
+            if [ -f "$FIXTURE_DIR/run_view_log_failed.txt" ]; then
+              cat "$FIXTURE_DIR/run_view_log_failed.txt"
+            else
+              echo ""
+            fi
+            ;;
+          *)
+            cat "$FIXTURE_DIR/run_view.json"
+            ;;
+        esac
+        ;;
+      *)
+        echo "gh stub: unknown run subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
   # ── Unknown ───────────────────────────────────────────────────────────
   *)
     echo "gh stub: unknown command '$subcmd'" >&2

@@ -25,6 +25,7 @@ local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
 local tag_panel = require("gitflow.panels.tag")
 local git_tag = require("gitflow.git.tag")
+local actions_panel = require("gitflow.panels.actions")
 local notifications_panel = require("gitflow.panels.notifications")
 local blame_panel = require("gitflow.panels.blame")
 local git_conflict = require("gitflow.git.conflict")
@@ -902,6 +903,7 @@ local github_subcommands = {
 	issue = true,
 	pr = true,
 	label = true,
+	actions = true,
 }
 
 local ui_subcommands = {
@@ -1028,6 +1030,7 @@ local function register_builtin_subcommands(cfg)
 			cherry_pick_panel.close()
 			revert_panel.close()
 			tag_panel.close()
+			actions_panel.close()
 			blame_panel.close()
 			palette_panel.close()
 			notifications_panel.close()
@@ -1259,6 +1262,14 @@ local function register_builtin_subcommands(cfg)
 			end
 
 			return ("Unknown tag action: %s"):format(action)
+		end,
+	}
+
+	M.subcommands.actions = {
+		description = "View GitHub Actions workflow runs",
+		run = function()
+			actions_panel.open(cfg)
+			return "Actions panel opened"
 		end,
 	}
 
@@ -2353,6 +2364,7 @@ function M.setup(cfg)
 		"<Cmd>Gitflow cherry-pick-panel<CR>",
 		{ silent = true }
 	)
+	vim.keymap.set("n", "<Plug>(GitflowActions)", "<Cmd>Gitflow actions<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
@@ -2387,6 +2399,7 @@ function M.setup(cfg)
 		tag = "<Plug>(GitflowTag)",
 		blame = "<Plug>(GitflowBlame)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
+		actions = "<Plug>(GitflowActions)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 		notifications = "<Plug>(GitflowNotifications)",
