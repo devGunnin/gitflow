@@ -799,6 +799,16 @@ T.run_suite("E2E: PR Creation Flow", {
 			T.find_line(lines, "Body") ~= nil,
 			"view should show Body section"
 		)
+		local review_summary_author = T.find_line(lines, "@reviewer1 [APPROVED]:")
+		T.assert_true(
+			review_summary_author ~= nil,
+			"view should show review summary author and state"
+		)
+		local review_summary_body = T.find_line(lines, "  >> LGTM")
+		T.assert_true(
+			review_summary_body ~= nil,
+			"view should show review summary body text"
+		)
 		local review_header = T.find_line(lines, "Review Comments")
 		T.assert_true(
 			review_header ~= nil,
@@ -821,8 +831,16 @@ T.run_suite("E2E: PR Creation Flow", {
 			"review author should use GitflowReviewAuthor highlight"
 		)
 		T.assert_true(
+			line_has_highlight(bufnr, review_summary_author, "GitflowReviewAuthor"),
+			"review summary author should use GitflowReviewAuthor highlight"
+		)
+		T.assert_true(
 			line_has_highlight(bufnr, review_body, "GitflowReviewComment"),
 			"review body should use GitflowReviewComment highlight"
+		)
+		T.assert_true(
+			line_has_highlight(bufnr, review_summary_body, "GitflowReviewComment"),
+			"review summary body should use GitflowReviewComment highlight"
 		)
 
 		T.cleanup_panels()

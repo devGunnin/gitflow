@@ -205,6 +205,20 @@ local function split_lines(text)
 	return vim.split(text, "\n", { plain = true, trimempty = false })
 end
 
+---@param review table
+---@return string
+local function review_author(review)
+	local author = maybe_text(type(review.author) == "table" and review.author.login or review.author)
+	if author ~= "-" then
+		return author
+	end
+	author = maybe_text(type(review.user) == "table" and review.user.login or review.user)
+	if author ~= "-" then
+		return author
+	end
+	return "unknown"
+end
+
 ---@param pr table
 ---@return string
 local function join_assignee_names(pr)
@@ -405,6 +419,36 @@ local function render_view(pr, review_comments)
 	lines[#lines + 1] = ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0)
 	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
 
+	local reviews = pr.reviews or {}
+	if type(reviews) == "table" and #reviews > 0 then
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "Reviews"
+		lines[#lines + 1] = "-------"
+		for _, review in ipairs(reviews) do
+			local author = review_author(review)
+			local state = maybe_text(review.state)
+			local submitted_at = maybe_text(review.submittedAt)
+			local header = ("@%s [%s]"):format(author, state)
+			if submitted_at ~= "-" then
+				header = ("%s (%s)"):format(header, submitted_at)
+			end
+			lines[#lines + 1] = ("%s:"):format(header)
+			review_author_lines[#review_author_lines + 1] = #lines
+
+			local review_message_lines = split_lines(tostring(review.body or ""))
+			if #review_message_lines == 0 then
+				lines[#lines + 1] = "  >> (empty)"
+				review_body_lines[#review_body_lines + 1] = #lines
+			else
+				for _, review_body_line in ipairs(review_message_lines) do
+					lines[#lines + 1] = ("  >> %s"):format(review_body_line)
+					review_body_lines[#review_body_lines + 1] = #lines
+				end
+			end
+			lines[#lines + 1] = ""
+		end
+	end
+
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = "Comments"
 	lines[#lines + 1] = "--------"
@@ -436,11 +480,7 @@ local function render_view(pr, review_comments)
 		lines[#lines + 1] = "---------------"
 
 		for _, c in ipairs(rc) do
-			local author = type(c.user) == "table"
-				and maybe_text(c.user.login) or maybe_text(c.user)
-			if author == "-" then
-				author = "unknown"
-			end
+			local author = review_author(c)
 			local path = maybe_text(c.path)
 			lines[#lines + 1] = ("@%s on %s:"):format(author, path)
 			review_author_lines[#review_author_lines + 1] = #lines
@@ -477,7 +517,7 @@ local function render_view(pr, review_comments)
 	-- Mark section headers in detail view
 	for line_no, line in ipairs(lines) do
 		if line == "Body" or line == "Comments"
-			or line == "Review Comments" then
+			or line == "Reviews" or line == "Review Comments" then
 			entry_highlights[line_no] = "GitflowHeader"
 		end
 	end
