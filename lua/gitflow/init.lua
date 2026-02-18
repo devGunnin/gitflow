@@ -4,6 +4,7 @@ local gh = require("gitflow.gh")
 local highlights = require("gitflow.highlights")
 local signs = require("gitflow.signs")
 local icons = require("gitflow.icons")
+local notifications = require("gitflow.notifications")
 
 local M = {}
 local statusline_module = nil
@@ -39,6 +40,7 @@ end
 ---@return GitflowConfig
 function M.setup(opts)
 	local cfg = config.setup(opts or {})
+	notifications.setup(cfg.notifications.max_entries)
 	highlights.setup(cfg.highlights)
 	commands.setup(cfg)
 	signs.setup(cfg)
