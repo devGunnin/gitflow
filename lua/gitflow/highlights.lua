@@ -112,6 +112,8 @@ local function build_default_groups(palette)
 			fg = palette.accent_primary, bold = true,
 		},
 		GitflowWorktreePath = { fg = palette.log_hash },
+		-- Tag
+		GitflowTagAnnotated = { fg = palette.stash_ref, bold = true },
 		-- Actions / CI
 		GitflowActionsPass = { link = "DiagnosticOk" },
 		GitflowActionsFail = { link = "DiagnosticError" },
