@@ -79,6 +79,16 @@ local function decode_logged_stdin_payload(lines)
 	return nil
 end
 
+---@param chunks table[]|nil
+---@return string
+local function concat_extmark_chunks(chunks)
+	local text = ""
+	for _, chunk in ipairs(chunks or {}) do
+		text = text .. tostring(chunk[1] or "")
+	end
+	return text
+end
+
 -- Compatibility helper for merge-ref runs where newer base-only tests may
 -- still call cleanup_panels() in this file.
 local function cleanup_panels()
@@ -940,6 +950,103 @@ T.run_suite("E2E: PR Review Flow", {
 		T.assert_true(
 			T.find_line(lines, "Consider renaming") ~= nil,
 			"review buffer should show comment body"
+		)
+
+		T.cleanup_panels()
+	end,
+
+	["review panel shows comment bodies inline in diff mode"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		local bufnr = ui.buffer.get("review")
+		local marks = T.get_extmarks(bufnr, "gitflow_review_comments")
+		T.assert_true(#marks > 0, "expected inline comment extmarks in diff view")
+
+		local has_label_preview = false
+		local has_author_line = false
+		local has_body_line = false
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			local virt_text = concat_extmark_chunks(details.virt_text)
+			if virt_text:find("Consider renaming this variable.", 1, true) then
+				has_label_preview = true
+			end
+
+			for _, vline in ipairs(details.virt_lines or {}) do
+				local line_text = concat_extmark_chunks(vline)
+				if line_text:find("@reviewer1:", 1, true) then
+					has_author_line = true
+					T.assert_equals(
+						vline[1] and vline[1][2] or nil,
+						"GitflowReviewAuthor",
+						"inline author chunk should use GitflowReviewAuthor"
+					)
+				end
+				if line_text:find("Consider renaming this variable.", 1, true) then
+					has_body_line = true
+					T.assert_equals(
+						vline[#vline] and vline[#vline][2] or nil,
+						"GitflowReviewComment",
+						"inline body chunk should use GitflowReviewComment"
+					)
+				end
+			end
+		end
+
+		T.assert_true(
+			has_label_preview,
+			"inline marker label should include comment preview text"
+		)
+		T.assert_true(
+			has_author_line,
+			"inline virtual lines should include author"
+		)
+		T.assert_true(
+			has_body_line,
+			"inline virtual lines should include comment body text"
+		)
+
+		T.cleanup_panels()
+	end,
+
+	["inline comment toggle hides diff-mode virtual body lines"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+
+		T.assert_true(
+			review_panel.state.show_inline_comments,
+			"inline comments should be visible by default"
+		)
+
+		review_panel.toggle_inline_comments()
+		T.assert_false(
+			review_panel.state.show_inline_comments,
+			"toggle should disable inline comment bodies"
+		)
+
+		local bufnr = ui.buffer.get("review")
+		local marks = T.get_extmarks(bufnr, "gitflow_review_comments")
+		local has_virtual_body_lines = false
+		local has_count_label = false
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			if details.virt_lines and #details.virt_lines > 0 then
+				has_virtual_body_lines = true
+			end
+			local virt_text = concat_extmark_chunks(details.virt_text)
+			if virt_text:find("%[2 comments%]", 1, false) then
+				has_count_label = true
+			end
+		end
+
+		T.assert_false(
+			has_virtual_body_lines,
+			"inline body lines should be hidden when inline mode is off"
+		)
+		T.assert_true(
+			has_count_label,
+			"comment count label should remain visible when inline mode is off"
 		)
 
 		T.cleanup_panels()
