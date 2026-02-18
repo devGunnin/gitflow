@@ -25,6 +25,7 @@ local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
 local tag_panel = require("gitflow.panels.tag")
 local git_tag = require("gitflow.git.tag")
+local notifications_panel = require("gitflow.panels.notifications")
 local blame_panel = require("gitflow.panels.blame")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
@@ -1029,6 +1030,7 @@ local function register_builtin_subcommands(cfg)
 			tag_panel.close()
 			blame_panel.close()
 			palette_panel.close()
+			notifications_panel.close()
 			return "Gitflow panels closed"
 		end,
 	}
@@ -1256,9 +1258,18 @@ local function register_builtin_subcommands(cfg)
 				return ("Pushing tag '%s'..."):format(name)
 			end
 
-			return ("Unknown tag action: %s"):format(action)
-		end,
-	}
+				return ("Unknown tag action: %s"):format(action)
+			end,
+		}
+
+		M.subcommands.notifications = {
+			description = "Open notification center",
+			category = "UI",
+			run = function()
+				notifications_panel.open(cfg)
+				return "Notifications panel opened"
+			end,
+		}
 
 	M.subcommands.blame = {
 		description = "Toggle git blame panel for current file",
@@ -2345,6 +2356,12 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
+	vim.keymap.set(
+		"n",
+		"<Plug>(GitflowNotifications)",
+		"<Cmd>Gitflow notifications<CR>",
+		{ silent = true }
+	)
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -2372,6 +2389,7 @@ function M.setup(cfg)
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
+		notifications = "<Plug>(GitflowNotifications)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]

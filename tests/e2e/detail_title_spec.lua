@@ -9,6 +9,17 @@ local prs_panel = require("gitflow.panels.prs")
 local ui = require("gitflow.ui")
 local cfg = _G.TestConfig
 
+---@param name string
+---@return integer
+local function wait_for_panel_buffer(name)
+	local bufnr = nil
+	T.wait_until(function()
+		bufnr = ui.buffer.get(name)
+		return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
+	end, ("%s buffer should exist"):format(name), 3000)
+	return bufnr
+end
+
 ---@param panel_name "issues"|"prs"
 ---@param message string
 ---@param predicate fun(lines: string[]): boolean
@@ -23,6 +34,20 @@ local function wait_for_detail_render(panel_name, message, predicate)
 	end, message, 5000)
 end
 
+---@param bufnr integer
+---@param message string
+local function wait_for_detail_title_and_body(bufnr, message)
+	T.wait_until(function()
+		if not vim.api.nvim_buf_is_valid(bufnr) then
+			return false
+		end
+		local lines = T.buf_lines(bufnr)
+		local title_idx = T.find_line(lines, "Title:")
+		local body_idx = T.find_line(lines, "Body")
+		return title_idx ~= nil and body_idx ~= nil
+	end, message, 3000)
+end
+
 T.run_suite("detail_title_spec", {
 
 	-- ── Issue detail view ──────────────────────────
@@ -34,11 +59,10 @@ T.run_suite("detail_title_spec", {
 			return T.find_line(lines, "Title:") ~= nil
 		end)
 
-		local bufnr = ui.buffer.get("issues")
-		T.assert_true(
-			bufnr ~= nil
-				and vim.api.nvim_buf_is_valid(bufnr),
-			"issues buffer should exist"
+		local bufnr = wait_for_panel_buffer("issues")
+		wait_for_detail_title_and_body(
+			bufnr,
+			"issue view should render Title/Body lines"
 		)
 
 		local lines = T.buf_lines(bufnr)
@@ -69,10 +93,10 @@ T.run_suite("detail_title_spec", {
 			return title_idx ~= nil and body_idx ~= nil
 		end)
 
-		local bufnr = ui.buffer.get("issues")
-		T.assert_true(
-			bufnr ~= nil,
-			"issues buffer should exist"
+		local bufnr = wait_for_panel_buffer("issues")
+		wait_for_detail_title_and_body(
+			bufnr,
+			"issue view should render Title/Body lines"
 		)
 
 		local lines = T.buf_lines(bufnr)
@@ -99,11 +123,10 @@ T.run_suite("detail_title_spec", {
 			return T.find_line(lines, "Title:") ~= nil
 		end)
 
-		local bufnr = ui.buffer.get("prs")
-		T.assert_true(
-			bufnr ~= nil
-				and vim.api.nvim_buf_is_valid(bufnr),
-			"prs buffer should exist"
+		local bufnr = wait_for_panel_buffer("prs")
+		wait_for_detail_title_and_body(
+			bufnr,
+			"pr view should render Title/Body lines"
 		)
 
 		local lines = T.buf_lines(bufnr)
@@ -134,10 +157,10 @@ T.run_suite("detail_title_spec", {
 			return title_idx ~= nil and body_idx ~= nil
 		end)
 
-		local bufnr = ui.buffer.get("prs")
-		T.assert_true(
-			bufnr ~= nil,
-			"prs buffer should exist"
+		local bufnr = wait_for_panel_buffer("prs")
+		wait_for_detail_title_and_body(
+			bufnr,
+			"pr view should render Title/Body lines"
 		)
 
 		local lines = T.buf_lines(bufnr)
