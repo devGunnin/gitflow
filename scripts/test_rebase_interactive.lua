@@ -791,6 +791,68 @@ test("set_action sets specific action on entry", function()
 	rb_panel.close()
 end)
 
+test("execute uses synchronous confirm API and starts rebase", function()
+	local rb_panel = require("gitflow.panels.rebase")
+	local git_rebase = require("gitflow.git.rebase")
+	local ui_input = require("gitflow.ui.input")
+	local original_confirm = ui_input.confirm
+	local original_start_interactive = git_rebase.start_interactive
+
+	local ok, err = pcall(function()
+		rb_panel.close()
+		rb_panel.state.cfg = cfg
+		rb_panel.state.stage = "todo"
+		rb_panel.state.base_ref = "main"
+		rb_panel.state.entries = {
+			{
+				action = "pick",
+				sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				short_sha = "aaaaaaa",
+				subject = "test commit",
+			},
+		}
+
+		local confirm_called = false
+		local start_called = false
+		ui_input.confirm = function(message, opts)
+			confirm_called = true
+			assert_true(
+				message:find("Execute rebase onto main?", 1, true) ~= nil,
+				"confirm message should mention target base"
+			)
+			assert_true(
+				opts == nil or type(opts) == "table",
+				"confirm opts should be nil or table"
+			)
+			return true, 1
+		end
+
+		git_rebase.start_interactive = function(base_ref, entries, opts, cb)
+			start_called = true
+			assert_equals(base_ref, "main", "base ref should be passed")
+			assert_equals(#entries, 1, "entries should be passed")
+			assert_equals(
+				entries[1].action, "pick",
+				"entry action should be passed"
+			)
+			assert_true(type(opts) == "table", "options should be a table")
+			cb(nil, { code = 0, stdout = "", stderr = "" })
+		end
+
+		rb_panel.execute()
+		assert_true(confirm_called, "confirm should be called")
+		assert_true(start_called, "start_interactive should be called")
+	end)
+
+	ui_input.confirm = original_confirm
+	git_rebase.start_interactive = original_start_interactive
+	rb_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 -- ─── Panel keymaps test ───
 
 test("rebase panel keymaps are set on buffer", function()

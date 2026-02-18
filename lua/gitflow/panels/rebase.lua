@@ -536,59 +536,58 @@ function M.execute()
 		M.state.base_ref, preview
 	)
 
-	ui.input.confirm(confirm_msg, function(confirmed)
-		if not confirmed then
-			return
-		end
+	local confirmed = ui.input.confirm(confirm_msg)
+	if not confirmed then
+		return
+	end
 
-		utils.notify(
-			("Rebasing onto %s..."):format(M.state.base_ref),
-			vim.log.levels.INFO
-		)
+	utils.notify(
+		("Rebasing onto %s..."):format(M.state.base_ref),
+		vim.log.levels.INFO
+	)
 
-		git_rebase.start_interactive(
-			M.state.base_ref,
-			M.state.entries,
-			{},
-			function(err, result)
-				if err then
-					local output = git.output(result) or err
-					local parsed =
-						git_conflict
-						.parse_conflicted_paths_from_output(
-							output
-						)
-					if #parsed > 0 then
-						utils.notify(
-							("Rebase has conflicts:\n%s")
-								:format(
-									table.concat(parsed, "\n")
-								),
-							vim.log.levels.ERROR
-						)
-						local conflict_panel =
-							require("gitflow.panels.conflict")
-						refresh_status_panel_if_open()
-						conflict_panel.open(cfg)
-					else
-						utils.notify(
-							err, vim.log.levels.ERROR
-						)
-					end
-					return
+	git_rebase.start_interactive(
+		M.state.base_ref,
+		M.state.entries,
+		{},
+		function(err, result)
+			if err then
+				local output = git.output(result) or err
+				local parsed =
+					git_conflict
+					.parse_conflicted_paths_from_output(
+						output
+					)
+				if #parsed > 0 then
+					utils.notify(
+						("Rebase has conflicts:\n%s")
+							:format(
+								table.concat(parsed, "\n")
+							),
+						vim.log.levels.ERROR
+					)
+					local conflict_panel =
+						require("gitflow.panels.conflict")
+					refresh_status_panel_if_open()
+					conflict_panel.open(cfg)
+				else
+					utils.notify(
+						err, vim.log.levels.ERROR
+					)
 				end
-
-				local output = git.output(result)
-				if output == "" then
-					output = "Rebase completed successfully"
-				end
-				utils.notify(output, vim.log.levels.INFO)
-				refresh_status_panel_if_open()
-				emit_post_operation()
-				M.close()
+				return
 			end
-		)
-	end)
+
+			local output = git.output(result)
+			if output == "" then
+				output = "Rebase completed successfully"
+			end
+			utils.notify(output, vim.log.levels.INFO)
+			refresh_status_panel_if_open()
+			emit_post_operation()
+			M.close()
+		end
+	)
 end
 
 function M.close()
