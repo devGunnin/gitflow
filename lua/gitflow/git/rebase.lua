@@ -40,8 +40,7 @@ function M.parse_commits(output)
 end
 
 ---Fetch commits eligible for interactive rebase (base_ref..HEAD).
----Results are in reverse chronological order from git log;
----the panel reverses them to show oldest-first (rebase todo order).
+---Results are returned oldest-first to match rebase todo order.
 ---@param base_ref string
 ---@param opts table|nil  { count?: integer }
 ---@param cb fun(err: string|nil, entries: GitflowRebaseEntry[]|nil)
@@ -73,8 +72,9 @@ end
 function M.build_todo(entries)
 	local lines = {}
 	for _, entry in ipairs(entries) do
+		local commit = entry.sha or entry.short_sha or ""
 		lines[#lines + 1] = ("%s %s %s"):format(
-			entry.action, entry.short_sha, entry.subject
+			entry.action, commit, entry.subject
 		)
 	end
 	return table.concat(lines, "\n") .. "\n"

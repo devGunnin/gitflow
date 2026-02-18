@@ -138,6 +138,24 @@ T.run_suite("Interactive Rebase Panel", {
 		)
 	end,
 
+	["build_todo uses full SHA when short SHA differs"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local entries = {
+			{
+				action = "pick",
+				sha = "abc1234567890123456789012345678901234567",
+				short_sha = "abc1234",
+				subject = "first",
+			},
+		}
+		local todo = git_rebase.build_todo(entries)
+		T.assert_contains(
+			todo,
+			"pick abc1234567890123456789012345678901234567 first",
+			"todo should use full SHA"
+		)
+	end,
+
 	["rebase highlight groups are registered"] = function()
 		local highlights = require("gitflow.highlights")
 		local groups = {

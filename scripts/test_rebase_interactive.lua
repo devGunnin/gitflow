@@ -433,6 +433,23 @@ test("build_todo produces correct format", function()
 	)
 end)
 
+test("build_todo uses full commit SHA for execution", function()
+	local git_rebase = require("gitflow.git.rebase")
+	local entries = {
+		{
+			action = "pick",
+			sha = "abc1234567890123456789012345678901234567",
+			short_sha = "abc1234",
+			subject = "first commit",
+		},
+	}
+	local todo = git_rebase.build_todo(entries)
+	assert_true(
+		todo:find("pick abc1234567890123456789012345678901234567 first commit", 1, true) ~= nil,
+		"todo should use full commit SHA"
+	)
+end)
+
 -- ─── Git operation tests ───
 
 test("list_commits returns commits on feature branch", function()
