@@ -260,10 +260,10 @@ end)
 
 -- ─── Keybinding tests ───
 
-test("default bisect keybinding is gI", function()
+test("default bisect keybinding is gY", function()
 	assert_equals(
-		cfg.keybindings.bisect, "gI",
-		"default bisect keybinding should be gI"
+		cfg.keybindings.bisect, "gY",
+		"default bisect keybinding should be gY"
 	)
 end)
 
@@ -279,7 +279,7 @@ test("default bisect keymap maps to plug", function()
 	assert_mapping(
 		cfg.keybindings.bisect,
 		"<Plug>(GitflowBisect)",
-		"gI should map to <Plug>(GitflowBisect)"
+		"gY should map to <Plug>(GitflowBisect)"
 	)
 end)
 
