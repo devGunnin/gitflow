@@ -89,6 +89,7 @@ function M.defaults()
 			revert = "gV",
 			tag = "gT",
 			blame = "gB",
+			reflog = "gF",
 			cherry_pick = "gC",
 			conflict = "<leader>gm",
 			actions = "gA",

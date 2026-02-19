@@ -107,6 +107,7 @@ local registry = {
 		tag = { nerd = NF.tag, ascii = "T" },
 		actions = { nerd = NF.staged, ascii = "A" },
 		blame = { nerd = NF.commit, ascii = "B" },
+		reflog = { nerd = NF.commit, ascii = "F" },
 		palette = { nerd = NF.palette_ui, ascii = ">" },
 		notifications = { nerd = NF.conflict, ascii = "N" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
