@@ -89,6 +89,7 @@ function M.defaults()
 			revert = "gV",
 			tag = "gT",
 			blame = "gB",
+			bisect = "gY",
 			reflog = "gF",
 			cherry_pick = "gC",
 			rebase_interactive = "gI",
