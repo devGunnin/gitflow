@@ -5,6 +5,7 @@ local ui_render = require("gitflow.ui.render")
 local gh_prs = require("gitflow.gh.prs")
 local icons = require("gitflow.icons")
 local git_diff = require("gitflow.git.diff")
+local config = require("gitflow.config")
 
 ---@class GitflowPrReviewDraftThread
 ---@field id integer
@@ -60,11 +61,30 @@ local git_diff = require("gitflow.git.diff")
 
 local M = {}
 local REVIEW_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_review_hl")
-local REVIEW_FLOAT_FOOTER =
-	"]f/[f files  ]c/[c hunks  c comment  S submit"
-	.. "  a approve  x changes  R reply"
-	.. "  <leader>t toggle  <leader>i inline"
-	.. "  <leader>b back  r refresh  q close"
+local REVIEW_FLOAT_FOOTER_HINTS = {
+	{ action = "next_file", default = "]f", label = "next file" },
+	{ action = "prev_file", default = "[f", label = "prev file" },
+	{ action = "next_hunk", default = "]c", label = "next hunk" },
+	{ action = "prev_hunk", default = "[c", label = "prev hunk" },
+	{ action = "inline_comment", default = "c", label = "comment" },
+	{ action = "submit_review", default = "S", label = "submit" },
+	{ action = "approve", default = "a", label = "approve" },
+	{ action = "request_changes", default = "x", label = "changes" },
+	{ action = "reply", default = "R", label = "reply" },
+	{ action = "toggle_thread", default = "<leader>t", label = "toggle" },
+	{ action = "toggle_inline", default = "<leader>i", label = "inline" },
+	{ action = "back_to_pr", default = "<leader>b", label = "back" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
+
+---@param cfg GitflowConfig
+---@return string
+local function review_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "review", REVIEW_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param line string
 ---@return boolean
@@ -104,6 +124,16 @@ M.state = {
 	_cached_files = nil,
 	_cached_hunks = nil,
 }
+
+---@param action string
+---@param default string
+---@return string
+local function review_action_key(action, default)
+	local resolved_cfg = M.state.cfg or config.current
+	return config.resolve_panel_key(
+		resolved_cfg, "review", action, default
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -152,7 +182,7 @@ local function ensure_window(cfg)
 		border = cfg.ui.float.border,
 		title = title,
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer and REVIEW_FLOAT_FOOTER or nil,
+		footer = cfg.ui.float.footer and review_float_footer(cfg) or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 		on_close = function()
 			M.state.winid = nil
@@ -160,67 +190,85 @@ local function ensure_window(cfg)
 	})
 
 	-- ]c/[c for hunk nav per spec
-	vim.keymap.set("n", "]f", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "review", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("next_file", "]f"), function()
 		M.next_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[f", function()
+	vim.keymap.set("n", pk("prev_file", "[f"), function()
 		M.prev_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "]c", function()
+	vim.keymap.set("n", pk("next_hunk", "]c"), function()
 		M.next_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[c", function()
+	vim.keymap.set("n", pk("prev_hunk", "[c"), function()
 		M.prev_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "a", function()
+	vim.keymap.set("n", pk("approve", "a"), function()
 		M.review_approve()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "x", function()
+	vim.keymap.set("n", pk("request_changes", "x"), function()
 		M.review_request_changes()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	-- c = inline comment per spec, S = submit review
-	vim.keymap.set("n", "c", function()
-		M.inline_comment()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	-- c = inline comment per spec; submit key is configurable
+	vim.keymap.set(
+		"n", pk("inline_comment", "c"), function()
+			M.inline_comment()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "S", function()
-		M.submit_pending_review()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("submit_review", "S"), function()
+			M.submit_pending_review()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
 	-- visual mode c for multi-line inline comments
-	vim.keymap.set("v", "c", function()
-		M.inline_comment_visual()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"v", pk("inline_comment_visual", "c"), function()
+			M.inline_comment_visual()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "R", function()
+	vim.keymap.set("n", pk("reply", "R"), function()
 		M.reply_to_thread()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	-- F1: use <leader>t instead of t to avoid shadowing vim motion
-	vim.keymap.set("n", "<leader>t", function()
-		M.toggle_thread()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("toggle_thread", "<leader>t"), function()
+			M.toggle_thread()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "<leader>i", function()
-		M.toggle_inline_comments()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("toggle_inline", "<leader>i"), function()
+			M.toggle_inline_comments()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	-- F1: use <leader>b instead of b to avoid shadowing vim motion
-	vim.keymap.set("n", "<leader>b", function()
-		M.back_to_pr()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set(
+		"n", pk("back_to_pr", "<leader>b"), function()
+			M.back_to_pr()
+		end, { buffer = bufnr, silent = true, nowait = true }
+	)
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close_with_guard()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
@@ -411,8 +459,11 @@ local function render_review(
 	if #M.state.pending_comments > 0 then
 		lines[#lines + 1] = ""
 		lines[#lines + 1] =
-			("Pending comments: %d (press S to submit)")
-				:format(#M.state.pending_comments)
+			("Pending comments: %d (press %s to submit)")
+				:format(
+					#M.state.pending_comments,
+					review_action_key("submit_review", "S")
+				)
 	end
 	lines[#lines + 1] = ""
 
@@ -1058,7 +1109,10 @@ function M.inline_comment()
 		}
 		utils.notify(
 			("Inline comment queued (#%d)"
-				.. " — press S to submit review"):format(number),
+				.. " — press %s to submit review"):format(
+				number,
+				review_action_key("submit_review", "S")
+			),
 			vim.log.levels.INFO
 		)
 		M.re_render()
@@ -1132,8 +1186,11 @@ function M.inline_comment_visual()
 			}
 			utils.notify(
 				("Inline comment queued (#%d, lines %d-%d)"
-					.. " — press S to submit review"):format(
-					number, start_line, end_line
+					.. " — press %s to submit review"):format(
+					number,
+					start_line,
+					end_line,
+					review_action_key("submit_review", "S")
 				),
 				vim.log.levels.INFO
 			)

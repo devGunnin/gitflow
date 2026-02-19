@@ -11,6 +11,7 @@ local label_picker = require("gitflow.ui.label_picker")
 local list_picker = require("gitflow.ui.list_picker")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
+local config = require("gitflow.config")
 
 ---@class GitflowIssuePanelState
 ---@field bufnr integer|nil
@@ -24,9 +25,17 @@ local highlights = require("gitflow.highlights")
 local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "Gitflow Issues"
-local ISSUES_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  x close  L labels  A assign"
-	.. "  r refresh  b back  q close"
+local ISSUES_FLOAT_FOOTER_HINTS = {
+	{ action = "view", default = "<CR>", label = "view" },
+	{ action = "create", default = "c", label = "create" },
+	{ action = "comment", default = "C", label = "comment" },
+	{ action = "close_issue", default = "x", label = "close issue" },
+	{ action = "labels", default = "L", label = "labels" },
+	{ action = "assign", default = "A", label = "assign" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "back", default = "b", label = "back" },
+	{ action = "close", default = "q", label = "close panel" },
+}
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -38,6 +47,14 @@ M.state = {
 	mode = "list",
 	active_issue_number = nil,
 }
+
+---@param cfg GitflowConfig
+---@return string
+local function issues_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "issues", ISSUES_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -66,7 +83,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = ISSUES_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and ISSUES_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and issues_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -84,31 +101,37 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "issues", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("view", "<CR>"), function()
 		M.view_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "c", function()
+	vim.keymap.set("n", pk("create", "c"), function()
 		M.create_interactive()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "C", function()
+	vim.keymap.set("n", pk("comment", "C"), function()
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "x", function()
+	vim.keymap.set("n", pk("close_issue", "x"), function()
 		M.close_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "L", function()
+	vim.keymap.set("n", pk("labels", "L"), function()
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "A", function()
+	vim.keymap.set("n", pk("assign", "A"), function()
 		M.edit_assignees_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		if M.state.mode == "view" and M.state.active_issue_number then
 			M.open_view(M.state.active_issue_number)
 			return
@@ -116,14 +139,14 @@ local function ensure_window(cfg)
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "b", function()
+	vim.keymap.set("n", pk("back", "b"), function()
 		if M.state.mode == "view" then
 			M.state.mode = "list"
 			M.refresh()
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

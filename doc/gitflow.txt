@@ -110,6 +110,34 @@ Default keybindings:
     conflict        <leader>gm          <Plug>(GitflowConflicts)
     palette         <leader>gp          <Plug>(GitflowPalette)
 
+                                                *gitflow-panel-keybindings*
+panel_keybindings ~
+
+Table of per-panel override tables. Each key is a panel name, each value
+maps action names to key sequences. Override only the bindings you want to
+change; omitted actions keep their defaults. >lua
+    panel_keybindings = {
+      status = {
+        stage   = "S",
+        unstage = "U",
+      },
+      review = {
+        approve = "A",
+      },
+    }
+<
+
+Valid panel names: `status`, `branch`, `diff`, `review`, `conflict`,
+`issues`, `prs`, `log`, `stash`, `reset`, `revert`, `cherry_pick`,
+`labels`, `palette`.
+
+Label panel action names: `create`, `delete`, `refresh`, `close`.
+Palette action names: `prompt_*`, `list_*`, and `quick_select_1`..`quick_select_9`.
+
+Validation rejects duplicate keys within the same panel context.
+
+See |KEYBINDINGS.md| for the complete list of action names per panel.
+
                                                           *gitflow-config-ui*
 ui ~
 
@@ -213,9 +241,10 @@ GitHub ~
 7. KEYBINDINGS                                          *gitflow-keybindings*
 
 See |gitflow-config-keybindings| for global mappings.
+See |gitflow-panel-keybindings| for per-panel overrides.
 
-Panel-local keybindings are set on each panel buffer. These are fixed and
-cannot be overridden through configuration.
+Panel-local keybindings are set on each panel buffer. Defaults are listed
+below and can be overridden via `panel_keybindings` in setup().
 
 Status panel ~
     s       Stage file under cursor
@@ -313,20 +342,21 @@ Conflict list ~
     q       Close conflict view
 
 Label panel ~
-    c       Create new label
-    d       Delete label under cursor
-    r       Refresh
-    q       Close
+    c       Create new label (create)
+    d       Delete label under cursor (delete)
+    r       Refresh (refresh)
+    q       Close (close)
 
 Command palette ~
-    <CR>            Select highlighted command
-    <Esc>           Close palette
-    <Down>/<C-n>    Move selection down
-    <Up>/<C-p>      Move selection up
-    <Tab>/<S-Tab>   Move selection down/up
-    <C-j>/<C-k>     Move selection down/up
-    j/k             Move selection (list normal mode)
-    q               Close (list normal mode)
+    <CR>            Select highlighted command (prompt_submit/list_submit)
+    <Esc>           Close palette (prompt_close/list_close_esc)
+    <Down>/<C-n>    Move selection down (prompt_next_down/prompt_next_ctrl_n)
+    <Up>/<C-p>      Move selection up (prompt_prev_up/prompt_prev_ctrl_p)
+    <Tab>/<S-Tab>   Move selection down/up (prompt_next_tab/prompt_prev_shift_tab)
+    <C-j>/<C-k>     Move selection down/up (prompt_next_ctrl_j/prompt_prev_ctrl_k)
+    j/k             Move selection (list_next_j/list_prev_k)
+    q               Close list (list_close)
+    1..9            Quick-select numbered entries (quick_select_1..quick_select_9)
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*

@@ -7,6 +7,7 @@ local git_status = require("gitflow.git.status")
 local git_branch = require("gitflow.git.branch")
 local conflict_panel = require("gitflow.panels.conflict")
 local icons = require("gitflow.icons")
+local config = require("gitflow.config")
 
 ---@class GitflowStatusPanelOpts
 ---@field on_commit fun()|nil
@@ -41,9 +42,27 @@ local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 local STATUS_FLOAT_TITLE = "Gitflow Status"
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
-local STATUS_FLOAT_FOOTER =
-	"s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
-	.. "  cx conflicts  p push  X revert  r refresh  q close"
+local STATUS_FLOAT_FOOTER_HINTS = {
+	{ action = "stage", default = "s", label = "stage" },
+	{ action = "unstage", default = "u", label = "unstage" },
+	{ action = "stage_all", default = "a", label = "stage all" },
+	{ action = "unstage_all", default = "A", label = "unstage all" },
+	{ action = "commit", default = "cc", label = "commit" },
+	{ action = "diff", default = "dd", label = "diff" },
+	{ action = "conflicts", default = "cx", label = "conflicts" },
+	{ action = "push", default = "p", label = "push" },
+	{ action = "revert", default = "X", label = "revert" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
+
+---@param cfg GitflowConfig
+---@return string
+local function status_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "status", STATUS_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@type GitflowStatusPanelState
 M.state = {
@@ -214,7 +233,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = STATUS_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STATUS_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and status_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -234,23 +253,28 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "s", function()
+	local stage_key = config.resolve_panel_key(cfg, "status", "stage", "s")
+	vim.keymap.set("n", stage_key, function()
 		M.stage_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "u", function()
+	local unstage_key = config.resolve_panel_key(cfg, "status", "unstage", "u")
+	vim.keymap.set("n", unstage_key, function()
 		M.unstage_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "a", function()
+	local stage_all_key = config.resolve_panel_key(cfg, "status", "stage_all", "a")
+	vim.keymap.set("n", stage_all_key, function()
 		M.stage_all()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "A", function()
+	local unstage_all_key = config.resolve_panel_key(cfg, "status", "unstage_all", "A")
+	vim.keymap.set("n", unstage_all_key, function()
 		M.unstage_all()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "cc", function()
+	local commit_key = config.resolve_panel_key(cfg, "status", "commit", "cc")
+	vim.keymap.set("n", commit_key, function()
 		if M.state.opts.on_commit then
 			M.state.opts.on_commit()
 		else
@@ -258,27 +282,33 @@ local function ensure_window(cfg)
 		end
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "dd", function()
+	local diff_key = config.resolve_panel_key(cfg, "status", "diff", "dd")
+	vim.keymap.set("n", diff_key, function()
 		M.open_diff_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "cx", function()
+	local conflicts_key = config.resolve_panel_key(cfg, "status", "conflicts", "cx")
+	vim.keymap.set("n", conflicts_key, function()
 		M.open_conflict_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "p", function()
+	local push_key = config.resolve_panel_key(cfg, "status", "push", "p")
+	vim.keymap.set("n", push_key, function()
 		M.push_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "X", function()
+	local revert_key = config.resolve_panel_key(cfg, "status", "revert", "X")
+	vim.keymap.set("n", revert_key, function()
 		M.revert_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "r", function()
+	local refresh_key = config.resolve_panel_key(cfg, "status", "refresh", "r")
+	vim.keymap.set("n", refresh_key, function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	local close_key = config.resolve_panel_key(cfg, "status", "close", "q")
+	vim.keymap.set("n", close_key, function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

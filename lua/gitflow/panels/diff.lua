@@ -3,6 +3,7 @@ local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
 local git_branch = require("gitflow.git.branch")
+local config = require("gitflow.config")
 
 ---@class GitflowDiffPanelState
 ---@field bufnr integer|nil
@@ -16,8 +17,14 @@ local M = {}
 local DIFF_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_diff_hl")
 local DIFF_LINENR_NS = vim.api.nvim_create_namespace("gitflow_diff_linenr")
 local DIFF_FLOAT_TITLE = "Gitflow Diff"
-local DIFF_FLOAT_FOOTER =
-	"]f/[f files  ]c/[c hunks  r refresh  q close"
+local DIFF_FLOAT_FOOTER_HINTS = {
+	{ action = "next_file", default = "]f", label = "next file" },
+	{ action = "prev_file", default = "[f", label = "prev file" },
+	{ action = "next_hunk", default = "]c", label = "next hunk" },
+	{ action = "prev_hunk", default = "[c", label = "prev hunk" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowDiffPanelState
 M.state = {
@@ -123,6 +130,14 @@ function M.prev_hunk()
 end
 
 ---@param cfg GitflowConfig
+---@return string
+local function diff_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "diff", DIFF_FLOAT_FOOTER_HINTS
+	)
+end
+
+---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
 		and vim.api.nvim_buf_is_valid(M.state.bufnr)
@@ -161,7 +176,7 @@ local function ensure_window(cfg)
 			title = DIFF_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer
-				and DIFF_FLOAT_FOOTER or nil,
+				and diff_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -179,29 +194,35 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "q", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "diff", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		if M.state.request then
 			M.open(cfg, M.state.request)
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "]f", function()
+	vim.keymap.set("n", pk("next_file", "]f"), function()
 		M.next_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[f", function()
+	vim.keymap.set("n", pk("prev_file", "[f"), function()
 		M.prev_file()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "]c", function()
+	vim.keymap.set("n", pk("next_hunk", "]c"), function()
 		M.next_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "[c", function()
+	vim.keymap.set("n", pk("prev_hunk", "[c"), function()
 		M.prev_hunk()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

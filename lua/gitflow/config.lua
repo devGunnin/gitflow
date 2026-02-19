@@ -52,8 +52,12 @@ local utils = require("gitflow.utils")
 ---@class GitflowIconsConfig
 ---@field enable boolean
 
+---@class GitflowPanelKeybindingsConfig
+---@field [string] table<string, string>
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
+---@field panel_keybindings GitflowPanelKeybindingsConfig
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
 ---@field git GitflowGitConfig
@@ -97,6 +101,7 @@ function M.defaults()
 			palette = "<leader>go",
 			notifications = "gN",
 		},
+		panel_keybindings = {},
 		ui = {
 			default_layout = "float",
 			split = {
@@ -164,6 +169,265 @@ local function validate_keybindings(config)
 			error(("gitflow config error: keybinding '%s' must be a non-empty string"):format(action), 3)
 		end
 	end
+end
+
+local VALID_PANEL_NAMES = {
+	status = true, branch = true, diff = true, review = true,
+	conflict = true, issues = true, prs = true, log = true,
+	stash = true, reset = true, revert = true, cherry_pick = true,
+	labels = true, palette = true,
+}
+
+local PANEL_DEFAULT_KEYS = {
+	status = {
+		stage = "s", unstage = "u", stage_all = "a", unstage_all = "A",
+		commit = "cc", diff = "dd", conflicts = "cx", push = "p",
+		revert = "X", refresh = "r", close = "q",
+	},
+	branch = {
+		switch = "<CR>", create = "c", delete = "d", force_delete = "D",
+		rename = "r", refresh = "R", fetch = "f", merge = "m",
+		toggle_graph = "G", close = "q",
+	},
+	diff = {
+		close = "q", refresh = "r", next_file = "]f", prev_file = "[f",
+		next_hunk = "]c", prev_hunk = "[c",
+	},
+	review = {
+		next_file = "]f", prev_file = "[f", next_hunk = "]c", prev_hunk = "[c",
+		approve = "a", request_changes = "x", inline_comment = "c",
+		submit_review = "S", inline_comment_visual = "c", reply = "R",
+		toggle_thread = "<leader>t", toggle_inline = "<leader>i",
+		refresh = "r", back_to_pr = "<leader>b", close = "q",
+	},
+	conflict = {
+		open = "<CR>", refresh = "r", refresh_alias = "R",
+		continue = "C", abort = "A", close = "q",
+	},
+	issues = {
+		view = "<CR>", create = "c", comment = "C", close_issue = "x",
+		labels = "L", assign = "A", refresh = "r", back = "b", close = "q",
+	},
+	prs = {
+		view = "<CR>", create = "c", comment = "C", labels = "L",
+		assign = "A", merge = "m", checkout = "o", review = "v",
+		refresh = "r", back = "b", close = "q",
+	},
+	log = {
+		open_commit = "<CR>", refresh = "r", close = "q",
+	},
+	stash = {
+		pop = "P", drop = "D", stash = "S", refresh = "r", close = "q",
+	},
+	reset = {
+		select = "<CR>", soft_reset = "S", hard_reset = "H",
+		refresh = "r", close = "q",
+	},
+	revert = {
+		select = "<CR>", refresh = "r", close = "q",
+	},
+	cherry_pick = {
+		select = "<CR>", pick_into_branch = "B", branch_picker = "b",
+		refresh = "r", close = "q",
+	},
+	labels = {
+		create = "c", delete = "d", refresh = "r", close = "q",
+	},
+	palette = {
+		prompt_close = "<Esc>", prompt_submit = "<CR>",
+		prompt_next_down = "<Down>", prompt_next_ctrl_n = "<C-n>",
+		prompt_next_tab = "<Tab>", prompt_next_ctrl_j = "<C-j>",
+		prompt_prev_up = "<Up>", prompt_prev_ctrl_p = "<C-p>",
+		prompt_prev_shift_tab = "<S-Tab>",
+		prompt_prev_ctrl_k = "<C-k>",
+		list_submit = "<CR>",
+		list_next_j = "j", list_next_ctrl_n = "<C-n>",
+		list_prev_k = "k", list_prev_ctrl_p = "<C-p>",
+		list_close = "q", list_close_esc = "<Esc>",
+		quick_select_1 = "1", quick_select_2 = "2",
+		quick_select_3 = "3", quick_select_4 = "4",
+		quick_select_5 = "5", quick_select_6 = "6",
+		quick_select_7 = "7", quick_select_8 = "8",
+		quick_select_9 = "9",
+	},
+}
+
+local PANEL_ACTION_MODES = {
+	review = {
+		inline_comment_visual = "v",
+	},
+	palette = {
+		prompt_close = "prompt",
+		prompt_submit = "prompt",
+		prompt_next_down = "prompt",
+		prompt_next_ctrl_n = "prompt",
+		prompt_next_tab = "prompt",
+		prompt_next_ctrl_j = "prompt",
+		prompt_prev_up = "prompt",
+		prompt_prev_ctrl_p = "prompt",
+		prompt_prev_shift_tab = "prompt",
+		prompt_prev_ctrl_k = "prompt",
+		list_submit = "list",
+		list_next_j = "list",
+		list_next_ctrl_n = "list",
+		list_prev_k = "list",
+		list_prev_ctrl_p = "list",
+		list_close = "list",
+		list_close_esc = "list",
+		quick_select_1 = { "prompt", "list" },
+		quick_select_2 = { "prompt", "list" },
+		quick_select_3 = { "prompt", "list" },
+		quick_select_4 = { "prompt", "list" },
+		quick_select_5 = { "prompt", "list" },
+		quick_select_6 = { "prompt", "list" },
+		quick_select_7 = { "prompt", "list" },
+		quick_select_8 = { "prompt", "list" },
+		quick_select_9 = { "prompt", "list" },
+	},
+}
+
+local RESERVED_POSITIONAL_KEYS = {
+	["1"] = true,
+	["2"] = true,
+	["3"] = true,
+	["4"] = true,
+	["5"] = true,
+	["6"] = true,
+	["7"] = true,
+	["8"] = true,
+	["9"] = true,
+}
+
+local PANELS_WITH_RESERVED_POSITIONAL_KEYS = {
+	reset = true,
+	revert = true,
+	cherry_pick = true,
+}
+
+---@param panel string
+---@param mapping string
+---@return boolean
+local function has_reserved_positional_key(panel, mapping)
+	return PANELS_WITH_RESERVED_POSITIONAL_KEYS[panel]
+		and RESERVED_POSITIONAL_KEYS[mapping]
+end
+
+---@param panel string
+---@param action string
+---@return string[]
+local function panel_action_contexts(panel, action)
+	local panel_modes = PANEL_ACTION_MODES[panel]
+	if panel_modes and panel_modes[action] then
+		local context = panel_modes[action]
+		if type(context) == "table" then
+			return context
+		end
+		return { context }
+	end
+	return { "n" }
+end
+
+---@param config GitflowConfig
+local function validate_panel_keybindings(config)
+	if type(config.panel_keybindings) ~= "table" then
+		error("gitflow config error: panel_keybindings must be a table", 3)
+	end
+
+	for panel, overrides in pairs(config.panel_keybindings) do
+		if not utils.is_non_empty_string(panel) then
+			error(
+				"gitflow config error: panel_keybindings keys must be"
+					.. " non-empty strings",
+				3
+			)
+		end
+		if not VALID_PANEL_NAMES[panel] then
+			error(
+				("gitflow config error: panel_keybindings.%s is not"
+					.. " a valid panel name"):format(panel),
+				3
+			)
+		end
+		if type(overrides) ~= "table" then
+			error(
+				("gitflow config error: panel_keybindings.%s must be"
+					.. " a table"):format(panel),
+				3
+			)
+		end
+
+		local defaults = PANEL_DEFAULT_KEYS[panel] or {}
+		local resolved = vim.deepcopy(defaults)
+		for action, mapping in pairs(overrides) do
+			if not utils.is_non_empty_string(action) then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s keys must be"
+						.. " non-empty strings"):format(panel),
+					3
+				)
+			end
+			if not utils.is_non_empty_string(mapping) then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s.%s must be a"
+						.. " non-empty string"):format(panel, action),
+					3
+				)
+			end
+			if has_reserved_positional_key(panel, mapping) then
+				error(
+					("gitflow config error:"
+						.. " panel_keybindings.%s.%s uses reserved"
+						.. " positional key '%s' (1-9 are fixed"
+						.. " shortcuts for this panel)"):format(
+							panel, action, mapping
+						),
+					3
+				)
+			end
+			resolved[action] = mapping
+		end
+
+		local key_to_action = {}
+		for action, mapping in pairs(resolved) do
+			local contexts = panel_action_contexts(panel, action)
+			for _, mode in ipairs(contexts) do
+				local mode_key_map = key_to_action[mode]
+				if not mode_key_map then
+					mode_key_map = {}
+					key_to_action[mode] = mode_key_map
+				end
+				local existing = mode_key_map[mapping]
+				if existing and existing ~= action then
+					error(
+						("gitflow config error:"
+							.. " panel_keybindings.%s has conflicting"
+							.. " key '%s' for actions '%s' and"
+							.. " '%s'"):format(
+								panel, mapping,
+								existing, action
+							),
+						3
+					)
+				end
+				mode_key_map[mapping] = action
+			end
+		end
+	end
+end
+
+---@param cfg GitflowConfig
+---@param panel string
+---@param action string
+---@param default string
+---@return string
+function M.resolve_panel_key(cfg, panel, action, default)
+	local overrides = cfg.panel_keybindings[panel]
+	if overrides and overrides[action] then
+		return overrides[action]
+	end
+	return default
 end
 
 ---@param config GitflowConfig
@@ -398,6 +662,7 @@ end
 ---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
+	validate_panel_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
 	validate_git(config)

@@ -7,6 +7,7 @@ local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
 local status_panel = require("gitflow.panels.status")
+local config = require("gitflow.config")
 
 ---@class GitflowRevertPanelState
 ---@field bufnr integer|nil
@@ -17,8 +18,11 @@ local status_panel = require("gitflow.panels.status")
 
 local M = {}
 local REVERT_FLOAT_TITLE = "Gitflow Revert"
-local REVERT_FLOAT_FOOTER =
-	"<CR> revert  1-9 by position  r refresh  q close"
+local REVERT_FLOAT_FOOTER_HINTS = {
+	{ action = "select", default = "<CR>", label = "revert" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 local REVERT_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_revert_hl")
 
@@ -41,6 +45,33 @@ local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
 		"User", { pattern = "GitflowPostOperation" }
 	)
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function revert_float_footer(cfg)
+	local hints = {
+		{
+			key = config.resolve_panel_key(
+				cfg, "revert", "select", "<CR>"
+			),
+			action = "revert",
+		},
+		{ key = "1-9", action = "by position" },
+	}
+
+	for _, hint in ipairs(REVERT_FLOAT_FOOTER_HINTS) do
+		if hint.action ~= "select" then
+			hints[#hints + 1] = {
+				key = config.resolve_panel_key(
+					cfg, "revert", hint.action, hint.default
+				),
+				action = hint.label,
+			}
+		end
+	end
+
+	return ui_render.format_key_hints(hints)
 end
 
 ---@param cfg GitflowConfig
@@ -77,7 +108,7 @@ local function ensure_window(cfg)
 			title = REVERT_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer
-				and REVERT_FLOAT_FOOTER or nil,
+				and revert_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -95,7 +126,13 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "revert", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("select", "<CR>"), function()
 		M.select_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
@@ -105,11 +142,11 @@ local function ensure_window(cfg)
 		end, { buffer = bufnr, silent = true, nowait = true })
 	end
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

@@ -6,6 +6,7 @@ local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
 local status_panel = require("gitflow.panels.status")
+local config = require("gitflow.config")
 
 ---@class GitflowResetPanelState
 ---@field bufnr integer|nil
@@ -16,8 +17,13 @@ local status_panel = require("gitflow.panels.status")
 
 local M = {}
 local RESET_FLOAT_TITLE = "Gitflow Reset"
-local RESET_FLOAT_FOOTER =
-	"<CR> select  1-9 jump  S soft reset  H hard reset  r refresh  q close"
+local RESET_FLOAT_FOOTER_HINTS = {
+	{ action = "select", default = "<CR>", label = "select" },
+	{ action = "soft_reset", default = "S", label = "soft reset" },
+	{ action = "hard_reset", default = "H", label = "hard reset" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 local RESET_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_reset_hl")
 
 ---@type GitflowResetPanelState
@@ -37,6 +43,33 @@ end
 
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function reset_float_footer(cfg)
+	local hints = {
+		{
+			key = config.resolve_panel_key(
+				cfg, "reset", "select", "<CR>"
+			),
+			action = "select",
+		},
+		{ key = "1-9", action = "jump" },
+	}
+
+	for _, hint in ipairs(RESET_FLOAT_FOOTER_HINTS) do
+		if hint.action ~= "select" then
+			hints[#hints + 1] = {
+				key = config.resolve_panel_key(
+					cfg, "reset", hint.action, hint.default
+				),
+				action = hint.label,
+			}
+		end
+	end
+
+	return ui_render.format_key_hints(hints)
 end
 
 ---@param cfg GitflowConfig
@@ -68,7 +101,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = RESET_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and RESET_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and reset_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -86,7 +119,13 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "reset", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("select", "<CR>"), function()
 		M.select_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
@@ -96,19 +135,19 @@ local function ensure_window(cfg)
 		end, { buffer = bufnr, silent = true, nowait = true })
 	end
 
-	vim.keymap.set("n", "S", function()
+	vim.keymap.set("n", pk("soft_reset", "S"), function()
 		M.reset_under_cursor("soft")
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "H", function()
+	vim.keymap.set("n", pk("hard_reset", "H"), function()
 		M.reset_under_cursor("hard")
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

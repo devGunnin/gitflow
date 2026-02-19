@@ -5,6 +5,7 @@ local git_stash = require("gitflow.git.stash")
 local git_branch = require("gitflow.git.branch")
 local status_panel = require("gitflow.panels.status")
 local ui_render = require("gitflow.ui.render")
+local config = require("gitflow.config")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -15,7 +16,13 @@ local ui_render = require("gitflow.ui.render")
 local M = {}
 local STASH_FLOAT_TITLE = "Gitflow Stash"
 local STASH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_stash_hl")
-local STASH_FLOAT_FOOTER = "P pop  D drop  S stash  r refresh  q close"
+local STASH_FLOAT_FOOTER_HINTS = {
+	{ action = "pop", default = "P", label = "pop" },
+	{ action = "drop", default = "D", label = "drop" },
+	{ action = "stash", default = "S", label = "stash" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowStashPanelState
 M.state = {
@@ -29,6 +36,14 @@ local function refresh_status_panel_if_open()
 	if status_panel.is_open() then
 		status_panel.refresh()
 	end
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function stash_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "stash", STASH_FLOAT_FOOTER_HINTS
+	)
 end
 
 ---@param cfg GitflowConfig
@@ -58,7 +73,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = STASH_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STASH_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and stash_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -76,23 +91,29 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "P", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "stash", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("pop", "P"), function()
 		M.pop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "D", function()
+	vim.keymap.set("n", pk("drop", "D"), function()
 		M.drop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "S", function()
+	vim.keymap.set("n", pk("stash", "S"), function()
 		M.push_with_prompt()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end

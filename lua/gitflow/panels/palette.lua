@@ -1,6 +1,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
+local config = require("gitflow.config")
 
 ---@class GitflowPaletteEntry
 ---@field name string
@@ -28,10 +29,7 @@ local icons = require("gitflow.icons")
 
 local M = {}
 local SELECTION_HIGHLIGHT = "GitflowPaletteSelection"
-local PALETTE_PROMPT_FOOTER =
-	"[1-9] quick select \u{2502} <CR> confirm \u{2502} / search \u{2502} q close"
-local PALETTE_LIST_FOOTER =
-	"[1-9] quick select \u{2502} <CR> select \u{2502} j/k move \u{2502} q close"
+local PALETTE_FOOTER_SEP = " \u{2502} "
 
 ---@type GitflowPalettePanelState
 M.state = {
@@ -79,6 +77,80 @@ local NUMBERED_ORDER = {
 	"diff",
 	"stash",
 }
+
+---@param cfg GitflowConfig
+---@param action string
+---@param default string
+---@return string
+local function palette_key(cfg, action, default)
+	return config.resolve_panel_key(cfg, "palette", action, default)
+end
+
+---@param keys string[]
+---@param sep string
+---@return string
+local function join_distinct(keys, sep)
+	local deduped = {}
+	local seen = {}
+	for _, key in ipairs(keys) do
+		if key ~= "" and not seen[key] then
+			seen[key] = true
+			deduped[#deduped + 1] = key
+		end
+	end
+	return table.concat(deduped, sep)
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function quick_select_keys(cfg)
+	local keys = {}
+	for i = 1, 9 do
+		keys[#keys + 1] =
+			palette_key(cfg, ("quick_select_%d"):format(i), tostring(i))
+	end
+	return join_distinct(keys, "/")
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function prompt_footer(cfg)
+	local quick_keys = quick_select_keys(cfg)
+	local submit_key = palette_key(cfg, "prompt_submit", "<CR>")
+	local close_key = palette_key(cfg, "prompt_close", "<Esc>")
+	return ("[%s] quick select%s%s confirm%s/ search%s%s close"):format(
+		quick_keys,
+		PALETTE_FOOTER_SEP,
+		submit_key,
+		PALETTE_FOOTER_SEP,
+		PALETTE_FOOTER_SEP,
+		close_key
+	)
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function list_footer(cfg)
+	local quick_keys = quick_select_keys(cfg)
+	local submit_key = palette_key(cfg, "list_submit", "<CR>")
+	local next_key = palette_key(cfg, "list_next_j", "j")
+	local prev_key = palette_key(cfg, "list_prev_k", "k")
+	local close_keys = join_distinct({
+		palette_key(cfg, "list_close", "q"),
+		palette_key(cfg, "list_close_esc", "<Esc>"),
+	}, "/")
+	local move_keys = join_distinct({ next_key, prev_key }, "/")
+
+	return ("[%s] quick select%s%s select%s%s move%s%s close"):format(
+		quick_keys,
+		PALETTE_FOOTER_SEP,
+		submit_key,
+		PALETTE_FOOTER_SEP,
+		move_keys,
+		PALETTE_FOOTER_SEP,
+		close_keys
+	)
+end
 
 ---@param text string
 ---@return string
@@ -652,6 +724,12 @@ local function apply_keymaps()
 	if not prompt_bufnr or not list_bufnr then
 		return
 	end
+	local cfg = M.state.cfg or config.current
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "palette", action, default
+		)
+	end
 
 	local prompt_normal_opts = {
 		buffer = prompt_bufnr, silent = true, nowait = true,
@@ -666,34 +744,40 @@ local function apply_keymaps()
 		buffer = list_bufnr, silent = true, nowait = true,
 	}
 	local prompt_navigation_keys = {
-		{ key = "<Down>", delta = 1 },
-		{ key = "<Up>", delta = -1 },
-		{ key = "<C-n>", delta = 1 },
-		{ key = "<C-p>", delta = -1 },
-		{ key = "<Tab>", delta = 1 },
-		{ key = "<S-Tab>", delta = -1 },
-		{ key = "<C-j>", delta = 1 },
-		{ key = "<C-k>", delta = -1 },
+		{ action = "prompt_next_down", key = "<Down>", delta = 1 },
+		{ action = "prompt_prev_up", key = "<Up>", delta = -1 },
+		{ action = "prompt_next_ctrl_n", key = "<C-n>", delta = 1 },
+		{ action = "prompt_prev_ctrl_p", key = "<C-p>", delta = -1 },
+		{ action = "prompt_next_tab", key = "<Tab>", delta = 1 },
+		{
+			action = "prompt_prev_shift_tab",
+			key = "<S-Tab>",
+			delta = -1,
+		},
+		{ action = "prompt_next_ctrl_j", key = "<C-j>", delta = 1 },
+		{ action = "prompt_prev_ctrl_k", key = "<C-k>", delta = -1 },
 	}
 
-	vim.keymap.set({ "n", "i" }, "<Esc>", function()
+	vim.keymap.set({ "n", "i" }, pk("prompt_close", "<Esc>"), function()
 		M.close()
 	end, prompt_normal_opts)
-	vim.keymap.set({ "n", "i" }, "<CR>", function()
+	vim.keymap.set({ "n", "i" }, pk("prompt_submit", "<CR>"), function()
 		execute_selected()
 	end, prompt_normal_opts)
 	for _, mapping in ipairs(prompt_navigation_keys) do
-		vim.keymap.set("n", mapping.key, function()
+		local key = pk(mapping.action, mapping.key)
+		vim.keymap.set("n", key, function()
 			move_selection(mapping.delta)
 		end, prompt_normal_opts)
-		vim.keymap.set("i", mapping.key, function()
+		vim.keymap.set("i", key, function()
 			move_selection(mapping.delta)
 			return ""
 		end, prompt_insert_opts)
 	end
 
 	for i = 1, 9 do
-		local num_key = tostring(i)
+		local action = ("quick_select_%d"):format(i)
+		local num_key = pk(action, tostring(i))
 		vim.keymap.set("n", num_key, function()
 			local entry = M.state.numbered_entries[i]
 			if entry then
@@ -717,25 +801,25 @@ local function apply_keymaps()
 		end, list_opts)
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	vim.keymap.set("n", pk("list_submit", "<CR>"), function()
 		execute_selected()
 	end, list_opts)
-	vim.keymap.set("n", "j", function()
+	vim.keymap.set("n", pk("list_next_j", "j"), function()
 		move_selection(1)
 	end, list_opts)
-	vim.keymap.set("n", "k", function()
+	vim.keymap.set("n", pk("list_prev_k", "k"), function()
 		move_selection(-1)
 	end, list_opts)
-	vim.keymap.set("n", "<C-n>", function()
+	vim.keymap.set("n", pk("list_next_ctrl_n", "<C-n>"), function()
 		move_selection(1)
 	end, list_opts)
-	vim.keymap.set("n", "<C-p>", function()
+	vim.keymap.set("n", pk("list_prev_ctrl_p", "<C-p>"), function()
 		move_selection(-1)
 	end, list_opts)
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("list_close", "q"), function()
 		M.close()
 	end, list_opts)
-	vim.keymap.set("n", "<Esc>", function()
+	vim.keymap.set("n", pk("list_close_esc", "<Esc>"), function()
 		M.close()
 	end, list_opts)
 end
@@ -894,8 +978,7 @@ function M.open(cfg, entries, on_select)
 		border = cfg.ui.float.border,
 		title = "  Gitflow  ",
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer
-			and PALETTE_PROMPT_FOOTER or nil,
+		footer = cfg.ui.float.footer and prompt_footer(cfg) or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
@@ -909,8 +992,7 @@ function M.open(cfg, entries, on_select)
 		border = cfg.ui.float.border,
 		title = "  Command Palette  ",
 		title_pos = cfg.ui.float.title_pos,
-		footer = cfg.ui.float.footer
-			and PALETTE_LIST_FOOTER or nil,
+		footer = cfg.ui.float.footer and list_footer(cfg) or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
