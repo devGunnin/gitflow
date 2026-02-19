@@ -28,7 +28,9 @@ local tag_panel = require("gitflow.panels.tag")
 local git_tag = require("gitflow.git.tag")
 local actions_panel = require("gitflow.panels.actions")
 local notifications_panel = require("gitflow.panels.notifications")
+local rebase_panel = require("gitflow.panels.rebase")
 local blame_panel = require("gitflow.panels.blame")
+local reflog_panel = require("gitflow.panels.reflog")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
@@ -1029,11 +1031,13 @@ local function register_builtin_subcommands(cfg)
 			conflict_panel.close()
 			reset_panel.close()
 			cherry_pick_panel.close()
+			rebase_panel.close()
 			revert_panel.close()
 			tag_panel.close()
 			actions_panel.close()
 			worktree_panel.close()
 			blame_panel.close()
+			reflog_panel.close()
 			palette_panel.close()
 			notifications_panel.close()
 			return "Gitflow panels closed"
@@ -1297,6 +1301,14 @@ local function register_builtin_subcommands(cfg)
 				end,
 			})
 			return "Blame panel opened"
+		end,
+	}
+
+	M.subcommands.reflog = {
+		description = "Open git reflog panel",
+		run = function()
+			reflog_panel.open(cfg)
+			return "Reflog panel opened"
 		end,
 	}
 
@@ -1965,6 +1977,14 @@ local function register_builtin_subcommands(cfg)
 			return "Worktree panel opened"
 		end,
 	}
+
+	M.subcommands["rebase-interactive"] = {
+		description = "Open interactive rebase panel",
+		run = function()
+			rebase_panel.open(cfg)
+			return "Interactive rebase panel opened"
+		end,
+	}
 end
 
 ---@param commandline string
@@ -2380,8 +2400,15 @@ function M.setup(cfg)
 		"<Cmd>Gitflow worktree<CR>",
 		{ silent = true }
 	)
+	vim.keymap.set(
+		"n",
+		"<Plug>(GitflowRebaseInteractive)",
+		"<Cmd>Gitflow rebase-interactive<CR>",
+		{ silent = true }
+	)
 	vim.keymap.set("n", "<Plug>(GitflowActions)", "<Cmd>Gitflow actions<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowReflog)", "<Cmd>Gitflow reflog<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set(
@@ -2414,8 +2441,10 @@ function M.setup(cfg)
 		revert = "<Plug>(GitflowRevert)",
 		tag = "<Plug>(GitflowTag)",
 		blame = "<Plug>(GitflowBlame)",
+		reflog = "<Plug>(GitflowReflog)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		worktree = "<Plug>(GitflowWorktree)",
+		rebase_interactive = "<Plug>(GitflowRebaseInteractive)",
 		actions = "<Plug>(GitflowActions)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",

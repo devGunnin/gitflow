@@ -112,6 +112,9 @@ local function build_default_groups(palette)
 			fg = palette.accent_primary, bold = true,
 		},
 		GitflowWorktreePath = { fg = palette.log_hash },
+		-- Reflog
+		GitflowReflogHash = { fg = palette.log_hash, bold = true },
+		GitflowReflogAction = { fg = palette.accent_secondary },
 		-- Tag
 		GitflowTagAnnotated = { fg = palette.stash_ref, bold = true },
 		-- Actions / CI
@@ -122,6 +125,14 @@ local function build_default_groups(palette)
 		-- Cherry Pick
 		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
 		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },
+		-- Interactive Rebase
+		GitflowRebasePick = { link = "DiagnosticOk" },
+		GitflowRebaseReword = { fg = palette.stash_ref, bold = true },
+		GitflowRebaseEdit = { fg = palette.accent_primary, bold = true },
+		GitflowRebaseSquash = { fg = palette.accent_secondary, bold = true },
+		GitflowRebaseFixup = { fg = palette.accent_secondary },
+		GitflowRebaseDrop = { link = "DiagnosticError" },
+		GitflowRebaseHash = { fg = palette.log_hash, bold = true },
 		-- Notifications
 		GitflowNotificationError = { link = "ErrorMsg" },
 		GitflowNotificationWarn = { link = "WarningMsg" },

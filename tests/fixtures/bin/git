@@ -369,6 +369,17 @@ DIFF
     esac
     ;;
 
+  # ── reflog ───────────────────────────────────────────────────────────
+  reflog)
+    if [ "$fail_cmd" = "reflog" ]; then
+      echo "fatal: reflog failed" >&2
+      exit 1
+    fi
+    printf 'abc1234567890abcdef1234567890abcdef1234\tHEAD@{0}\tcommit: Initial commit\n'
+    printf 'def5678901234abcdef1234567890abcdef5678\tHEAD@{1}\tcheckout: moving from feature to main\n'
+    printf 'fed9012345678abcdef1234567890abcdef9012\tHEAD@{2}\treset: moving to HEAD~1\n'
+    ;;
+
   # ── for-each-ref ──────────────────────────────────────────────────────
   for-each-ref)
     if [ "$fail_cmd" = "for-each-ref" ]; then
