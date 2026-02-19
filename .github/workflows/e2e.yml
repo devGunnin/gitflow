@@ -63,6 +63,7 @@ jobs:
             scripts/test_stage10_forms.lua
             scripts/test_stage10_palette.lua
             scripts/test_stage10_pickers.lua
+            scripts/test_bisect.lua
             scripts/test_cherry_pick.lua
             scripts/test_content_width.lua
             scripts/test_keybinding_docs.lua
