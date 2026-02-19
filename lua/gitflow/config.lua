@@ -91,6 +91,7 @@ function M.defaults()
 			blame = "gB",
 			reflog = "gF",
 			cherry_pick = "gC",
+			rebase_interactive = "gI",
 			conflict = "<leader>gm",
 			actions = "gA",
 			palette = "<leader>go",
