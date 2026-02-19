@@ -393,7 +393,7 @@ end
 local ALL_PANELS = {
 	"status", "diff", "log", "stash", "branch",
 	"conflict", "issues", "prs", "labels", "review",
-	"palette", "cherry_pick", "rebase", "reset", "revert", "tag",
+	"palette", "cherry_pick", "rebase", "reset", "revert", "tag", "worktree",
 	"notifications",
 	"actions",
 	"reflog",

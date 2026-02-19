@@ -107,6 +107,11 @@ local function build_default_groups(palette)
 		GitflowResetMergeBase = { link = "WarningMsg" },
 		-- Revert
 		GitflowRevertMergeBase = { link = "WarningMsg" },
+		-- Worktree
+		GitflowWorktreeActive = {
+			fg = palette.accent_primary, bold = true,
+		},
+		GitflowWorktreePath = { fg = palette.log_hash },
 		-- Reflog
 		GitflowReflogHash = { fg = palette.log_hash, bold = true },
 		GitflowReflogAction = { fg = palette.accent_secondary },

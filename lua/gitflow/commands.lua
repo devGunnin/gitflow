@@ -23,6 +23,7 @@ local palette_panel = require("gitflow.panels.palette")
 local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
+local worktree_panel = require("gitflow.panels.worktree")
 local tag_panel = require("gitflow.panels.tag")
 local git_tag = require("gitflow.git.tag")
 local actions_panel = require("gitflow.panels.actions")
@@ -1034,6 +1035,7 @@ local function register_builtin_subcommands(cfg)
 			revert_panel.close()
 			tag_panel.close()
 			actions_panel.close()
+			worktree_panel.close()
 			blame_panel.close()
 			reflog_panel.close()
 			palette_panel.close()
@@ -1968,6 +1970,14 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands.worktree = {
+		description = "Open git worktree panel",
+		run = function()
+			worktree_panel.open(cfg)
+			return "Worktree panel opened"
+		end,
+	}
+
 	M.subcommands["rebase-interactive"] = {
 		description = "Open interactive rebase panel",
 		run = function()
@@ -2386,6 +2396,12 @@ function M.setup(cfg)
 	)
 	vim.keymap.set(
 		"n",
+		"<Plug>(GitflowWorktree)",
+		"<Cmd>Gitflow worktree<CR>",
+		{ silent = true }
+	)
+	vim.keymap.set(
+		"n",
 		"<Plug>(GitflowRebaseInteractive)",
 		"<Cmd>Gitflow rebase-interactive<CR>",
 		{ silent = true }
@@ -2427,6 +2443,7 @@ function M.setup(cfg)
 		blame = "<Plug>(GitflowBlame)",
 		reflog = "<Plug>(GitflowReflog)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
+		worktree = "<Plug>(GitflowWorktree)",
 		rebase_interactive = "<Plug>(GitflowRebaseInteractive)",
 		actions = "<Plug>(GitflowActions)",
 		palette = "<Plug>(GitflowPalette)",
