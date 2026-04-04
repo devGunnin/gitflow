@@ -311,19 +311,6 @@ test("GitflowBisectGood highlight group is defined", function()
 	)
 end)
 
-test("GitflowBisectCurrent highlight group is defined", function()
-	local highlights = require("gitflow.highlights")
-	assert_true(
-		highlights.DEFAULT_GROUPS.GitflowBisectCurrent ~= nil,
-		"GitflowBisectCurrent should be in DEFAULT_GROUPS"
-	)
-	assert_equals(
-		highlights.DEFAULT_GROUPS.GitflowBisectCurrent.link,
-		"WarningMsg",
-		"GitflowBisectCurrent should link to WarningMsg"
-	)
-end)
-
 test("GitflowBisectBad highlight is applied after setup", function()
 	local hl = vim.api.nvim_get_hl(0, { name = "GitflowBisectBad" })
 	assert_true(

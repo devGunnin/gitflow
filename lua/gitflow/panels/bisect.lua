@@ -46,6 +46,52 @@ local function emit_post_operation()
 	)
 end
 
+---Compare two SHAs, allowing prefix matches in either direction.
+---@param a string|nil
+---@param b string|nil
+---@return boolean
+local function sha_matches(a, b)
+	if not a or not b then
+		return false
+	end
+	return a == b
+		or a:sub(1, #b) == b
+		or b:sub(1, #a) == a
+end
+
+---Handle the result of a good/bad mark operation.
+---@param err string|nil
+---@param output string|nil
+---@param fallback_msg string
+local function handle_mark_result(err, output, fallback_msg)
+	if err then
+		utils.notify(err, vim.log.levels.ERROR)
+		return
+	end
+
+	local first_bad = git_bisect.parse_first_bad(
+		output or ""
+	)
+	if first_bad then
+		M.state.first_bad_sha = first_bad
+		M.state.phase = "found"
+		utils.notify(
+			("First bad commit found: %s"):format(
+				first_bad:sub(1, 7)
+			),
+			vim.log.levels.WARN
+		)
+	else
+		utils.notify(
+			output or fallback_msg,
+			vim.log.levels.INFO
+		)
+	end
+
+	M.refresh()
+	emit_post_operation()
+end
+
 local function sync_phase_with_repo_state(is_active)
 	M.state.bisect_active = is_active
 	if is_active then
@@ -224,42 +270,22 @@ local function render(entries, current_branch)
 				position_marker = ("[%d] "):format(idx)
 			end
 
+			local is_first_bad = sha_matches(
+				entry.sha, M.state.first_bad_sha
+			)
+			local is_bad = sha_matches(
+				entry.sha, M.state.bad_sha
+			)
+			local is_good = sha_matches(
+				entry.sha, M.state.good_sha
+			)
+
 			local prefix = ""
-			if M.state.first_bad_sha
-				and (
-					entry.sha == M.state.first_bad_sha
-					or entry.sha:sub(
-						1, #M.state.first_bad_sha
-					) == M.state.first_bad_sha
-					or M.state.first_bad_sha:sub(
-						1, #entry.sha
-					) == entry.sha
-				)
-			then
+			if is_first_bad then
 				prefix = "[FIRST BAD] "
-			elseif M.state.bad_sha
-				and (
-					entry.sha == M.state.bad_sha
-					or entry.sha:sub(
-						1, #M.state.bad_sha
-					) == M.state.bad_sha
-					or M.state.bad_sha:sub(
-						1, #entry.sha
-					) == entry.sha
-				)
-			then
+			elseif is_bad then
 				prefix = "[BAD] "
-			elseif M.state.good_sha
-				and (
-					entry.sha == M.state.good_sha
-					or entry.sha:sub(
-						1, #M.state.good_sha
-					) == M.state.good_sha
-					or M.state.good_sha:sub(
-						1, #entry.sha
-					) == entry.sha
-				)
-			then
+			elseif is_good then
 				prefix = "[GOOD] "
 			end
 
@@ -274,43 +300,10 @@ local function render(entries, current_branch)
 			)
 			line_entries[#lines] = entry
 
-			if M.state.first_bad_sha
-				and (
-					entry.sha == M.state.first_bad_sha
-					or entry.sha:sub(
-						1, #M.state.first_bad_sha
-					) == M.state.first_bad_sha
-					or M.state.first_bad_sha:sub(
-						1, #entry.sha
-					) == entry.sha
-				)
-			then
+			if is_first_bad or is_bad then
 				entry_highlights[#lines] =
 					"GitflowBisectBad"
-			elseif M.state.bad_sha
-				and (
-					entry.sha == M.state.bad_sha
-					or entry.sha:sub(
-						1, #M.state.bad_sha
-					) == M.state.bad_sha
-					or M.state.bad_sha:sub(
-						1, #entry.sha
-					) == entry.sha
-				)
-			then
-				entry_highlights[#lines] =
-					"GitflowBisectBad"
-			elseif M.state.good_sha
-				and (
-					entry.sha == M.state.good_sha
-					or entry.sha:sub(
-						1, #M.state.good_sha
-					) == M.state.good_sha
-					or M.state.good_sha:sub(
-						1, #entry.sha
-					) == entry.sha
-				)
-			then
+			elseif is_good then
 				entry_highlights[#lines] =
 					"GitflowBisectGood"
 			end
@@ -456,32 +449,7 @@ function M.mark_good()
 	end
 
 	git_bisect.good(function(err, output)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-
-		local first_bad = git_bisect.parse_first_bad(
-			output or ""
-		)
-		if first_bad then
-			M.state.first_bad_sha = first_bad
-			M.state.phase = "found"
-			utils.notify(
-				("First bad commit found: %s"):format(
-					first_bad:sub(1, 7)
-				),
-				vim.log.levels.WARN
-			)
-		else
-			utils.notify(
-				output or "Marked good",
-				vim.log.levels.INFO
-			)
-		end
-
-		M.refresh()
-		emit_post_operation()
+		handle_mark_result(err, output, "Marked good")
 	end)
 end
 
@@ -496,32 +464,7 @@ function M.mark_bad()
 	end
 
 	git_bisect.bad(function(err, output)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-
-		local first_bad = git_bisect.parse_first_bad(
-			output or ""
-		)
-		if first_bad then
-			M.state.first_bad_sha = first_bad
-			M.state.phase = "found"
-			utils.notify(
-				("First bad commit found: %s"):format(
-					first_bad:sub(1, 7)
-				),
-				vim.log.levels.WARN
-			)
-		else
-			utils.notify(
-				output or "Marked bad",
-				vim.log.levels.INFO
-			)
-		end
-
-		M.refresh()
-		emit_post_operation()
+		handle_mark_result(err, output, "Marked bad")
 	end)
 end
 
@@ -531,6 +474,9 @@ function M.select_test_file()
 		prompt = "Test script path (empty to clear): ",
 		completion = "file",
 	}, function(value)
+		if value == nil then
+			return
+		end
 		local trimmed = vim.trim(value)
 		if trimmed == "" then
 			M.state.test_script = nil
