@@ -69,13 +69,17 @@ local M = {}
 function M.defaults()
 	return {
 		keybindings = {
+			-- Documented defaults — must match README.md, KEYBINDINGS.md, and
+			-- doc/gitflow.txt. Every entry here is also exercised by
+			-- scripts/test_keybinding_docs.lua.
 			help = "<leader>gh",
-			refresh = "<leader>gg",
+			open = "<leader>go",
+			refresh = "<leader>gr",
 			close = "<leader>gq",
 			status = "gs",
 			commit = "gc",
-			push = "<leader>gP",
-			pull = "<leader>gp",
+			push = "gp",
+			pull = "gP",
 			fetch = "<leader>gf",
 			diff = "gd",
 			log = "gl",
@@ -84,17 +88,21 @@ function M.defaults()
 			stash_pop = "gX",
 			branch = "<leader>gb",
 			issue = "<leader>gi",
-			pr = "<leader>gr",
+			-- pr uses <leader>gR (capital) to avoid colliding with refresh
+			-- on <leader>gr. `gR` without leader is reset — distinct chord.
+			pr = "<leader>gR",
+			label = "<leader>gL",
+			conflict = "<leader>gm",
+			palette = "<leader>gp",
 			reset = "gR",
+			-- Additional actions for panels that pre-date their own doc entries.
 			revert = "gV",
 			tag = "gT",
 			blame = "gB",
 			reflog = "gF",
 			cherry_pick = "gC",
 			rebase_interactive = "gI",
-			conflict = "<leader>gm",
 			actions = "gA",
-			palette = "<leader>go",
 			notifications = "gN",
 		},
 		ui = {

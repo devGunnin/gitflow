@@ -37,154 +37,339 @@ local gitflow = require("gitflow")
 local cfg = gitflow.setup({})
 local defaults = cfg.keybindings
 
--- Read KEYBINDINGS.md and extract the global table entries
+-- Parse the Global keybinding table out of KEYBINDINGS.md.
+-- Row format: | `<key>` | <action> | `<config_key>` |
 local root = vim.fn.fnamemodify(".", ":p")
-local doc_path = root .. "KEYBINDINGS.md"
-local lines = vim.fn.readfile(doc_path)
-assert_true(#lines > 0, "KEYBINDINGS.md should exist")
-
--- Parse global keybinding table rows:
--- | `<key>` | <action> | `<config_key>` |
-local doc_entries = {}
-local in_global = false
-for _, line in ipairs(lines) do
-	if line:find("## Global", 1, true) then
-		in_global = true
-	elseif line:match("^## ") and in_global then
-		break
-	end
-	if in_global then
-		local key, config_key = line:match(
-			"^| `([^`]+)` |[^|]+| `([^`]+)` |$"
-		)
-		if key and config_key then
-			doc_entries[config_key] = key
+local function parse_keybindings_md()
+	local lines = vim.fn.readfile(root .. "KEYBINDINGS.md")
+	assert_true(#lines > 0, "KEYBINDINGS.md should exist")
+	local entries = {}
+	local in_global = false
+	for _, line in ipairs(lines) do
+		if line:find("## Global", 1, true) then
+			in_global = true
+		elseif line:match("^## ") and in_global then
+			break
+		end
+		if in_global then
+			local key, cfg_key = line:match(
+				"^| `([^`]+)` |[^|]+| `([^`]+)` |$"
+			)
+			if key and cfg_key then
+				entries[cfg_key] = key
+			end
 		end
 	end
+	return entries
 end
 
-test(
-	"KEYBINDINGS.md global table has entries",
-	function()
-		local count = 0
-		for _ in pairs(doc_entries) do
-			count = count + 1
+-- Parse the Global Mappings table out of README.md.
+-- Row format: | `<key>` | <action label> |
+local function parse_readme_global_mappings()
+	local lines = vim.fn.readfile(root .. "README.md")
+	assert_true(#lines > 0, "README.md should exist")
+	local entries = {}
+	local in_section = false
+	for _, line in ipairs(lines) do
+		if line:find("### Global Mappings", 1, true) then
+			in_section = true
+		elseif in_section and line:match("^##%s") then
+			break
 		end
+		if in_section then
+			local key, label = line:match("^| `([^`]+)` | ([^|]+) |$")
+			if key and label then
+				entries[#entries + 1] = {
+					key = key,
+					label = vim.trim(label),
+				}
+			end
+		end
+	end
+	return entries
+end
+
+-- Parse the Default keybindings table out of doc/gitflow.txt.
+-- Row format: "    <action>   <leader-or-key>   <Plug>(...)"
+local function parse_helptxt_defaults()
+	local lines = vim.fn.readfile(root .. "doc/gitflow.txt")
+	assert_true(#lines > 0, "doc/gitflow.txt should exist")
+	local entries = {}
+	local in_table = false
+	for _, line in ipairs(lines) do
+		if line:match("^Default keybindings:") then
+			in_table = true
+		elseif in_table and line:match("^%S") then
+			break
+		end
+		if in_table then
+			local action, key =
+				line:match("^%s+(%S+)%s+(%S+)%s+<Plug>%(Gitflow")
+			if action and key and action ~= "Action" then
+				entries[action] = key
+			end
+		end
+	end
+	return entries
+end
+
+local doc_entries = parse_keybindings_md()
+local readme_mappings = parse_readme_global_mappings()
+local helptxt_defaults = parse_helptxt_defaults()
+
+test("KEYBINDINGS.md global table parses entries", function()
+	local count = 0
+	for _ in pairs(doc_entries) do
+		count = count + 1
+	end
+	assert_true(count >= 10, "should parse multiple entries")
+end)
+
+test("README.md Global Mappings table parses entries", function()
+	assert_true(#readme_mappings >= 10, "should parse multiple entries")
+end)
+
+test("doc/gitflow.txt default table parses entries", function()
+	local count = 0
+	for _ in pairs(helptxt_defaults) do
+		count = count + 1
+	end
+	assert_true(count >= 10, "should parse multiple entries")
+end)
+
+-- Every config_key in KEYBINDINGS.md's Global table must match config defaults.
+-- This is the regression gate for the QA DEFECT-001 class of bugs where the
+-- defaults-table silently drifts from the documented contract.
+test(
+	"every KEYBINDINGS.md entry matches config.defaults()",
+	function()
+		for cfg_key, doc_key in pairs(doc_entries) do
+			assert_true(
+				defaults[cfg_key] ~= nil,
+				("defaults.%s should exist"):format(cfg_key)
+			)
+			assert_equals(
+				defaults[cfg_key],
+				doc_key,
+				("KEYBINDINGS.md vs defaults[%s]"):format(cfg_key)
+			)
+		end
+	end
+)
+
+-- Every action in doc/gitflow.txt must match config defaults too.
+test(
+	"every doc/gitflow.txt entry matches config.defaults()",
+	function()
+		for action, help_key in pairs(helptxt_defaults) do
+			assert_true(
+				defaults[action] ~= nil,
+				("defaults.%s should exist"):format(action)
+			)
+			assert_equals(
+				defaults[action],
+				help_key,
+				("doc/gitflow.txt vs defaults[%s]"):format(action)
+			)
+		end
+	end
+)
+
+-- KEYBINDINGS.md and doc/gitflow.txt must agree with each other.
+test(
+	"KEYBINDINGS.md and doc/gitflow.txt agree on default keys",
+	function()
+		for cfg_key, doc_key in pairs(doc_entries) do
+			if helptxt_defaults[cfg_key] then
+				assert_equals(
+					helptxt_defaults[cfg_key],
+					doc_key,
+					("doc mismatch for %s"):format(cfg_key)
+				)
+			end
+		end
+	end
+)
+
+-- Every key listed in the README Global Mappings table must also be the
+-- runtime default for exactly one action (i.e. the plugin actually installs
+-- that mapping). This catches the class of bug where docs show a key the
+-- setup code does not wire up.
+test(
+	"every README Global Mappings key is installed by setup()",
+	function()
+		local installed = {}
+		for _, key in pairs(defaults) do
+			installed[key] = true
+		end
+		for _, row in ipairs(readme_mappings) do
+			assert_true(
+				installed[row.key],
+				("README lists %q (%s) but setup() does not install it")
+					:format(row.key, row.label)
+			)
+		end
+	end
+)
+
+-- No two documented default actions may collide on the same key. DEFECT-003
+-- fell out of `<leader>gr` being assigned to both refresh and pr; this test
+-- locks the resolution in.
+test("no two default keybindings collide on the same key", function()
+	local seen = {}
+	for cfg_key, doc_key in pairs(doc_entries) do
+		if seen[doc_key] then
+			error(
+				("KEYBINDINGS.md collision: %q used by both %s and %s"):format(
+					doc_key,
+					seen[doc_key],
+					cfg_key
+				),
+				0
+			)
+		end
+		seen[doc_key] = cfg_key
+	end
+end)
+
+-- Spot checks for the three specific cases called out in the QA report.
+test("push default is `gp`", function()
+	assert_equals(defaults.push, "gp", "push default")
+	assert_equals(doc_entries["push"], "gp", "KEYBINDINGS.md push")
+end)
+
+test("pull default is `gP`", function()
+	assert_equals(defaults.pull, "gP", "pull default")
+	assert_equals(doc_entries["pull"], "gP", "KEYBINDINGS.md pull")
+end)
+
+test("palette default is `<leader>gp` (not colliding with pull)", function()
+	assert_equals(defaults.palette, "<leader>gp", "palette default")
+	assert_equals(
+		doc_entries["palette"],
+		"<leader>gp",
+		"KEYBINDINGS.md palette"
+	)
+end)
+
+test("open default is `<leader>go`", function()
+	assert_equals(defaults.open, "<leader>go", "open default")
+	assert_equals(doc_entries["open"], "<leader>go", "KEYBINDINGS.md open")
+end)
+
+test("label default is `<leader>gL`", function()
+	assert_equals(defaults.label, "<leader>gL", "label default")
+	assert_equals(doc_entries["label"], "<leader>gL", "KEYBINDINGS.md label")
+end)
+
+test("refresh default is `<leader>gr` (wins the gr slot)", function()
+	assert_equals(defaults.refresh, "<leader>gr", "refresh default")
+	assert_equals(
+		doc_entries["refresh"],
+		"<leader>gr",
+		"KEYBINDINGS.md refresh"
+	)
+end)
+
+test("pr default is `<leader>gR` (resolved gr collision)", function()
+	assert_equals(defaults.pr, "<leader>gR", "pr default")
+	assert_equals(doc_entries["pr"], "<leader>gR", "KEYBINDINGS.md pr")
+end)
+
+test("pr and reset keybindings are distinct", function()
+	assert_true(
+		defaults.pr ~= defaults.reset,
+		"pr and reset must have different keys"
+	)
+	assert_true(
+		doc_entries["pr"] ~= doc_entries["reset"],
+		"pr and reset docs must show different keys"
+	)
+end)
+
+test("reset default is `gR`", function()
+	assert_equals(defaults.reset, "gR", "reset default")
+	assert_equals(doc_entries["reset"], "gR", "KEYBINDINGS.md reset")
+end)
+
+-- After setup(), the actual runtime keymaps must resolve to the expected
+-- <Plug> target. This uses maparg() the same way the test_boyz QA prober did,
+-- so DEFECT-001 is observable the same way it was caught.
+local plug_by_action = {
+	help = "<Plug>(GitflowHelp)",
+	open = "<Plug>(GitflowOpen)",
+	refresh = "<Plug>(GitflowRefresh)",
+	close = "<Plug>(GitflowClose)",
+	status = "<Plug>(GitflowStatus)",
+	branch = "<Plug>(GitflowBranch)",
+	commit = "<Plug>(GitflowCommit)",
+	push = "<Plug>(GitflowPush)",
+	pull = "<Plug>(GitflowPull)",
+	fetch = "<Plug>(GitflowFetch)",
+	diff = "<Plug>(GitflowDiff)",
+	log = "<Plug>(GitflowLog)",
+	stash = "<Plug>(GitflowStash)",
+	stash_push = "<Plug>(GitflowStashPush)",
+	stash_pop = "<Plug>(GitflowStashPop)",
+	issue = "<Plug>(GitflowIssue)",
+	pr = "<Plug>(GitflowPr)",
+	label = "<Plug>(GitflowLabel)",
+	conflict = "<Plug>(GitflowConflicts)",
+	palette = "<Plug>(GitflowPalette)",
+	reset = "<Plug>(GitflowReset)",
+}
+
+test("every documented default resolves to its <Plug> target at runtime", function()
+	local leader = vim.g.mapleader or "\\"
+	for cfg_key, expected_plug in pairs(plug_by_action) do
+		local key = doc_entries[cfg_key]
 		assert_true(
-			count > 0,
-			"should parse at least one entry"
+			key ~= nil,
+			("KEYBINDINGS.md should list a default for %s"):format(cfg_key)
 		)
-	end
-)
-
-test(
-	"issue doc entry exists",
-	function()
+		local resolved = key:gsub("<leader>", leader)
+		local m = vim.fn.maparg(resolved, "n", false, true) or {}
 		assert_true(
-			doc_entries["issue"] ~= nil,
-			"issue should be in KEYBINDINGS.md global table"
-		)
-	end
-)
-
-test(
-	"issue doc entry matches config default",
-	function()
-		assert_equals(
-			doc_entries["issue"],
-			defaults.issue,
-			"KEYBINDINGS.md issue key"
-		)
-	end
-)
-
-test(
-	"issue keybinding is lowercase <leader>gi",
-	function()
-		assert_equals(
-			doc_entries["issue"],
-			"<leader>gi",
-			"issue doc entry should be lowercase"
+			m.rhs ~= nil and m.rhs ~= "",
+			("no mapping found for %s (%s)"):format(cfg_key, resolved)
 		)
 		assert_equals(
-			defaults.issue,
-			"<leader>gi",
-			"issue config default should be lowercase"
+			m.rhs,
+			expected_plug,
+			("rhs for %s (%s)"):format(cfg_key, resolved)
 		)
 	end
-)
+end)
 
-test(
-	"PR doc entry exists",
-	function()
+-- DEFECT-002: the documented GitflowSign* highlight groups must exist after
+-- setup(), and must honor user overrides via setup({ highlights = ... }).
+test("GitflowSign* highlight groups exist after setup()", function()
+	for _, group in ipairs({
+		"GitflowSignAdded",
+		"GitflowSignModified",
+		"GitflowSignDeleted",
+		"GitflowSignConflict",
+	}) do
+		local hl = vim.api.nvim_get_hl(0, { name = group })
 		assert_true(
-			doc_entries["pr"] ~= nil,
-			"pr should be in KEYBINDINGS.md global table"
+			next(hl) ~= nil,
+			("%s should be defined after setup()"):format(group)
 		)
 	end
-)
+end)
 
-test(
-	"PR doc entry matches config default",
-	function()
-		assert_equals(
-			doc_entries["pr"],
-			defaults.pr,
-			"KEYBINDINGS.md pr key"
-		)
-	end
-)
-
-test(
-	"PR keybinding is lowercase <leader>gr",
-	function()
-		assert_equals(
-			doc_entries["pr"],
-			"<leader>gr",
-			"PR doc entry should be lowercase"
-		)
-		assert_equals(
-			defaults.pr,
-			"<leader>gr",
-			"PR config default should be lowercase"
-		)
-	end
-)
-
-test(
-	"PR and reset keybindings are distinct",
-	function()
-		assert_true(
-			defaults.pr ~= defaults.reset,
-			"pr and reset must have different keys"
-		)
-		assert_true(
-			doc_entries["pr"] ~= doc_entries["reset"],
-			"pr and reset docs must show different keys"
-		)
-	end
-)
-
-test(
-	"reset doc entry exists",
-	function()
-		assert_true(
-			doc_entries["reset"] ~= nil,
-			"reset should be in KEYBINDINGS.md"
-		)
-	end
-)
-
-test(
-	"reset doc entry matches config default",
-	function()
-		assert_equals(
-			doc_entries["reset"],
-			defaults.reset,
-			"KEYBINDINGS.md reset key"
-		)
-	end
-)
+test("GitflowSign* override via setup.highlights takes effect", function()
+	gitflow.setup({
+		highlights = {
+			GitflowSignAdded = { link = "DiffAdd" },
+		},
+	})
+	local hl = vim.api.nvim_get_hl(0, { name = "GitflowSignAdded" })
+	assert_true(next(hl) ~= nil, "GitflowSignAdded should still be defined")
+	assert_equals(hl.link, "DiffAdd", "override should set link to DiffAdd")
+	-- Reset defaults for any later scripts
+	gitflow.setup({})
+end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))
 if failed > 0 then
