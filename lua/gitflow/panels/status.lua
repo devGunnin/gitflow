@@ -372,8 +372,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		local upstream_title, upstream_sep = ui_render.section(STATUS_NO_UPSTREAM_HEADER, nil, render_opts)
 		lines[#lines + 1] = upstream_title
 		lines[#lines + 1] = upstream_sep
-		lines[#lines + 1] = ui_render.entry("No upstream branch configured")
-		lines[#lines + 1] = ui_render.entry("Run :Gitflow push or git push -u <remote> <branch>")
+		lines[#lines + 1] = ui_render.entry("No upstream branch — push will set it automatically")
 		lines[#lines + 1] = ""
 	end
 
