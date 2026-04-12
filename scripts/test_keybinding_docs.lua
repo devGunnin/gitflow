@@ -212,9 +212,7 @@ test(
 	end
 )
 
--- No two documented default actions may collide on the same key. DEFECT-003
--- fell out of `<leader>gr` being assigned to both refresh and pr; this test
--- locks the resolution in.
+-- No two documented default actions may collide on the same key.
 test("no two default keybindings collide on the same key", function()
 	local seen = {}
 	for cfg_key, doc_key in pairs(doc_entries) do
@@ -233,21 +231,21 @@ test("no two default keybindings collide on the same key", function()
 end)
 
 -- Spot checks for the three specific cases called out in the QA report.
-test("push default is `gp`", function()
-	assert_equals(defaults.push, "gp", "push default")
-	assert_equals(doc_entries["push"], "gp", "KEYBINDINGS.md push")
+test("push default is `<leader>gP`", function()
+	assert_equals(defaults.push, "<leader>gP", "push default")
+	assert_equals(doc_entries["push"], "<leader>gP", "KEYBINDINGS.md push")
 end)
 
-test("pull default is `gP`", function()
-	assert_equals(defaults.pull, "gP", "pull default")
-	assert_equals(doc_entries["pull"], "gP", "KEYBINDINGS.md pull")
+test("pull default is `<leader>gp`", function()
+	assert_equals(defaults.pull, "<leader>gp", "pull default")
+	assert_equals(doc_entries["pull"], "<leader>gp", "KEYBINDINGS.md pull")
 end)
 
-test("palette default is `<leader>gp` (not colliding with pull)", function()
-	assert_equals(defaults.palette, "<leader>gp", "palette default")
+test("palette default is `gP`", function()
+	assert_equals(defaults.palette, "gP", "palette default")
 	assert_equals(
 		doc_entries["palette"],
-		"<leader>gp",
+		"gP",
 		"KEYBINDINGS.md palette"
 	)
 end)
@@ -262,18 +260,18 @@ test("label default is `<leader>gL`", function()
 	assert_equals(doc_entries["label"], "<leader>gL", "KEYBINDINGS.md label")
 end)
 
-test("refresh default is `<leader>gr` (wins the gr slot)", function()
-	assert_equals(defaults.refresh, "<leader>gr", "refresh default")
+test("refresh default is `gr`", function()
+	assert_equals(defaults.refresh, "gr", "refresh default")
 	assert_equals(
 		doc_entries["refresh"],
-		"<leader>gr",
+		"gr",
 		"KEYBINDINGS.md refresh"
 	)
 end)
 
-test("pr default is `<leader>gR` (resolved gr collision)", function()
-	assert_equals(defaults.pr, "<leader>gR", "pr default")
-	assert_equals(doc_entries["pr"], "<leader>gR", "KEYBINDINGS.md pr")
+test("pr default is `<leader>gr`", function()
+	assert_equals(defaults.pr, "<leader>gr", "pr default")
+	assert_equals(doc_entries["pr"], "<leader>gr", "KEYBINDINGS.md pr")
 end)
 
 test("pr and reset keybindings are distinct", function()
@@ -287,9 +285,9 @@ test("pr and reset keybindings are distinct", function()
 	)
 end)
 
-test("reset default is `gR`", function()
-	assert_equals(defaults.reset, "gR", "reset default")
-	assert_equals(doc_entries["reset"], "gR", "KEYBINDINGS.md reset")
+test("reset default is `<leader>gR`", function()
+	assert_equals(defaults.reset, "<leader>gR", "reset default")
+	assert_equals(doc_entries["reset"], "<leader>gR", "KEYBINDINGS.md reset")
 end)
 
 -- After setup(), the actual runtime keymaps must resolve to the expected

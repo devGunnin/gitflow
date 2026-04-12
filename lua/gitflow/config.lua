@@ -74,12 +74,12 @@ function M.defaults()
 			-- scripts/test_keybinding_docs.lua.
 			help = "<leader>gh",
 			open = "<leader>go",
-			refresh = "<leader>gr",
+			refresh = "gr",
 			close = "<leader>gq",
 			status = "gs",
 			commit = "gc",
-			push = "gp",
-			pull = "gP",
+			push = "<leader>gP",
+			pull = "<leader>gp",
 			fetch = "<leader>gf",
 			diff = "gd",
 			log = "gl",
@@ -88,13 +88,11 @@ function M.defaults()
 			stash_pop = "gX",
 			branch = "<leader>gb",
 			issue = "<leader>gi",
-			-- pr uses <leader>gR (capital) to avoid colliding with refresh
-			-- on <leader>gr. `gR` without leader is reset — distinct chord.
-			pr = "<leader>gR",
+			pr = "<leader>gr",
 			label = "<leader>gL",
 			conflict = "<leader>gm",
-			palette = "<leader>gp",
-			reset = "gR",
+			palette = "gP",
+			reset = "<leader>gR",
 			-- Additional actions for panels that pre-date their own doc entries.
 			revert = "gV",
 			tag = "gT",
