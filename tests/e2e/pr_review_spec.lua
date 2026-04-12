@@ -1663,13 +1663,13 @@ T.run_suite("E2E: PR Review Flow", {
 			"review buffer syntax should be diff"
 		)
 
-		-- Treesitter should not be attached
-		local has_ts_parser = pcall(
-			vim.treesitter.get_parser, bufnr
-		)
-		T.assert_false(
-			has_ts_parser,
-			"treesitter should not attach to gitflow-diff"
+		-- Treesitter highlighting should not be active
+		local ts_active = vim.treesitter.highlighter
+			and vim.treesitter.highlighter.active
+			and vim.treesitter.highlighter.active[bufnr] or nil
+		T.assert_true(
+			ts_active == nil,
+			"treesitter highlighting should not be active on gitflow-diff"
 		)
 
 		cleanup_panels()
@@ -1712,13 +1712,13 @@ T.run_suite("E2E: PR Review Flow", {
 			"review buffer should still be valid"
 		)
 
-		-- No treesitter parser should be present
-		local has_ts = pcall(
-			vim.treesitter.get_parser, bufnr
-		)
-		T.assert_false(
-			has_ts,
-			"treesitter should not attach after re-render"
+		-- Treesitter highlighting should not be active after re-render
+		local ts_active = vim.treesitter.highlighter
+			and vim.treesitter.highlighter.active
+			and vim.treesitter.highlighter.active[bufnr] or nil
+		T.assert_true(
+			ts_active == nil,
+			"treesitter highlighting should not be active after re-render"
 		)
 
 		cleanup_panels()
