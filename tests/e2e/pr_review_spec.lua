@@ -205,6 +205,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["review panel populates file markers"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.file_markers > 0
+		end, "review panel file_markers should be populated after open")
 
 		T.assert_true(
 			#review_panel.state.file_markers >= 2,
@@ -235,6 +238,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["review panel populates hunk markers"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		T.assert_true(
 			#review_panel.state.hunk_markers >= 2,
@@ -288,6 +294,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["file navigation ]f jumps to next file marker"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.file_markers > 0
+		end, "review panel file_markers should be populated after open")
 
 		local winid = review_panel.state.winid
 		T.assert_true(
@@ -326,6 +335,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["file navigation [f jumps to previous file marker"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.file_markers > 0
+		end, "review panel file_markers should be populated after open")
 
 		local winid = review_panel.state.winid
 		T.assert_true(
@@ -360,6 +372,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["hunk navigation ]c jumps to next hunk marker"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local winid = review_panel.state.winid
 		vim.api.nvim_win_set_cursor(winid, { 1, 0 })
@@ -385,6 +400,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["hunk navigation [c wraps to last hunk from first"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		T.assert_true(
 			#review_panel.state.hunk_markers >= 2,
@@ -416,6 +434,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["inline comment c adds pending comment"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		T.assert_equals(
 			#review_panel.state.pending_comments,
@@ -462,6 +483,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["submit pending review maps deleted-line comment to LEFT side"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local deleted_buf = nil
 		local deleted_ctx = nil
@@ -535,6 +559,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["range pending comment keeps start/end mapping after rerender"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local start_buf = nil
 		local end_buf = nil
@@ -689,6 +716,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["approve with pending comments submits batched review"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		review_panel.state.pending_comments = {
 			{
@@ -938,6 +968,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["review panel renders existing comment threads"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local bufnr = ui.buffer.get("review")
 		local lines = T.buf_lines(bufnr)
@@ -958,6 +991,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["review panel shows comment bodies inline in diff mode"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local bufnr = ui.buffer.get("review")
 		local marks = T.get_extmarks(bufnr, "gitflow_review_comments")
@@ -1184,6 +1220,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["submit pending review batches inline comments"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		-- Add a pending comment
 		review_panel.state.pending_comments = {
@@ -1388,6 +1427,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["line context provides old/new line numbers"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local has_old_line = false
 		local has_new_line = false
@@ -1419,6 +1461,9 @@ T.run_suite("E2E: PR Review Flow", {
 	["cursor returns to same diff line after inline comment"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 		local winid = review_panel.state.winid
 		T.assert_true(
@@ -1680,6 +1725,9 @@ T.run_suite("E2E: PR Review Flow", {
 		= function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.hunk_markers > 0
+		end, "review panel hunk_markers should be populated after open")
 
 			-- Add a pending comment to trigger re-render path
 			with_temporary_patches({
