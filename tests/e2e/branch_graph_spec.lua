@@ -675,11 +675,12 @@ T.run_suite("Branch Graph Visualization", {
 			"buffer should exist"
 		)
 
-		local marks = T.get_extmarks(bufnr, "gitflow_branch_graph_hl")
-		T.assert_true(
-			#marks > 0,
-			"graph view should have highlight extmarks"
-		)
+		-- Chained async (current-branch then log --graph) may outlast
+		-- drain_jobs — poll for the actual condition instead.
+		T.wait_until(function()
+			local m = T.get_extmarks(bufnr, "gitflow_branch_graph_hl")
+			return #m > 0
+		end, "graph view should have highlight extmarks", 5000)
 
 		close_panel()
 	end,
@@ -698,11 +699,11 @@ T.run_suite("Branch Graph Visualization", {
 			"buffer should exist"
 		)
 
-		local graph_marks = T.get_extmarks(bufnr, "gitflow_branch_graph_hl")
-		T.assert_true(
-			#graph_marks > 0,
-			"graph view should have graph extmarks before returning to list"
-		)
+		-- Chained async may outlast drain_jobs — poll for extmarks.
+		T.wait_until(function()
+			local m = T.get_extmarks(bufnr, "gitflow_branch_graph_hl")
+			return #m > 0
+		end, "graph view should have graph extmarks before returning to list", 5000)
 
 		branch_panel.toggle_view()
 		T.drain_jobs(3000)

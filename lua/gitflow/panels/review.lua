@@ -124,6 +124,7 @@ local function ensure_window(cfg)
 	vim.api.nvim_set_option_value(
 		"syntax", "diff", { buf = bufnr }
 	)
+	pcall(vim.treesitter.stop, bufnr)
 	vim.api.nvim_set_option_value(
 		"modifiable", false, { buf = bufnr }
 	)

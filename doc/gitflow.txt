@@ -91,12 +91,12 @@ Default keybindings:
     Action          Default             Plug Mapping ~
     help            <leader>gh          <Plug>(GitflowHelp)
     open            <leader>go          <Plug>(GitflowOpen)
-    refresh         <leader>gr          <Plug>(GitflowRefresh)
+    refresh         gr                  <Plug>(GitflowRefresh)
     close           <leader>gq          <Plug>(GitflowClose)
     status          gs                  <Plug>(GitflowStatus)
     commit          gc                  <Plug>(GitflowCommit)
-    push            gp                  <Plug>(GitflowPush)
-    pull            gP                  <Plug>(GitflowPull)
+    push            <leader>gP          <Plug>(GitflowPush)
+    pull            <leader>gp          <Plug>(GitflowPull)
     fetch           <leader>gf          <Plug>(GitflowFetch)
     diff            gd                  <Plug>(GitflowDiff)
     log             gl                  <Plug>(GitflowLog)
@@ -105,10 +105,10 @@ Default keybindings:
     stash_pop       gX                  <Plug>(GitflowStashPop)
     branch          <leader>gb          <Plug>(GitflowBranch)
     issue           <leader>gi          <Plug>(GitflowIssue)
-    pr              <leader>gR          <Plug>(GitflowPr)
+    pr              <leader>gr          <Plug>(GitflowPr)
     label           <leader>gL          <Plug>(GitflowLabel)
     conflict        <leader>gm          <Plug>(GitflowConflicts)
-    palette         <leader>gp          <Plug>(GitflowPalette)
+    palette         gP                  <Plug>(GitflowPalette)
 
                                                           *gitflow-config-ui*
 ui ~

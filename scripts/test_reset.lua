@@ -235,10 +235,10 @@ end)
 
 -- ─── Keybinding tests ───
 
-test("default reset keybinding is gR", function()
+test("default reset keybinding is <leader>gR", function()
 	assert_equals(
-		cfg.keybindings.reset, "gR",
-		"default reset keybinding should be gR"
+		cfg.keybindings.reset, "<leader>gR",
+		"default reset keybinding should be <leader>gR"
 	)
 end)
 

@@ -303,19 +303,6 @@ local function push_with_upstream(on_done)
 				return
 			end
 
-			local confirmed = ui.input.confirm(
-				("No upstream for '%s'. Push with -u %s %s?"):format(
-					branch, remote, branch
-				),
-				{ choices = { "&Push", "&Cancel" }, default_choice = 1 }
-			)
-			if not confirmed then
-				if on_done then
-					on_done(false)
-				end
-				return
-			end
-
 			git.git({ "push", "-u", remote, branch }, {}, function(push_result)
 				if push_result.code ~= 0 then
 					show_error(result_message(push_result, "git push -u failed"))

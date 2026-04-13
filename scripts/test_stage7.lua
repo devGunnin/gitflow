@@ -87,7 +87,7 @@ local defaults = config.defaults()
 assert_equals(defaults.sync.pull_strategy, "merge", "default pull strategy should be merge")
 assert_equals(
 	defaults.keybindings.palette,
-	"<leader>gp",
+	"gP",
 	"default palette keybinding should match documented default"
 )
 assert_deep_equals(
