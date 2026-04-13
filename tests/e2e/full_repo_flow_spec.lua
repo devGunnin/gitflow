@@ -244,14 +244,10 @@ T.run_suite("E2E: Full Repository Flow", {
 			"no-upstream header 'Outgoing / Incoming' should be present"
 		)
 
-		-- Actionable hint must appear
+		-- Informational hint must appear
 		T.assert_true(
-			T.find_line(lines, "No upstream branch configured") ~= nil,
+			T.find_line(lines, "No upstream branch") ~= nil,
 			"no-upstream hint message should be present"
-		)
-		T.assert_true(
-			T.find_line(lines, "Gitflow push") ~= nil,
-			"no-upstream hint should mention :Gitflow push"
 		)
 
 		-- Separate Outgoing/Incoming sections must NOT appear

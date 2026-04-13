@@ -11,6 +11,13 @@ if [ -n "${GITFLOW_GIT_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$GITFLOW_GIT_LOG"
 fi
 
+# Pass-through to real git when GITFLOW_GIT_REAL is set.
+# Script tests that create real repositories set this variable to bypass
+# the stub and use the actual git binary for all operations.
+if [ -n "${GITFLOW_GIT_REAL:-}" ]; then
+  exec "$GITFLOW_GIT_REAL" "$@"
+fi
+
 # Allow forcing failure for any subcommand
 fail_cmd="${GITFLOW_GIT_FAIL:-}"
 

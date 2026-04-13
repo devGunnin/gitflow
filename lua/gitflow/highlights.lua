@@ -44,6 +44,13 @@ local function build_default_groups(palette)
 		GitflowAdded = { link = "DiffAdd" },
 		GitflowRemoved = { link = "DiffDelete" },
 		GitflowModified = { link = "DiffChange" },
+		-- Sign column indicators (linked to the base groups so user overrides
+		-- via setup({ highlights = { GitflowSignAdded = ... } }) take effect —
+		-- signs.lua uses these names as texthl targets).
+		GitflowSignAdded = { link = "GitflowAdded" },
+		GitflowSignModified = { link = "GitflowModified" },
+		GitflowSignDeleted = { link = "GitflowRemoved" },
+		GitflowSignConflict = { link = "GitflowConflictLocal" },
 		-- Diff view — distinct styling for file headers, hunk headers, context
 		GitflowDiffFileHeader = { fg = palette.diff_file_header, bold = true },
 		GitflowDiffHunkHeader = { fg = palette.diff_hunk_header, bold = true },

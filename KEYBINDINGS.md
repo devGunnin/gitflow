@@ -12,12 +12,12 @@ Normal-mode mappings available in any buffer. Configured via
 | --- | --- | --- |
 | `<leader>gh` | Show help / usage | `help` |
 | `<leader>go` | Open main panel | `open` |
-| `<leader>gr` | Refresh current panel | `refresh` |
+| `gr` | Refresh current panel | `refresh` |
 | `<leader>gq` | Close all Gitflow panels | `close` |
 | `gs` | Open status panel | `status` |
 | `gc` | Commit | `commit` |
-| `gp` | Push | `push` |
-| `gP` | Pull | `pull` |
+| `<leader>gP` | Push | `push` |
+| `<leader>gp` | Pull | `pull` |
 | `<leader>gf` | Fetch | `fetch` |
 | `gd` | Open diff view | `diff` |
 | `gl` | Open log panel | `log` |
@@ -28,9 +28,9 @@ Normal-mode mappings available in any buffer. Configured via
 | `<leader>gi` | Open issue list | `issue` |
 | `<leader>gr` | Open PR list | `pr` |
 | `<leader>gL` | Open label list | `label` |
-| `gR` | Open reset panel | `reset` |
+| `<leader>gR` | Open reset panel | `reset` |
 | `<leader>gm` | Open conflict panel | `conflict` |
-| `<leader>gp` | Open command palette | `palette` |
+| `gP` | Open command palette | `palette` |
 
 ## Status Panel
 
@@ -266,7 +266,7 @@ require("gitflow").setup({
   keybindings = {
     status  = "<leader>gs",   -- remap status panel
     commit  = "<leader>gc",   -- remap commit
-    push    = "<leader>gP",   -- remap push
+    push    = "gp",           -- remap push
     palette = "<leader>gx",   -- remap command palette
   },
 })

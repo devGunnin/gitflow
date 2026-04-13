@@ -54,12 +54,12 @@ require("gitflow").setup({
   keybindings = {
     help       = "<leader>gh",
     open       = "<leader>go",
-    refresh    = "<leader>gr",
+    refresh    = "gr",
     close      = "<leader>gq",
     status     = "gs",
     commit     = "gc",
-    push       = "gp",
-    pull       = "gP",
+    push       = "<leader>gP",
+    pull       = "<leader>gp",
     fetch      = "<leader>gf",
     diff       = "gd",
     log        = "gl",
@@ -71,7 +71,7 @@ require("gitflow").setup({
     pr         = "<leader>gr",
     label      = "<leader>gL",
     conflict   = "<leader>gm",
-    palette    = "<leader>gp",
+    palette    = "gP",
   },
   ui = {
     default_layout = "split",   -- "split" or "float"
@@ -226,12 +226,12 @@ instructions.
 | --- | --- |
 | `<leader>gh` | Help |
 | `<leader>go` | Open main panel |
-| `<leader>gr` | Refresh |
+| `gr` | Refresh |
 | `<leader>gq` | Close panels |
 | `gs` | Status panel |
 | `gc` | Commit |
-| `gp` | Push |
-| `gP` | Pull |
+| `<leader>gP` | Push |
+| `<leader>gp` | Pull |
 | `<leader>gf` | Fetch |
 | `gd` | Diff |
 | `gl` | Log |
@@ -243,7 +243,7 @@ instructions.
 | `<leader>gr` | Pull requests |
 | `<leader>gL` | Labels |
 | `<leader>gm` | Conflicts |
-| `<leader>gp` | Command palette |
+| `gP` | Command palette |
 
 ## Statusline
 

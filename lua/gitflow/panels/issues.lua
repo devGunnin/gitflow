@@ -369,6 +369,8 @@ local function render_view(issue)
 		end
 	end
 
+	lines[#lines + 1] = "b: back to list  C: comment  x: close  L: labels  A: assign  r: refresh"
+
 	ui.buffer.update("issues", lines)
 	M.state.line_entries = {}
 	M.state.mode = "view"
