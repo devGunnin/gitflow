@@ -13,6 +13,7 @@ local review_panel = require("gitflow.panels.review")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
+local config = require("gitflow.config")
 
 ---@class GitflowPrPanelState
 ---@field bufnr integer|nil
@@ -27,9 +28,29 @@ local highlights = require("gitflow.highlights")
 local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
 local PRS_FLOAT_TITLE = "Gitflow Pull Requests"
-local PRS_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  L labels  A assign  m merge"
-	.. "  o checkout  v review  r refresh  b back  q close"
+local PRS_FLOAT_FOOTER_HINTS = {
+	{ action = "view", default = "<CR>", label = "view" },
+	{ action = "create", default = "c", label = "create" },
+	{ action = "comment", default = "C", label = "comment" },
+	{ action = "labels", default = "L", label = "labels" },
+	{ action = "assign", default = "A", label = "assign" },
+	{ action = "merge", default = "m", label = "merge" },
+	{ action = "checkout", default = "o", label = "checkout" },
+	{ action = "review", default = "v", label = "review" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "back", default = "b", label = "back" },
+	{ action = "close", default = "q", label = "close" },
+}
+local PRS_VIEW_HINTS = {
+	{ action = "back", default = "b", label = "back" },
+	{ action = "comment", default = "C", label = "comment" },
+	{ action = "labels", default = "L", label = "labels" },
+	{ action = "assign", default = "A", label = "assign" },
+	{ action = "merge", default = "m", label = "merge" },
+	{ action = "checkout", default = "o", label = "checkout" },
+	{ action = "review", default = "v", label = "review" },
+	{ action = "refresh", default = "r", label = "refresh" },
+}
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -53,6 +74,14 @@ end
 ---@return boolean
 local function is_active_view_request(request_id)
 	return M.state.view_request_id == request_id
+end
+
+---@param cfg GitflowConfig
+---@return string
+local function prs_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "prs", PRS_FLOAT_FOOTER_HINTS
+	)
 end
 
 ---@param cfg GitflowConfig
@@ -82,7 +111,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = PRS_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and PRS_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and prs_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -100,39 +129,45 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "prs", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("view", "<CR>"), function()
 		M.view_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "c", function()
+	vim.keymap.set("n", pk("create", "c"), function()
 		M.create_interactive()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "C", function()
+	vim.keymap.set("n", pk("comment", "C"), function()
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "L", function()
+	vim.keymap.set("n", pk("labels", "L"), function()
 		M.edit_labels_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "A", function()
+	vim.keymap.set("n", pk("assign", "A"), function()
 		M.edit_assignees_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "m", function()
+	vim.keymap.set("n", pk("merge", "m"), function()
 		M.merge_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "o", function()
+	vim.keymap.set("n", pk("checkout", "o"), function()
 		M.checkout_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "v", function()
+	vim.keymap.set("n", pk("review", "v"), function()
 		M.review_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		if M.state.mode == "view" and M.state.active_pr_number then
 			M.open_view(M.state.active_pr_number)
 			return
@@ -140,14 +175,14 @@ local function ensure_window(cfg)
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "b", function()
+	vim.keymap.set("n", pk("back", "b"), function()
 		if M.state.mode == "view" then
 			M.state.mode = "list"
 			M.refresh()
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
@@ -498,8 +533,9 @@ local function render_view(pr, review_comments)
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
-		.. "  m: merge  o: checkout  v: review  r: refresh"
+	lines[#lines + 1] = ui_render.resolve_panel_key_hints(
+		M.state.cfg, "prs", PRS_VIEW_HINTS
+	)
 
 	ui.buffer.update("prs", lines)
 	M.state.line_entries = {}
@@ -618,11 +654,16 @@ function M.open_view(number, cfg)
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
+		local current_pr = pr or {}
+		render_view(current_pr)
 		gh_prs.review_comments(number, {}, function(rc_err, rc)
 			if not is_active_view_request(request_id) then
 				return
 			end
-			render_view(pr or {}, not rc_err and rc or nil)
+			if rc_err then
+				return
+			end
+			render_view(current_pr, rc or {})
 		end)
 	end)
 end

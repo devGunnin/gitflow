@@ -170,6 +170,33 @@ function M.format_key_hints(pairs)
 	return table.concat(parts, "  ")
 end
 
+---Resolve panel action keys from config and format hint pairs.
+---@param cfg GitflowConfig|nil
+---@param panel string
+---@param pairs table[]  list of { action, default, label }
+---@return string
+function M.resolve_panel_key_hints(cfg, panel, pairs)
+	local key_config = require("gitflow.config")
+	local resolved_cfg = cfg or key_config.current
+	local resolved_pairs = {}
+
+	for _, pair in ipairs(pairs or {}) do
+		local action = pair.action or pair[1]
+		local default = pair.default or pair[2]
+		local label = pair.label or pair[3]
+		if action and default and label then
+			resolved_pairs[#resolved_pairs + 1] = {
+				key = key_config.resolve_panel_key(
+					resolved_cfg, panel, action, default
+				),
+				action = label,
+			}
+		end
+	end
+
+	return M.format_key_hints(resolved_pairs)
+end
+
 ---Apply standard panel highlights to a buffer after rendering.
 ---Applies GitflowTitle to line 0 only when the first line is an inline
 ---header title, then scans separators and footer metadata lines.

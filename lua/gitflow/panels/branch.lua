@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local config = require("gitflow.config")
 
 ---@class GitflowBranchPanelState
 ---@field bufnr integer|nil
@@ -19,11 +20,24 @@ local M = {}
 local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
 local GRAPH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_graph_hl")
 local BRANCH_FLOAT_TITLE = "Gitflow Branches"
-local LIST_FOOTER =
-	"<CR> switch  c create  d delete  D force delete  m merge"
-	.. "  r rename  R refresh  f fetch  G graph  q close"
-local GRAPH_FOOTER =
-	"R refresh  f fetch  G list  q close"
+local LIST_FOOTER_HINTS = {
+	{ action = "switch", default = "<CR>", label = "switch" },
+	{ action = "create", default = "c", label = "create" },
+	{ action = "delete", default = "d", label = "delete" },
+	{ action = "force_delete", default = "D", label = "force delete" },
+	{ action = "merge", default = "m", label = "merge" },
+	{ action = "rename", default = "r", label = "rename" },
+	{ action = "refresh", default = "R", label = "refresh" },
+	{ action = "fetch", default = "f", label = "fetch" },
+	{ action = "toggle_graph", default = "G", label = "graph" },
+	{ action = "close", default = "q", label = "close" },
+}
+local GRAPH_FOOTER_HINTS = {
+	{ action = "refresh", default = "R", label = "refresh" },
+	{ action = "fetch", default = "f", label = "fetch" },
+	{ action = "toggle_graph", default = "G", label = "list" },
+	{ action = "close", default = "q", label = "close" },
+}
 
 ---@type GitflowBranchPanelState
 M.state = {
@@ -48,12 +62,18 @@ local function result_message(result, fallback)
 	return output
 end
 
+---@param cfg GitflowConfig|nil
 ---@return string
-local function current_footer()
+local function current_footer(cfg)
+	local active_cfg = cfg or M.state.cfg
 	if M.state.view_mode == "graph" then
-		return GRAPH_FOOTER
+		return ui_render.resolve_panel_key_hints(
+			active_cfg, "branch", GRAPH_FOOTER_HINTS
+		)
 	end
-	return LIST_FOOTER
+	return ui_render.resolve_panel_key_hints(
+		active_cfg, "branch", LIST_FOOTER_HINTS
+	)
 end
 
 ---@param bufnr integer|nil
@@ -113,7 +133,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = BRANCH_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and current_footer() or nil,
+			footer = cfg.ui.float.footer and current_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -131,43 +151,53 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local key = config.resolve_panel_key(cfg, "branch", "switch", "<CR>")
+	vim.keymap.set("n", key, function()
 		M.switch_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "c", function()
+	key = config.resolve_panel_key(cfg, "branch", "create", "c")
+	vim.keymap.set("n", key, function()
 		M.create_branch()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "d", function()
+	key = config.resolve_panel_key(cfg, "branch", "delete", "d")
+	vim.keymap.set("n", key, function()
 		M.delete_under_cursor(false)
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "D", function()
+	key = config.resolve_panel_key(cfg, "branch", "force_delete", "D")
+	vim.keymap.set("n", key, function()
 		M.delete_under_cursor(true)
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "r", function()
+	key = config.resolve_panel_key(cfg, "branch", "rename", "r")
+	vim.keymap.set("n", key, function()
 		M.rename_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "R", function()
+	key = config.resolve_panel_key(cfg, "branch", "refresh", "R")
+	vim.keymap.set("n", key, function()
 		M.refresh_with_fetch()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "f", function()
+	key = config.resolve_panel_key(cfg, "branch", "fetch", "f")
+	vim.keymap.set("n", key, function()
 		M.fetch_remotes()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "m", function()
+	key = config.resolve_panel_key(cfg, "branch", "merge", "m")
+	vim.keymap.set("n", key, function()
 		M.merge_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "G", function()
+	key = config.resolve_panel_key(cfg, "branch", "toggle_graph", "G")
+	vim.keymap.set("n", key, function()
 		M.toggle_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	key = config.resolve_panel_key(cfg, "branch", "close", "q")
+	vim.keymap.set("n", key, function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
@@ -674,7 +704,7 @@ function M.toggle_view()
 				and cfg.ui.float.footer
 			if footer_enabled and vim.fn.has("nvim-0.10") == 1 then
 				pcall(vim.api.nvim_win_set_config, M.state.winid, {
-					footer = current_footer(),
+					footer = current_footer(cfg),
 				})
 			end
 		end

@@ -4,6 +4,7 @@ local git_log = require("gitflow.git.log")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local config = require("gitflow.config")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -17,7 +18,11 @@ local ui_render = require("gitflow.ui.render")
 
 local M = {}
 local LOG_FLOAT_TITLE = "Gitflow Log"
-local LOG_FLOAT_FOOTER = "<CR> open commit diff  r refresh  q close"
+local LOG_FLOAT_FOOTER_HINTS = {
+	{ action = "open_commit", default = "<CR>", label = "open commit diff" },
+	{ action = "refresh", default = "r", label = "refresh" },
+	{ action = "close", default = "q", label = "close" },
+}
 local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
@@ -28,6 +33,14 @@ M.state = {
 	cfg = nil,
 	opts = {},
 }
+
+---@param cfg GitflowConfig
+---@return string
+local function log_float_footer(cfg)
+	return ui_render.resolve_panel_key_hints(
+		cfg, "log", LOG_FLOAT_FOOTER_HINTS
+	)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -56,7 +69,7 @@ local function ensure_window(cfg)
 			border = cfg.ui.float.border,
 			title = LOG_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and LOG_FLOAT_FOOTER or nil,
+			footer = cfg.ui.float.footer and log_float_footer(cfg) or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -74,15 +87,21 @@ local function ensure_window(cfg)
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local pk = function(action, default)
+		return config.resolve_panel_key(
+			cfg, "log", action, default
+		)
+	end
+
+	vim.keymap.set("n", pk("open_commit", "<CR>"), function()
 		M.open_commit_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", pk("refresh", "r"), function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "q", function()
+	vim.keymap.set("n", pk("close", "q"), function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
