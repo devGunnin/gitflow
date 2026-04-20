@@ -124,6 +124,9 @@ local function build_default_groups(palette)
 		GitflowActionsFail = { link = "DiagnosticError" },
 		GitflowActionsPending = { link = "DiagnosticWarn" },
 		GitflowActionsCancelled = { link = "Comment" },
+		-- Bisect
+		GitflowBisectBad = { link = "DiagnosticError" },
+		GitflowBisectGood = { link = "DiagnosticOk" },
 		-- Cherry Pick
 		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
 		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },

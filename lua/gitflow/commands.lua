@@ -29,6 +29,7 @@ local actions_panel = require("gitflow.panels.actions")
 local notifications_panel = require("gitflow.panels.notifications")
 local rebase_panel = require("gitflow.panels.rebase")
 local blame_panel = require("gitflow.panels.blame")
+local bisect_panel = require("gitflow.panels.bisect")
 local reflog_panel = require("gitflow.panels.reflog")
 local git_conflict = require("gitflow.git.conflict")
 local label_completion = require("gitflow.completion.labels")
@@ -1022,6 +1023,7 @@ local function register_builtin_subcommands(cfg)
 			tag_panel.close()
 			actions_panel.close()
 			blame_panel.close()
+			bisect_panel.close()
 			reflog_panel.close()
 			palette_panel.close()
 			notifications_panel.close()
@@ -1286,6 +1288,14 @@ local function register_builtin_subcommands(cfg)
 				end,
 			})
 			return "Blame panel opened"
+		end,
+	}
+
+	M.subcommands.bisect = {
+		description = "Open git bisect panel",
+		run = function()
+			bisect_panel.open(cfg)
+			return "Bisect panel opened"
 		end,
 	}
 
@@ -2379,6 +2389,7 @@ function M.setup(cfg)
 	)
 	vim.keymap.set("n", "<Plug>(GitflowActions)", "<Cmd>Gitflow actions<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowBisect)", "<Cmd>Gitflow bisect<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowReflog)", "<Cmd>Gitflow reflog<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
@@ -2412,6 +2423,7 @@ function M.setup(cfg)
 		revert = "<Plug>(GitflowRevert)",
 		tag = "<Plug>(GitflowTag)",
 		blame = "<Plug>(GitflowBlame)",
+		bisect = "<Plug>(GitflowBisect)",
 		reflog = "<Plug>(GitflowReflog)",
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		rebase_interactive = "<Plug>(GitflowRebaseInteractive)",

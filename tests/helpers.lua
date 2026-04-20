@@ -396,6 +396,7 @@ local ALL_PANELS = {
 	"palette", "cherry_pick", "rebase", "reset", "revert", "tag",
 	"notifications",
 	"actions",
+	"bisect",
 	"reflog",
 }
 
