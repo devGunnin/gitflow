@@ -12,7 +12,6 @@ Normal-mode mappings available in any buffer. Configured via
 | --- | --- | --- |
 | `<leader>gh` | Show help / usage | `help` |
 | `<leader>go` | Open main panel | `open` |
-| `gr` | Refresh current panel | `refresh` |
 | `<leader>gq` | Close all Gitflow panels | `close` |
 | `gs` | Open status panel | `status` |
 | `gc` | Commit | `commit` |
@@ -31,6 +30,15 @@ Normal-mode mappings available in any buffer. Configured via
 | `<leader>gR` | Open reset panel | `reset` |
 | `<leader>gm` | Open conflict panel | `conflict` |
 | `gP` | Open command palette | `palette` |
+| `gV` | Open revert panel | `revert` |
+| `gT` | Open tag list | `tag` |
+| `gB` | Toggle blame panel | `blame` |
+| `gF` | Open reflog panel | `reflog` |
+| `gC` | Open cherry-pick panel | `cherry_pick` |
+| `gI` | Open interactive rebase panel | `rebase_interactive` |
+| `gA` | Open GitHub Actions panel | `actions` |
+| `gN` | Open notification center | `notifications` |
+
 
 ## Status Panel
 
