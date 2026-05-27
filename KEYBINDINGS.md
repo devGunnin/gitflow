@@ -241,6 +241,111 @@ Buffer-local bindings active in the label panel (`:Gitflow label list`).
 | `r` | Refresh |
 | `q` | Close |
 
+## Revert Panel
+
+Buffer-local bindings active in the revert panel (`:Gitflow revert`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Revert commit under cursor |
+| `1-9` | Revert commit by position |
+| `r` | Refresh |
+| `q` | Close |
+
+## Tag Panel
+
+Buffer-local bindings active in the tag panel (`:Gitflow tag list`).
+
+| Key | Action |
+| --- | --- |
+| `c` | Create tag |
+| `D` | Delete local tag |
+| `X` | Delete remote tag |
+| `P` | Push tag to remote |
+| `r` | Refresh |
+| `q` | Close |
+
+## Blame Panel
+
+Buffer-local bindings active in the blame panel (`:Gitflow blame`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Open diff for commit under cursor |
+| `r` | Refresh |
+| `q` | Close |
+
+## Reflog Panel
+
+Buffer-local bindings active in the reflog panel (`:Gitflow reflog`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Checkout entry under cursor |
+| `1-9` | Select entry by position |
+| `R` | Reset to entry |
+| `r` | Refresh |
+| `q` | Close |
+
+## Cherry-Pick Panel
+
+Buffer-local bindings active in the cherry-pick panel (`:Gitflow cherry-pick-panel`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Cherry-pick commit under cursor |
+| `1-9` | Cherry-pick commit by position |
+| `b` | Pick source branch |
+| `B` | Cherry-pick into branch |
+| `r` | Refresh |
+| `q` | Close |
+
+## Interactive Rebase Panel
+
+Buffer-local bindings active in the interactive rebase panel (`:Gitflow rebase-interactive`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Cycle action for commit under cursor |
+| `p` | Set action to pick |
+| `r` | Set action to reword |
+| `e` | Set action to edit |
+| `s` | Set action to squash |
+| `f` | Set action to fixup |
+| `d` | Set action to drop |
+| `J` | Move commit down |
+| `K` | Move commit up |
+| `X` | Execute rebase |
+| `b` | Change base branch |
+| `q` | Close |
+
+## Actions Panel
+
+Buffer-local bindings active in the actions panel (`:Gitflow actions`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | View run detail |
+| `o` | Open in browser |
+| `<BS>` | Back to list |
+| `r` | Refresh |
+| `q` | Close |
+
+## Notifications Panel
+
+Buffer-local bindings active in the notifications panel (`:Gitflow notifications`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Open context |
+| `1` | Filter by error |
+| `2` | Filter by warning |
+| `3` | Filter by info |
+| `0` | Show all |
+| `c` | Clear all |
+| `r` | Refresh |
+| `q` | Close |
+
 ## Command Palette
 
 Bindings active in the command palette (`:Gitflow palette`).
