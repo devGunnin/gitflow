@@ -299,6 +299,9 @@ Review view ~
     q       Close
 
   Diff pane (right) ~
+    <CR>    View the full discussion (all replies + drafts) for the
+            comment on the current line, in a floating window.  When the
+            line has no comment, behaves like the native <CR> motion.
     ]c      Jump to next hunk
     [c      Jump to previous hunk
     c       Inline comment (normal and visual mode)
@@ -306,6 +309,10 @@ Review view ~
     R       Reply to comment thread on the current line
     <leader>i   Toggle inline comment bodies (boxes) on/off
     <leader>x   Delete draft/comment on the current line
+
+  Thread popup ~
+    R       Reply to the thread (remote threads only)
+    q/<Esc> Close the popup
 
 Conflict list ~
     <CR>    Open 3-way conflict view

@@ -402,6 +402,24 @@ local function dir_leaf_count(node)
 	return n
 end
 
+--- Sum remote threads and pending drafts across every file under `node`.
+---@param node table
+---@param threads table<string, integer>
+---@param pending table<string, integer>
+---@return integer, integer  total threads, total drafts
+local function dir_comment_totals(node, threads, pending)
+	local t, p = 0, 0
+	for _, e in ipairs(node.files) do
+		t = t + (threads[e.file.path] or 0)
+		p = p + (pending[e.file.path] or 0)
+	end
+	for _, d in ipairs(node.dir_order) do
+		local ct, cp = dir_comment_totals(node.dirs[d], threads, pending)
+		t, p = t + ct, p + cp
+	end
+	return t, p
+end
+
 --- Turn a list of `{ text, hl|nil }` chunks into a single string plus a
 --- list of `{ col_start, col_end, hl }` byte-range highlight spans.
 ---@param chunks table[]
@@ -444,13 +462,29 @@ local function render_tree_node(node, depth, prefix, ctx)
 		local collapsed = M.state.collapsed_dirs[full] == true
 		local arrow = collapsed and "▸" or "▾"
 		local indent = string.rep(TREE_INDENT, depth)
-		local line, spans = join_chunks({
+		local dir_chunks = {
 			{ " " .. indent, nil },
 			{ arrow .. " ", "GitflowReviewTreeGuide" },
 			{ label .. "/", "GitflowReviewTreeDir" },
 			{ ("  (%d)"):format(dir_leaf_count(child)),
 				"GitflowReviewHint" },
-		})
+		}
+		-- When folded, surface hidden threads/drafts so the user doesn't
+		-- have to expand every folder to find unresolved comments.
+		if collapsed then
+			local ct, cp = dir_comment_totals(child, ctx.threads, ctx.pending)
+			if ct > 0 then
+				dir_chunks[#dir_chunks + 1] = {
+					(" [%d]"):format(ct), "GitflowReviewComment",
+				}
+			end
+			if cp > 0 then
+				dir_chunks[#dir_chunks + 1] = {
+					(" ●%d"):format(cp), "GitflowReviewChangesRequested",
+				}
+			end
+		end
+		local line, spans = join_chunks(dir_chunks)
 		ctx.lines[#ctx.lines + 1] = line
 		local lineno = #ctx.lines
 		ctx.dir_line_map[lineno] = full
@@ -568,6 +602,8 @@ local function render_file_list()
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = sep
 	local hints = {
+		" ~ mod  + add  - del  > ren",
+		" [n] threads  ●n drafts",
 		" <CR>/o open · <Tab> fold",
 		" zR/zM  unfold/fold all",
 		" c comment · S submit",
@@ -725,6 +761,7 @@ function M.open_file(path)
 	vim.keymap.set("v", "c", function() M.inline_comment_visual() end, opts)
 	vim.keymap.set("n", "S", function() M.submit_pending_review() end, opts)
 	vim.keymap.set("n", "R", function() M.reply_to_thread() end, opts)
+	vim.keymap.set("n", "<CR>", function() M.view_thread_at_cursor() end, opts)
 	vim.keymap.set("n", "]c", function() M.next_hunk() end, opts)
 	vim.keymap.set("n", "[c", function() M.prev_hunk() end, opts)
 	vim.keymap.set("n", "<leader>i", function() M.toggle_inline_comments() end, opts)
@@ -1623,6 +1660,131 @@ function M.delete_comment_at_cursor()
 			M.refresh()
 		end
 	)
+end
+
+--- Open a floating window showing the full discussion (all remote
+--- replies + any unsubmitted drafts) anchored to the current diff line.
+--- When there is no comment on the line, fall through to the default
+--- <CR> behaviour (move to the first non-blank of the next line).
+function M.view_thread_at_cursor()
+	if not M.state.active_path or not M.state.diff_winid
+		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		return
+	end
+	local cur = vim.api.nvim_win_get_cursor(M.state.diff_winid)[1]
+	local path = M.state.active_path
+
+	local threads = {}
+	for _, t in ipairs(M.state.comment_threads) do
+		if t.path == path and t.line == cur then
+			threads[#threads + 1] = t
+		end
+	end
+	local drafts = {}
+	for _, pc in ipairs(M.state.pending_comments) do
+		if pc.path == path and (pc.new_line == cur or pc.old_line == cur) then
+			drafts[#drafts + 1] = pc
+		end
+	end
+
+	if #threads == 0 and #drafts == 0 then
+		-- Nothing here — preserve the native <CR> motion.
+		pcall(vim.cmd, "normal! +")
+		return
+	end
+
+	-- Build a markdown document so comment bodies (which are markdown on
+	-- GitHub) render naturally and authors/headers get highlighted.
+	local lines = {}
+	local function add(s)
+		lines[#lines + 1] = s
+	end
+	local function add_body(body)
+		for _, bl in ipairs(vim.split(body or "", "\n", { plain = true })) do
+			add(bl)
+		end
+	end
+
+	add(("# Discussion · %s:%d"):format(path, cur))
+	add("")
+	for _, t in ipairs(threads) do
+		for i, c in ipairs(t.comments) do
+			local who = (c.user and c.user ~= "")
+				and ("@" .. c.user) or "@unknown"
+			if i == 1 then
+				add(("**%s**"):format(who))
+			else
+				add(("**%s** _(reply)_"):format(who))
+			end
+			add("")
+			add_body(c.body)
+			add("")
+			add("---")
+			add("")
+		end
+	end
+	if #drafts > 0 then
+		add("## Drafts (unsubmitted)")
+		add("")
+		for _, d in ipairs(drafts) do
+			add("**you** _(draft)_")
+			add("")
+			add_body(d.body)
+			add("")
+			add("---")
+			add("")
+		end
+	end
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.api.nvim_set_option_value("filetype", "markdown", { buf = bufnr })
+	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
+
+	local screen_lines = vim.o.lines - vim.o.cmdheight
+	local width = math.min(84, math.max(48, vim.o.columns - 8))
+	local height = math.min(#lines + 1,
+		math.max(8, math.floor(screen_lines * 0.6)))
+
+	-- Replace any previous thread popup before opening a fresh one.
+	ui.window.close("gitflow_review_thread")
+	local has_replies = false
+	for _, t in ipairs(threads) do
+		if #t.comments > 1 then
+			has_replies = true
+		end
+	end
+	local footer = has_replies
+		and " R reply · q/<Esc> close "
+		or " q/<Esc> close "
+	local winid = ui.window.open_float({
+		bufnr = bufnr,
+		width = width,
+		height = height,
+		title = " Thread ",
+		footer = footer,
+		enter = true,
+		name = "gitflow_review_thread",
+	})
+	pcall(vim.api.nvim_set_option_value, "wrap", true, { win = winid })
+	pcall(vim.api.nvim_set_option_value, "conceallevel", 2, { win = winid })
+	pcall(vim.api.nvim_set_option_value, "cursorline", false, { win = winid })
+
+	local function close()
+		if vim.api.nvim_win_is_valid(winid) then
+			pcall(vim.api.nvim_win_close, winid, true)
+		end
+	end
+	local kopts = { buffer = bufnr, silent = true, nowait = true }
+	vim.keymap.set("n", "q", close, kopts)
+	vim.keymap.set("n", "<Esc>", close, kopts)
+	if #threads > 0 then
+		vim.keymap.set("n", "R", function()
+			close()
+			M.reply_to_thread()
+		end, kopts)
+	end
 end
 
 function M.reply_to_thread()

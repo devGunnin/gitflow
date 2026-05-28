@@ -182,6 +182,12 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		local bufnr = review_panel.state.file_list_bufnr
 
+		-- Inject a draft so the collapsed folder should advertise it.
+		review_panel.state.pending_comments[#review_panel.state.pending_comments + 1] = {
+			id = 1, path = "lua/gitflow/highlights.lua",
+			body = "draft", new_line = 1,
+		}
+
 		review_panel.collapse_all_dirs()
 		local collapsed = table.concat(T.buf_lines(bufnr), "\n")
 		T.assert_true(
@@ -190,6 +196,9 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_true(
 			collapsed:find("▸", 1, true) ~= nil,
 			"collapsed folders should show a ▸ arrow")
+		T.assert_true(
+			collapsed:find("●", 1, true) ~= nil,
+			"a collapsed folder should aggregate hidden draft counts (●n)")
 
 		review_panel.expand_all_dirs()
 		local expanded = table.concat(T.buf_lines(bufnr), "\n")
@@ -303,6 +312,76 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_true(found_ts_chunks,
 			"removed-line virt_lines should be syntax-highlighted into "
 				.. "multiple chunks via treesitter")
+
+		cleanup_panels()
+	end,
+
+	-- ── Thread discussion popup ────────────────────────────────────────
+
+	["<CR> on a comment line opens the full discussion popup"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- Seed a remote thread (root + one reply) anchored to line 1.
+		review_panel.state.comment_threads = {
+			{
+				id = 100,
+				path = "lua/gitflow/highlights.lua",
+				line = 1,
+				comments = {
+					{ id = 100, user = "alice", body = "root comment here" },
+					{ id = 101, user = "bob",
+						body = "this is the reply body",
+						in_reply_to_id = 100 },
+				},
+			},
+		}
+		pcall(vim.api.nvim_win_set_cursor,
+			review_panel.state.diff_winid, { 1, 0 })
+
+		review_panel.view_thread_at_cursor()
+
+		local win = require("gitflow.ui.window").get("gitflow_review_thread")
+		T.assert_true(win ~= nil and vim.api.nvim_win_is_valid(win),
+			"a thread popup window should open")
+		local combined = table.concat(
+			T.buf_lines(vim.api.nvim_win_get_buf(win)), "\n")
+		T.assert_contains(combined, "root comment here",
+			"popup should show the root comment")
+		T.assert_contains(combined, "this is the reply body",
+			"popup should show the reply body")
+		T.assert_contains(combined, "@bob",
+			"popup should attribute the reply author")
+
+		pcall(vim.api.nvim_win_close, win, true)
+		cleanup_panels()
+	end,
+
+	["<CR> on a line with no comment opens no popup"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		review_panel.state.comment_threads = {}
+		pcall(vim.api.nvim_win_set_cursor,
+			review_panel.state.diff_winid, { 1, 0 })
+
+		review_panel.view_thread_at_cursor()
+
+		local win = require("gitflow.ui.window").get("gitflow_review_thread")
+		T.assert_true(win == nil,
+			"no popup should open when the line has no comment")
 
 		cleanup_panels()
 	end,
