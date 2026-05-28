@@ -271,34 +271,42 @@ T.run_suite("E2E: Keybinding Verification", {
 
 		local observed_cmd = nil
 		local refresh_calls = 0
-		with_temporary_patches({
-			{
-				table = require("gitflow.ui.input"),
-				key = "confirm",
-				value = function()
-					return true
-				end,
-			},
-			{
-				table = branch_panel,
-				key = "refresh",
-				value = function()
-					refresh_calls = refresh_calls + 1
-				end,
-			},
-			{
-				table = vim,
-				key = "cmd",
-				value = function(cmd_args)
-					observed_cmd = cmd_args
-				end,
-			},
-		}, function()
-			branch_panel.merge_under_cursor()
-			T.wait_until(function()
-				return refresh_calls > 0
-			end, "branch merge should schedule a refresh", 1000)
+
+		-- Use rawset for vim.cmd — nightly Neovim protects the vim
+		-- module with __newindex, so plain assignment is silently ignored.
+		local orig_vim_cmd = vim.cmd
+		rawset(vim, "cmd", function(cmd_args)
+			observed_cmd = cmd_args
 		end)
+
+		local patch_ok, patch_err = xpcall(function()
+			with_temporary_patches({
+				{
+					table = require("gitflow.ui.input"),
+					key = "confirm",
+					value = function()
+						return true
+					end,
+				},
+				{
+					table = branch_panel,
+					key = "refresh",
+					value = function()
+						refresh_calls = refresh_calls + 1
+					end,
+				},
+			}, function()
+				branch_panel.merge_under_cursor()
+				T.wait_until(function()
+					return refresh_calls > 0
+				end, "branch merge should schedule a refresh", 1000)
+			end)
+		end, debug.traceback)
+
+		rawset(vim, "cmd", orig_vim_cmd)
+		if not patch_ok then
+			error(patch_err, 0)
+		end
 
 		T.assert_true(
 			type(observed_cmd) == "table",
@@ -340,26 +348,27 @@ T.run_suite("E2E: Keybinding Verification", {
 
 		local confirm_calls = 0
 		local cmd_calls = 0
+		local orig_vim_cmd = vim.cmd
 		local notifications = capture_notifications(function()
-			with_temporary_patches({
-				{
-					table = require("gitflow.ui.input"),
-					key = "confirm",
-					value = function()
-						confirm_calls = confirm_calls + 1
-						return true
-					end,
-				},
-				{
-					table = vim,
-					key = "cmd",
-					value = function()
-						cmd_calls = cmd_calls + 1
-					end,
-				},
-			}, function()
-				branch_panel.merge_under_cursor()
+			rawset(vim, "cmd", function()
+				cmd_calls = cmd_calls + 1
 			end)
+			local ok, err = xpcall(function()
+				with_temporary_patches({
+					{
+						table = require("gitflow.ui.input"),
+						key = "confirm",
+						value = function()
+							confirm_calls = confirm_calls + 1
+							return true
+						end,
+					},
+				}, function()
+					branch_panel.merge_under_cursor()
+				end)
+			end, debug.traceback)
+			rawset(vim, "cmd", orig_vim_cmd)
+			if not ok then error(err, 0) end
 		end)
 
 		T.assert_true(
@@ -393,26 +402,27 @@ T.run_suite("E2E: Keybinding Verification", {
 
 		local confirm_calls = 0
 		local cmd_calls = 0
+		local orig_vim_cmd = vim.cmd
 		local notifications = capture_notifications(function()
-			with_temporary_patches({
-				{
-					table = require("gitflow.ui.input"),
-					key = "confirm",
-					value = function()
-						confirm_calls = confirm_calls + 1
-						return true
-					end,
-				},
-				{
-					table = vim,
-					key = "cmd",
-					value = function()
-						cmd_calls = cmd_calls + 1
-					end,
-				},
-			}, function()
-				branch_panel.merge_under_cursor()
+			rawset(vim, "cmd", function()
+				cmd_calls = cmd_calls + 1
 			end)
+			local ok, err = xpcall(function()
+				with_temporary_patches({
+					{
+						table = require("gitflow.ui.input"),
+						key = "confirm",
+						value = function()
+							confirm_calls = confirm_calls + 1
+							return true
+						end,
+					},
+				}, function()
+					branch_panel.merge_under_cursor()
+				end)
+			end, debug.traceback)
+			rawset(vim, "cmd", orig_vim_cmd)
+			if not ok then error(err, 0) end
 		end)
 
 		T.assert_true(
@@ -501,12 +511,24 @@ T.run_suite("E2E: Keybinding Verification", {
 		review.open(cfg, 42)
 		T.drain_jobs(3000)
 
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(bufnr ~= nil, "review buffer should exist")
+		-- File list pane holds the navigation + review-submission keymaps.
+		local file_list_buf = review.state.file_list_bufnr
+		T.assert_true(file_list_buf ~= nil,
+			"review file list buffer should exist")
+		T.assert_keymaps(file_list_buf, {
+			"]f", "[f",
+			"<CR>", "o",
+			"S", "r", "q",
+		})
 
-		T.assert_keymaps(bufnr, {
-			"]f", "[f", "]c", "[c",
-			"a", "x", "c", "S", "R", "r", "q",
+		-- Open a file so the diff pane's per-buffer keymaps are bound.
+		review.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(500)
+		local diff_buf = review.state.active_bufnr
+		T.assert_true(diff_buf ~= nil,
+			"diff pane buffer should exist after open_file")
+		T.assert_keymaps(diff_buf, {
+			"c", "S", "R", "]c", "[c",
 		})
 
 		T.cleanup_panels()

@@ -240,12 +240,12 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 			"diff buffer should use gitflow-diff filetype"
 		)
 
-		local has_ts = pcall(
-			vim.treesitter.get_parser, bufnr
-		)
-		T.assert_false(
-			has_ts,
-			"treesitter should not attach to diff buffer"
+		local ts_active = vim.treesitter.highlighter
+			and vim.treesitter.highlighter.active
+			and vim.treesitter.highlighter.active[bufnr] or nil
+		T.assert_true(
+			ts_active == nil,
+			"treesitter highlighting should not be active on diff buffer"
 		)
 
 		diff_panel.close()

@@ -48,10 +48,10 @@ end
 
 T.run_suite("E2E: Inline Blame", {
 
-	["blame subcommand is registered"] = function()
+	["blame-inline subcommand is registered"] = function()
 		T.assert_true(
-			commands.subcommands.blame ~= nil,
-			"`:Gitflow blame` subcommand should be registered"
+			commands.subcommands["blame-inline"] ~= nil,
+			"`:Gitflow blame-inline` subcommand should be registered"
 		)
 	end,
 

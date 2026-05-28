@@ -1,6 +1,7 @@
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:append(project_root)
+dofile(project_root .. "/scripts/test_real_git.lua")
 
 local function assert_true(condition, message)
 	if not condition then
@@ -234,10 +235,10 @@ end)
 
 -- ─── Keybinding tests ───
 
-test("default reset keybinding is gR", function()
+test("default reset keybinding is <leader>gR", function()
 	assert_equals(
-		cfg.keybindings.reset, "gR",
-		"default reset keybinding should be gR"
+		cfg.keybindings.reset, "<leader>gR",
+		"default reset keybinding should be <leader>gR"
 	)
 end)
 

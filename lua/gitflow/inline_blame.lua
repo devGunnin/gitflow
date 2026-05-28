@@ -20,7 +20,7 @@ M.namespace = NS
 
 M.state = {
 	cfg = nil,
-	-- master switch (cfg.blame.enable); when false the feature is inert.
+	-- master switch (cfg.inline_blame.enable); when false the feature is inert.
 	available = true,
 	-- bufnr -> true for buffers currently displaying inline blame.
 	enabled = {},
@@ -98,8 +98,8 @@ local function parse_porcelain(output)
 
 	local committed = sha:match("^0+$") == nil
 	local date_format = (M.state.cfg
-		and M.state.cfg.blame
-		and M.state.cfg.blame.date_format) or "%Y-%m-%d"
+		and M.state.cfg.inline_blame
+		and M.state.cfg.inline_blame.date_format) or "%Y-%m-%d"
 	local date = epoch and os.date(date_format, epoch) or ""
 
 	return {
@@ -226,8 +226,8 @@ local function schedule(bufnr)
 	clear(bufnr)
 
 	local delay = (M.state.cfg
-		and M.state.cfg.blame
-		and M.state.cfg.blame.delay) or 200
+		and M.state.cfg.inline_blame
+		and M.state.cfg.inline_blame.delay) or 200
 	local token = (M.state.tick[bufnr] or 0) + 1
 	M.state.tick[bufnr] = token
 
@@ -303,7 +303,7 @@ end
 ---@param cfg GitflowConfig
 function M.setup(cfg)
 	M.state.cfg = cfg
-	local blame_cfg = cfg.blame or {}
+	local blame_cfg = cfg.inline_blame or {}
 	M.state.available = blame_cfg.enable ~= false
 
 	vim.api.nvim_set_hl(0, "GitflowBlameInline", { link = "Comment", default = true })

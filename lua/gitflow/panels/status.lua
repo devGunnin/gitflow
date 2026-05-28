@@ -41,8 +41,7 @@ local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 local STATUS_FLOAT_TITLE = "Gitflow Status"
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
-local STATUS_FLOAT_FOOTER =
-	"s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
+local STATUS_FLOAT_FOOTER = "s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
 	.. "  cx conflicts  p push  X revert  r refresh  q close"
 
 ---@type GitflowStatusPanelState
@@ -281,6 +280,9 @@ local function ensure_window(cfg)
 	vim.keymap.set("n", "q", function()
 		M.close()
 	end, { buffer = bufnr, silent = true, nowait = true })
+	vim.keymap.set("n", "<CR>", function()
+		M.open_file_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
 ---@return GitflowStatusLineEntry|nil
@@ -328,14 +330,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	local lines = ui_render.panel_header("Gitflow Status", render_opts)
 	local line_entries = {}
 
-	append_file_section(
-		("Staged (%d)"):format(#grouped.staged),
-		grouped.staged,
-		lines,
-		line_entries,
-		true,
-		render_opts
-	)
+	append_file_section(("Staged (%d)"):format(#grouped.staged), grouped.staged, lines, line_entries, true, render_opts)
 	append_file_section(
 		("Unstaged (%d)"):format(#grouped.unstaged),
 		grouped.unstaged,
@@ -372,8 +367,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		local upstream_title, upstream_sep = ui_render.section(STATUS_NO_UPSTREAM_HEADER, nil, render_opts)
 		lines[#lines + 1] = upstream_title
 		lines[#lines + 1] = upstream_sep
-		lines[#lines + 1] = ui_render.entry("No upstream branch configured")
-		lines[#lines + 1] = ui_render.entry("Run :Gitflow push or git push -u <remote> <branch>")
+		lines[#lines + 1] = ui_render.entry("No upstream branch — push will set it automatically")
 		lines[#lines + 1] = ""
 	end
 
@@ -394,7 +388,8 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 
 	-- Mark section headers
 	for line_no, line in ipairs(lines) do
-		if vim.startswith(line, "Staged")
+		if
+			vim.startswith(line, "Staged")
 			or vim.startswith(line, "Unstaged")
 			or vim.startswith(line, "Untracked")
 			or vim.startswith(line, "Outgoing")
@@ -685,6 +680,27 @@ function M.open_conflict_under_cursor()
 	end
 
 	conflict_panel.open(M.state.cfg, { path = entry.path })
+end
+
+function M.open_file_under_cursor()
+	local line_entry = file_entry_under_cursor()
+	if not line_entry then
+		utils.notify("No file selected", vim.log.levels.WARN)
+		return
+	end
+
+	local entry = line_entry.entry
+	git.git({ "rev-parse", "--show-toplevel" }, {}, function(result)
+		if result.code ~= 0 then
+			utils.notify("Could not resolve git root", vim.log.levels.ERROR)
+			return
+		end
+
+		local root = vim.trim(result.stdout)
+		local abs_path = root .. "/" .. entry.path
+		M.close()
+		vim.cmd("edit " .. vim.fn.fnameescape(abs_path))
+	end)
 end
 
 function M.close()

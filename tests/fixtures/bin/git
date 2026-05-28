@@ -11,6 +11,13 @@ if [ -n "${GITFLOW_GIT_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$GITFLOW_GIT_LOG"
 fi
 
+# Pass-through to real git when GITFLOW_GIT_REAL is set.
+# Script tests that create real repositories set this variable to bypass
+# the stub and use the actual git binary for all operations.
+if [ -n "${GITFLOW_GIT_REAL:-}" ]; then
+  exec "$GITFLOW_GIT_REAL" "$@"
+fi
+
 # Allow forcing failure for any subcommand
 fail_cmd="${GITFLOW_GIT_FAIL:-}"
 
@@ -345,6 +352,41 @@ DIFF
     fi
     ;;
 
+  # ── tag ────────────────────────────────────────────────────────────────
+  tag)
+    if [ "$fail_cmd" = "tag" ]; then
+      echo "fatal: tag failed" >&2
+      exit 1
+    fi
+    case "$1" in
+      -d)
+        printf "Deleted tag '%s'\n" "${2:-}"
+        ;;
+      -a)
+        printf "Created annotated tag '%s'\n" "${2:-}"
+        ;;
+      *)
+        # lightweight tag creation (no flags) or list
+        if [ -n "${1:-}" ]; then
+          printf "Created tag '%s'\n" "$1"
+        else
+          printf 'v1.0.0\nv0.9.0\nv0.8.0\n'
+        fi
+        ;;
+    esac
+    ;;
+
+  # ── reflog ───────────────────────────────────────────────────────────
+  reflog)
+    if [ "$fail_cmd" = "reflog" ]; then
+      echo "fatal: reflog failed" >&2
+      exit 1
+    fi
+    printf 'abc1234567890abcdef1234567890abcdef1234\tHEAD@{0}\tcommit: Initial commit\n'
+    printf 'def5678901234abcdef1234567890abcdef5678\tHEAD@{1}\tcheckout: moving from feature to main\n'
+    printf 'fed9012345678abcdef1234567890abcdef9012\tHEAD@{2}\treset: moving to HEAD~1\n'
+    ;;
+
   # ── for-each-ref ──────────────────────────────────────────────────────
   for-each-ref)
     if [ "$fail_cmd" = "for-each-ref" ]; then
@@ -352,6 +394,12 @@ DIFF
       exit 1
     fi
     case "$*" in
+      *refs/tags*)
+        # tag-specific format: refname:short<TAB>objecttype<TAB>*objectname<TAB>subject
+        printf 'v1.0.0\ttag\tabc1234567890\tRelease 1.0.0\n'
+        printf 'v0.9.0\tcommit\t\tBeta release\n'
+        printf 'v0.8.0\ttag\tdef5678901234\tAlpha release\n'
+        ;;
       *--format=*)
         printf '*\tmain\trefs/heads/main\n'
         printf ' \tfeature/test\trefs/heads/feature/test\n'

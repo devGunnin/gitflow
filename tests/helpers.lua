@@ -393,7 +393,10 @@ end
 local ALL_PANELS = {
 	"status", "diff", "log", "stash", "branch",
 	"conflict", "issues", "prs", "labels", "review",
-	"palette", "cherry_pick", "reset",
+	"palette", "cherry_pick", "rebase", "reset", "revert", "tag",
+	"notifications",
+	"actions",
+	"reflog",
 }
 
 --- Close all open panel windows and reset shared state.

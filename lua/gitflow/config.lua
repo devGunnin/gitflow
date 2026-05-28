@@ -52,7 +52,7 @@ local utils = require("gitflow.utils")
 ---@class GitflowIconsConfig
 ---@field enable boolean
 
----@class GitflowBlameConfig
+---@class GitflowInlineBlameConfig
 ---@field enable boolean
 ---@field auto boolean
 ---@field delay integer
@@ -68,7 +68,8 @@ local utils = require("gitflow.utils")
 ---@field highlights GitflowHighlightConfig
 ---@field signs GitflowSignsConfig
 ---@field icons GitflowIconsConfig
----@field blame GitflowBlameConfig
+---@field inline_blame GitflowInlineBlameConfig
+---@field notifications table
 
 local M = {}
 
@@ -76,15 +77,18 @@ local M = {}
 function M.defaults()
 	return {
 		keybindings = {
+			-- Documented defaults — must match README.md, KEYBINDINGS.md, and
+			-- doc/gitflow.txt. Every entry here is also exercised by
+			-- scripts/test_keybinding_docs.lua.
 			help = "<leader>gh",
-			refresh = "<leader>gg",
+			open = "<leader>go",
 			close = "<leader>gq",
 			status = "gs",
 			commit = "gc",
 			push = "<leader>gP",
 			pull = "<leader>gp",
 			fetch = "<leader>gf",
-			diff = "gd",
+			diff = "gD",
 			log = "gl",
 			stash = "gS",
 			stash_push = "gZ",
@@ -92,12 +96,21 @@ function M.defaults()
 			branch = "<leader>gb",
 			issue = "<leader>gi",
 			pr = "<leader>gr",
-			reset = "gR",
-			revert = "gV",
-			cherry_pick = "gC",
+			label = "<leader>gL",
 			conflict = "<leader>gm",
-			palette = "<leader>go",
-			blame = "<leader>gB",
+			palette = "gP",
+			reset = "<leader>gR",
+			pr_review = "<leader>gG",
+			-- Additional actions for panels that pre-date their own doc entries.
+			revert = "gV",
+			tag = "gT",
+			blame = "gB",
+			blame_inline = "<leader>gB",
+			reflog = "gF",
+			cherry_pick = "gC",
+			rebase_interactive = "gI",
+			actions = "gA",
+			notifications = "gN",
 		},
 		ui = {
 			default_layout = "float",
@@ -143,9 +156,9 @@ function M.defaults()
 		icons = {
 			enable = true,
 		},
-		blame = {
+		inline_blame = {
 			-- Master switch for the inline-blame feature. When false,
-			-- :Gitflow blame does nothing and no autocmds are installed.
+			-- :Gitflow blame-inline does nothing and no autocmds are installed.
 			enable = true,
 			-- Automatically show inline blame in every file buffer.
 			auto = false,
@@ -153,6 +166,9 @@ function M.defaults()
 			delay = 200,
 			-- os.date() format for the author date.
 			date_format = "%Y-%m-%d",
+		},
+		notifications = {
+			max_entries = 200,
 		},
 	}
 end
@@ -188,12 +204,8 @@ local function validate_ui(config)
 	end
 
 	if config.ui.separator_width ~= nil then
-		if type(config.ui.separator_width) ~= "number"
-			or config.ui.separator_width < 1 then
-			error(
-				"gitflow config error: ui.separator_width must be a positive number",
-				3
-			)
+		if type(config.ui.separator_width) ~= "number" or config.ui.separator_width < 1 then
+			error("gitflow config error: ui.separator_width must be a positive number", 3)
 		end
 	end
 
@@ -387,21 +399,31 @@ local function validate_icons(config)
 end
 
 ---@param config GitflowConfig
-local function validate_blame(config)
-	if type(config.blame) ~= "table" then
-		error("gitflow config error: blame must be a table", 3)
+local function validate_inline_blame(config)
+	if type(config.inline_blame) ~= "table" then
+		error("gitflow config error: inline_blame must be a table", 3)
 	end
-	if type(config.blame.enable) ~= "boolean" then
-		error("gitflow config error: blame.enable must be a boolean", 3)
+	if type(config.inline_blame.enable) ~= "boolean" then
+		error("gitflow config error: inline_blame.enable must be a boolean", 3)
 	end
-	if type(config.blame.auto) ~= "boolean" then
-		error("gitflow config error: blame.auto must be a boolean", 3)
+	if type(config.inline_blame.auto) ~= "boolean" then
+		error("gitflow config error: inline_blame.auto must be a boolean", 3)
 	end
-	if type(config.blame.delay) ~= "number" or config.blame.delay < 0 then
-		error("gitflow config error: blame.delay must be a non-negative number", 3)
+	if type(config.inline_blame.delay) ~= "number" or config.inline_blame.delay < 0 then
+		error("gitflow config error: inline_blame.delay must be a non-negative number", 3)
 	end
-	if not utils.is_non_empty_string(config.blame.date_format) then
-		error("gitflow config error: blame.date_format must be a non-empty string", 3)
+	if not utils.is_non_empty_string(config.inline_blame.date_format) then
+		error("gitflow config error: inline_blame.date_format must be a non-empty string", 3)
+	end
+end
+
+---@param config GitflowConfig
+local function validate_notifications(config)
+	if type(config.notifications) ~= "table" then
+		error("gitflow config error: notifications must be a table", 3)
+	end
+	if type(config.notifications.max_entries) ~= "number" or config.notifications.max_entries < 1 then
+		error("gitflow config error: notifications.max_entries" .. " must be a positive number", 3)
 	end
 end
 
@@ -416,7 +438,8 @@ function M.validate(config)
 	validate_highlights(config)
 	validate_signs(config)
 	validate_icons(config)
-	validate_blame(config)
+	validate_inline_blame(config)
+	validate_notifications(config)
 end
 
 ---@param opts table|nil

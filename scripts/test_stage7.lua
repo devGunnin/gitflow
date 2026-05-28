@@ -1,6 +1,7 @@
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:append(project_root)
+dofile(project_root .. "/scripts/test_real_git.lua")
 
 local function assert_true(condition, message)
 	if not condition then
@@ -86,8 +87,8 @@ local defaults = config.defaults()
 assert_equals(defaults.sync.pull_strategy, "merge", "default pull strategy should be merge")
 assert_equals(
 	defaults.keybindings.palette,
-	"<leader>go",
-	"default palette keybinding should exist"
+	"gP",
+	"default palette keybinding should match documented default"
 )
 assert_deep_equals(
 	defaults.quick_actions.quick_commit,

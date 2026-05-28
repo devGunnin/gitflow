@@ -1,0 +1,38 @@
+[
+  {
+    "databaseId": 12345,
+    "name": "CI",
+    "headBranch": "main",
+    "status": "completed",
+    "conclusion": "success",
+    "event": "push",
+    "createdAt": "2026-02-17T10:00:00Z",
+    "updatedAt": "2026-02-17T10:05:00Z",
+    "url": "https://github.com/devGunnin/Gitflow/actions/runs/12345",
+    "displayTitle": "CI: push to main"
+  },
+  {
+    "databaseId": 12346,
+    "name": "CI",
+    "headBranch": "feature-branch",
+    "status": "completed",
+    "conclusion": "failure",
+    "event": "pull_request",
+    "createdAt": "2026-02-17T09:00:00Z",
+    "updatedAt": "2026-02-17T09:10:00Z",
+    "url": "https://github.com/devGunnin/Gitflow/actions/runs/12346",
+    "displayTitle": "CI: PR #42"
+  },
+  {
+    "databaseId": 12347,
+    "name": "Deploy",
+    "headBranch": "main",
+    "status": "in_progress",
+    "conclusion": "",
+    "event": "push",
+    "createdAt": "2026-02-17T11:00:00Z",
+    "updatedAt": "2026-02-17T11:00:00Z",
+    "url": "https://github.com/devGunnin/Gitflow/actions/runs/12347",
+    "displayTitle": "Deploy: push to main"
+  }
+]

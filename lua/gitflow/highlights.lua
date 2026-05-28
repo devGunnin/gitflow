@@ -44,6 +44,13 @@ local function build_default_groups(palette)
 		GitflowAdded = { link = "DiffAdd" },
 		GitflowRemoved = { link = "DiffDelete" },
 		GitflowModified = { link = "DiffChange" },
+		-- Sign column indicators (linked to the base groups so user overrides
+		-- via setup({ highlights = { GitflowSignAdded = ... } }) take effect —
+		-- signs.lua uses these names as texthl targets).
+		GitflowSignAdded = { link = "GitflowAdded" },
+		GitflowSignModified = { link = "GitflowModified" },
+		GitflowSignDeleted = { link = "GitflowRemoved" },
+		GitflowSignConflict = { link = "GitflowConflictLocal" },
 		-- Diff view — distinct styling for file headers, hunk headers, context
 		GitflowDiffFileHeader = { fg = palette.diff_file_header, bold = true },
 		GitflowDiffHunkHeader = { fg = palette.diff_hunk_header, bold = true },
@@ -73,6 +80,16 @@ local function build_default_groups(palette)
 		GitflowReviewChangesRequested = { link = "WarningMsg" },
 		GitflowReviewAuthor = { fg = palette.accent_secondary, bold = true },
 		GitflowReviewComment = { link = "Comment" },
+		-- Inline comment "note box" rendered below diff lines
+		GitflowReviewCommentBox = { fg = palette.separator_fg },
+		GitflowReviewCommentBody = { link = "Normal" },
+		GitflowReviewDraftBox = { fg = palette.accent_secondary },
+		-- PR review file-tree chrome (folders / counts / decorations)
+		GitflowReviewTreeDir = { fg = palette.accent_primary, bold = true },
+		GitflowReviewTreeGuide = { fg = palette.separator_fg },
+		GitflowReviewCountAdd = { link = "GitflowAdded" },
+		GitflowReviewCountDel = { link = "GitflowRemoved" },
+		GitflowReviewHint = { link = "Comment" },
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },
 		GitflowStashRef = { fg = palette.stash_ref, bold = true },
@@ -101,13 +118,39 @@ local function build_default_groups(palette)
 		},
 		GitflowPaletteEntryIcon = { fg = palette.accent_primary },
 		GitflowPaletteBackdrop = { bg = palette.backdrop_bg },
+		-- Blame
+		GitflowBlameHash = { fg = palette.log_hash, bold = true },
+		GitflowBlameAuthor = { fg = palette.accent_primary },
+		GitflowBlameDate = { link = "Comment" },
 		-- Reset
 		GitflowResetMergeBase = { link = "WarningMsg" },
 		-- Revert
 		GitflowRevertMergeBase = { link = "WarningMsg" },
+		-- Reflog
+		GitflowReflogHash = { fg = palette.log_hash, bold = true },
+		GitflowReflogAction = { fg = palette.accent_secondary },
+		-- Tag
+		GitflowTagAnnotated = { fg = palette.stash_ref, bold = true },
+		-- Actions / CI
+		GitflowActionsPass = { link = "DiagnosticOk" },
+		GitflowActionsFail = { link = "DiagnosticError" },
+		GitflowActionsPending = { link = "DiagnosticWarn" },
+		GitflowActionsCancelled = { link = "Comment" },
 		-- Cherry Pick
 		GitflowCherryPickBranch = { fg = palette.stash_ref, bold = true },
 		GitflowCherryPickHash = { fg = palette.log_hash, bold = true },
+		-- Interactive Rebase
+		GitflowRebasePick = { link = "DiagnosticOk" },
+		GitflowRebaseReword = { fg = palette.stash_ref, bold = true },
+		GitflowRebaseEdit = { fg = palette.accent_primary, bold = true },
+		GitflowRebaseSquash = { fg = palette.accent_secondary, bold = true },
+		GitflowRebaseFixup = { fg = palette.accent_secondary },
+		GitflowRebaseDrop = { link = "DiagnosticError" },
+		GitflowRebaseHash = { fg = palette.log_hash, bold = true },
+		-- Notifications
+		GitflowNotificationError = { link = "ErrorMsg" },
+		GitflowNotificationWarn = { link = "WarningMsg" },
+		GitflowNotificationInfo = { link = "Normal" },
 		-- Form
 		GitflowFormLabel = { fg = palette.accent_primary, bold = true },
 		GitflowFormActiveField = { link = "CursorLine" },

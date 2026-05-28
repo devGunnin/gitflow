@@ -244,14 +244,10 @@ T.run_suite("E2E: Full Repository Flow", {
 			"no-upstream header 'Outgoing / Incoming' should be present"
 		)
 
-		-- Actionable hint must appear
+		-- Informational hint must appear
 		T.assert_true(
-			T.find_line(lines, "No upstream branch configured") ~= nil,
+			T.find_line(lines, "No upstream branch") ~= nil,
 			"no-upstream hint message should be present"
-		)
-		T.assert_true(
-			T.find_line(lines, "Gitflow push") ~= nil,
-			"no-upstream hint should mention :Gitflow push"
 		)
 
 		-- Separate Outgoing/Incoming sections must NOT appear
@@ -498,18 +494,15 @@ T.run_suite("E2E: Full Repository Flow", {
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
 
-		local bufnr = ui.buffer.get("review")
+		local bufnr = review_panel.state.file_list_bufnr
 		T.assert_true(
 			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
-			"review buffer should exist"
+			"review file list buffer should exist"
 		)
 
-		-- Review panel should show diff content from fixture
+		-- Review panel should show banner and file list content
 		local lines = T.buf_lines(bufnr)
-		T.assert_true(
-			#lines > 0,
-			"review panel should have content"
-		)
+		T.assert_true(#lines > 0, "review panel should have content")
 
 		T.cleanup_panels()
 	end,
@@ -519,11 +512,13 @@ T.run_suite("E2E: Full Repository Flow", {
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
 
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(bufnr ~= nil, "review buffer should exist")
+		local bufnr = review_panel.state.file_list_bufnr
+		T.assert_true(bufnr ~= nil,
+			"review file list buffer should exist")
+		-- File list bindings exposed for navigation + review actions
 		T.assert_keymaps(
 			bufnr,
-			{ "]f", "[f", "]c", "[c", "c", "S", "a", "x", "q" }
+			{ "]f", "[f", "<CR>", "S", "q" }
 		)
 
 		T.cleanup_panels()
@@ -715,10 +710,10 @@ T.run_suite("E2E: Full Repository Flow", {
 		-- 4. Open review panel
 		review_panel.open(cfg, 42)
 		T.drain_jobs(3000)
-		local review_buf = ui.buffer.get("review")
+		local review_buf = review_panel.state.file_list_bufnr
 		T.assert_true(
 			review_buf ~= nil,
-			"review buffer should exist in flow"
+			"review file list buffer should exist in flow"
 		)
 		T.cleanup_panels()
 
@@ -806,15 +801,23 @@ T.run_suite("E2E: Full Repository Flow", {
 				"gh pr list should be in log"
 			)
 
-			-- PR diff for review should follow
-			local pr_diff_idx = T.find_line(lines, "pr diff")
+			-- Per-file diff API for review should follow.  We now use
+			-- `gh api repos/{owner}/{repo}/pulls/<n>/files` instead of
+			-- the single mega-diff `gh pr diff <n>` so huge PRs don't
+			-- crash with size limits.
+			local pr_files_idx = T.find_line(
+				lines, "pulls/{owner}/{repo}/pulls/42/files")
+			if not pr_files_idx then
+				pr_files_idx = T.find_line(
+					lines, "pulls/42/files")
+			end
 			T.assert_true(
-				pr_diff_idx ~= nil,
-				"gh pr diff should be in log"
+				pr_files_idx ~= nil,
+				"gh api .../pulls/42/files should be in log"
 			)
 			T.assert_true(
-				pr_list_idx < pr_diff_idx,
-				"pr list should come before pr diff"
+				pr_list_idx < pr_files_idx,
+				"pr list should come before per-file diff fetch"
 			)
 		end)
 	end,

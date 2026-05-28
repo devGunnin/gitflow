@@ -11,22 +11,22 @@ M.extmark_namespace = EXTMARK_NAMESPACE
 local SIGN_TYPES = {
 	added = {
 		name = "GitflowSignAdded",
-		hl = "GitflowAdded",
+		hl = "GitflowSignAdded",
 		config_key = "added",
 	},
 	modified = {
 		name = "GitflowSignModified",
-		hl = "GitflowModified",
+		hl = "GitflowSignModified",
 		config_key = "modified",
 	},
 	deleted = {
 		name = "GitflowSignDeleted",
-		hl = "GitflowRemoved",
+		hl = "GitflowSignDeleted",
 		config_key = "deleted",
 	},
 	conflict = {
 		name = "GitflowSignConflict",
-		hl = "GitflowConflictLocal",
+		hl = "GitflowSignConflict",
 		config_key = "conflict",
 	},
 }

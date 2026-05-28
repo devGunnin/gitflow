@@ -54,14 +54,14 @@ require("gitflow").setup({
   keybindings = {
     help       = "<leader>gh",
     open       = "<leader>go",
-    refresh    = "<leader>gr",
+    refresh    = "gr",
     close      = "<leader>gq",
     status     = "gs",
     commit     = "gc",
-    push       = "gp",
-    pull       = "gP",
+    push       = "<leader>gP",
+    pull       = "<leader>gp",
     fetch      = "<leader>gf",
-    diff       = "gd",
+    diff       = "gD",
     log        = "gl",
     stash      = "gS",
     stash_push = "gZ",
@@ -71,8 +71,9 @@ require("gitflow").setup({
     pr         = "<leader>gr",
     label      = "<leader>gL",
     conflict   = "<leader>gm",
-    palette    = "<leader>gp",
-    blame      = "<leader>gB",
+    palette      = "gP",
+    blame        = "gB",
+    blame_inline = "<leader>gB",
   },
   ui = {
     default_layout = "split",   -- "split" or "float"
@@ -118,7 +119,7 @@ require("gitflow").setup({
   icons = {
     enable = true,              -- Nerd Font icons; false = ASCII fallback
   },
-  blame = {
+  inline_blame = {
     enable      = true,         -- master switch for inline blame
     auto        = false,        -- auto-show inline blame in every file buffer
     delay       = 200,          -- debounce (ms) before blaming the cursor line
@@ -156,10 +157,10 @@ require("gitflow").setup({
 | `signs.deleted` | `string` | `"\u{2212}"` | Sign text for deleted lines |
 | `signs.conflict` | `string` | `"!"` | Sign text for conflict markers |
 | `icons.enable` | `boolean` | `true` | Use Nerd Font icons; `false` = ASCII |
-| `blame.enable` | `boolean` | `true` | Master switch for inline blame; `false` disables `:Gitflow blame` |
-| `blame.auto` | `boolean` | `false` | Automatically show inline blame in every file buffer |
-| `blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
-| `blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
+| `inline_blame.enable` | `boolean` | `true` | Master switch for inline blame; `false` disables `:Gitflow blame-inline` |
+| `inline_blame.auto` | `boolean` | `false` | Automatically show inline blame in every file buffer |
+| `inline_blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
+| `inline_blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
 
 ## Commands
 
@@ -191,8 +192,11 @@ All commands use the `:Gitflow` prefix.
 | `:Gitflow stash push [message]` | Stash changes with optional message |
 | `:Gitflow stash pop` | Pop latest stash entry |
 | `:Gitflow stash drop` | Drop latest stash entry |
+| `:Gitflow stash apply [index]` | Apply stash entry |
+
 | `:Gitflow branch` | Open branch list panel |
-| `:Gitflow blame` | Toggle inline blame on the current line |
+| `:Gitflow blame` | Open the git blame panel |
+| `:Gitflow blame-inline` | Toggle inline blame on the current line |
 | `:Gitflow merge <branch> [--abort]` | Merge a branch |
 | `:Gitflow rebase <branch> [--abort\|--continue]` | Rebase onto a branch |
 | `:Gitflow cherry-pick <commit>` | Cherry-pick a commit |
@@ -238,12 +242,12 @@ instructions.
 | --- | --- |
 | `<leader>gh` | Help |
 | `<leader>go` | Open main panel |
-| `<leader>gr` | Refresh |
+| `gr` | Refresh |
 | `<leader>gq` | Close panels |
 | `gs` | Status panel |
 | `gc` | Commit |
-| `gp` | Push |
-| `gP` | Pull |
+| `<leader>gP` | Push |
+| `<leader>gp` | Pull |
 | `<leader>gf` | Fetch |
 | `gd` | Diff |
 | `gl` | Log |
@@ -251,12 +255,14 @@ instructions.
 | `gZ` | Stash push |
 | `gX` | Stash pop |
 | `<leader>gb` | Branch list |
+| `gB` | Open blame panel |
 | `<leader>gB` | Toggle inline blame |
 | `<leader>gi` | Issues |
 | `<leader>gr` | Pull requests |
 | `<leader>gL` | Labels |
 | `<leader>gm` | Conflicts |
-| `<leader>gp` | Command palette |
+| `gP` | Command palette |
+| `<leader>gG` | Toggle PR review mode |
 
 ## Statusline
 
