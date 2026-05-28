@@ -246,6 +246,7 @@ instructions.
 | `<leader>gL` | Labels |
 | `<leader>gm` | Conflicts |
 | `gP` | Command palette |
+| `<leader>gG` | Toggle PR review mode |
 
 ## Statusline
 

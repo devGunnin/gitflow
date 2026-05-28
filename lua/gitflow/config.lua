@@ -92,6 +92,7 @@ function M.defaults()
 			conflict = "<leader>gm",
 			palette = "gP",
 			reset = "<leader>gR",
+			pr_review = "<leader>gG",
 			-- Additional actions for panels that pre-date their own doc entries.
 			revert = "gV",
 			tag = "gT",

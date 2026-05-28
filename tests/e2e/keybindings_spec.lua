@@ -511,12 +511,24 @@ T.run_suite("E2E: Keybinding Verification", {
 		review.open(cfg, 42)
 		T.drain_jobs(3000)
 
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(bufnr ~= nil, "review buffer should exist")
+		-- File list pane holds the navigation + review-submission keymaps.
+		local file_list_buf = review.state.file_list_bufnr
+		T.assert_true(file_list_buf ~= nil,
+			"review file list buffer should exist")
+		T.assert_keymaps(file_list_buf, {
+			"]f", "[f",
+			"<CR>", "o",
+			"S", "r", "q",
+		})
 
-		T.assert_keymaps(bufnr, {
-			"]f", "[f", "]c", "[c",
-			"a", "x", "c", "S", "R", "r", "q",
+		-- Open a file so the diff pane's per-buffer keymaps are bound.
+		review.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(500)
+		local diff_buf = review.state.active_bufnr
+		T.assert_true(diff_buf ~= nil,
+			"diff pane buffer should exist after open_file")
+		T.assert_keymaps(diff_buf, {
+			"c", "S", "R", "]c", "[c",
 		})
 
 		T.cleanup_panels()

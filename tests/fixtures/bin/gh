@@ -200,6 +200,13 @@ case "$subcmd" in
     # Route api calls based on endpoint path
     endpoint="$sub2"
     case "$endpoint" in
+      *pulls/*/files)
+        if [ -f "$FIXTURE_DIR/pr_files.json" ]; then
+          cat "$FIXTURE_DIR/pr_files.json"
+        else
+          echo '[]'
+        fi
+        ;;
       *pulls/*/comments)
         if [ -f "$FIXTURE_DIR/pr_review_comments.json" ]; then
           cat "$FIXTURE_DIR/pr_review_comments.json"

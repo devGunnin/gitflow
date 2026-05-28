@@ -109,6 +109,7 @@ Default keybindings:
     label           <leader>gL          <Plug>(GitflowLabel)
     conflict        <leader>gm          <Plug>(GitflowConflicts)
     palette         gP                  <Plug>(GitflowPalette)
+    pr_review       <leader>gG          <Plug>(GitflowPrReview)
 
                                                           *gitflow-config-ui*
 ui ~

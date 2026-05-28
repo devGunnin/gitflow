@@ -38,6 +38,7 @@ Normal-mode mappings available in any buffer. Configured via
 | `gI` | Open interactive rebase panel | `rebase_interactive` |
 | `gA` | Open GitHub Actions panel | `actions` |
 | `gN` | Open notification center | `notifications` |
+| `<leader>gG` | Toggle PR review mode (tabpage with file list + inline diff) | `pr_review` |
 
 
 ## Status Panel
@@ -179,26 +180,41 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `r` | Refresh |
 | `q` | Close |
 
-## Review View
+## PR Review Mode
 
-Buffer-local bindings active in the review panel (`:Gitflow pr review`).
+PR review mode opens a dedicated tabpage with a persistent file list on
+the left and a normal editing area on the right. Files opened from the
+list display the actual working-tree file with inline PR diff
+annotations (added lines highlighted, removed lines as virtual lines,
+hunk markers).
+
+Toggle with `<leader>gG` (or `:Gitflow pr-review`). Switch between the
+file list and the editing area with the standard `<C-w>w` motion.
+
+### File list pane
 
 | Key | Action |
 | --- | --- |
-| `]f` | Jump to next file |
-| `[f` | Jump to previous file |
-| `]c` | Jump to next hunk |
-| `[c` | Jump to previous hunk |
-| `a` | Approve review |
-| `x` | Request changes |
-| `c` | Inline comment on current line (normal and visual mode) |
-| `S` | Submit pending review |
-| `R` | Reply to comment thread |
-| `<leader>t` | Toggle thread collapse/expand |
-| `<leader>i` | Toggle inline comment bodies on diff lines |
-| `<leader>b` | Back to PR view |
-| `r` | Refresh |
-| `q` | Close (confirms if pending comments exist) |
+| `<CR>` / `o` | Open the file under cursor in the right pane |
+| `]f` / `[f` | Next / previous file |
+| `S` | Submit review — opens dropdown (comment / request changes / approve), then prompts for an optional body |
+| `r` | Refresh PR metadata, diff, and threads |
+| `q` | Close review mode (confirms if pending comments exist) |
+
+### Editing pane (per-file)
+
+| Key | Action |
+| --- | --- |
+| `c` | Inline comment on the current line (normal and visual mode) |
+| `S` | Submit review (same dropdown flow as the file list) |
+| `R` | Reply to the existing thread on the current line |
+| `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
+| `]c` / `[c` | Next / previous hunk |
+| `<leader>i` | Toggle inline comment body lines (collapsed vs. expanded) |
+
+Pending comments are persisted to
+`stdpath('data')/gitflow/review/<repo>/<pr>.json` and rehydrated when
+the same PR is reopened, so a crashed editor doesn't lose drafts.
 
 ## Conflict Resolution
 

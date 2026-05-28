@@ -1,0 +1,20 @@
+[
+  {
+    "sha": "abc1234",
+    "filename": "lua/gitflow/highlights.lua",
+    "status": "modified",
+    "additions": 3,
+    "deletions": 1,
+    "changes": 4,
+    "patch": "@@ -10,7 +10,9 @@ local M = {}\n M.DEFAULT_GROUPS = {\n   GitflowAdded = { link = \"DiffAdd\" },\n   GitflowRemoved = { link = \"DiffDelete\" },\n-  GitflowModified = { link = \"DiffChange\" },\n+  GitflowModified = { link = \"DiffText\" },\n+  GitflowDarkBg = { bg = \"#1e1e2e\" },\n+  GitflowDarkFg = { fg = \"#cdd6f4\" },\n }\n \n function M.setup(overrides)"
+  },
+  {
+    "sha": "111aaaa",
+    "filename": "lua/gitflow/config.lua",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "changes": 1,
+    "patch": "@@ -5,6 +5,7 @@ local M = {}\n function M.defaults()\n   return {\n     ui = {\n+      dark_mode = false,\n       default_layout = \"split\",\n     },\n   }"
+  }
+]

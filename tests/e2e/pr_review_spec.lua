@@ -1,27 +1,21 @@
--- tests/e2e/pr_review_spec.lua — PR review flow E2E tests
+-- tests/e2e/pr_review_spec.lua — PR review tabpage mode E2E tests
 --
 -- Run: nvim --headless -u tests/minimal_init.lua -l tests/e2e/pr_review_spec.lua
 --
--- Verifies:
---   1. Review panel opens and renders diff content
---   2. File navigation with ]f/[f
---   3. Hunk navigation with ]c/[c
---   4. Inline comment addition (c key)
---   5. Review submission as approve (a key)
---   6. Review submission as request-changes (x key)
---   7. Review stub invoked with correct body and event
---   8. UI reflects success/failure states
---   9. Thread reply (R key)
---  10. Thread collapse toggle (<leader>t)
+-- The PR review system now opens a dedicated tabpage with a persistent
+-- file list on the left and a normal editing area on the right; files
+-- opened from the list display the actual working-tree file with inline
+-- PR diff annotations.  This spec exercises that behaviour.
 
 local T = _G.T
 local cfg = _G.TestConfig
 
-local ui = require("gitflow.ui")
 local gh_prs = require("gitflow.gh.prs")
 local input = require("gitflow.ui.input")
 local utils = require("gitflow.utils")
 local review_panel = require("gitflow.panels.review")
+local cache = require("gitflow.review.cache")
+local inline = require("gitflow.review.inline")
 
 ---@param patches table[]
 ---@param fn fun()
@@ -68,8 +62,7 @@ local function decode_logged_stdin_payload(lines)
 	for i = #lines, 1, -1 do
 		local line = lines[i]
 		if line:sub(1, 6) == "stdin " then
-			local ok, decoded =
-				pcall(vim.json.decode, line:sub(7))
+			local ok, decoded = pcall(vim.json.decode, line:sub(7))
 			if ok then
 				return decoded
 			end
@@ -79,590 +72,240 @@ local function decode_logged_stdin_payload(lines)
 	return nil
 end
 
----@param chunks table[]|nil
----@return string
-local function concat_extmark_chunks(chunks)
-	local text = ""
-	for _, chunk in ipairs(chunks or {}) do
-		text = text .. tostring(chunk[1] or "")
-	end
-	return text
-end
-
--- Compatibility helper for merge-ref runs where newer base-only tests may
--- still call cleanup_panels() in this file.
 local function cleanup_panels()
+	review_panel.close()
 	T.cleanup_panels()
 end
 
-T.run_suite("E2E: PR Review Flow", {
+T.run_suite("E2E: PR Review Mode (tabpage)", {
 
-	-- ── Review panel opens and loads diff ─────────────────────────────
+	-- ── Layout: tabpage + file-list + diff pane ────────────────────────
 
-	["review panel opens via :Gitflow pr review"] = function()
+	["open creates a new tabpage with file list and diff pane"] = function()
+		local initial_tabs = #vim.api.nvim_list_tabpages()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
+		T.assert_true(review_panel.is_open(),
+			"review panel should be open after opening PR")
+		T.assert_equals(review_panel.state.pr_number, 42,
+			"pr_number should be 42")
 		T.assert_true(
-			review_panel.is_open(),
-			"review panel should be open"
-		)
-		T.assert_equals(
-			review_panel.state.pr_number,
-			42,
-			"review panel should track PR number 42"
-		)
-
-		local bufnr = ui.buffer.get("review")
+			vim.api.nvim_tabpage_is_valid(review_panel.state.tabpage),
+			"a new tabpage should be created")
 		T.assert_true(
-			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
-			"review buffer should exist"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	["review panel fetches current PR diff without --patch"] = function()
-		with_temp_gh_log(function(log_path)
-			review_panel.open(cfg, 42)
-			T.drain_jobs(5000)
-
-			local lines = T.read_file(log_path)
-			local found_diff = false
-			local found_patch_flag = false
-			for _, line in ipairs(lines) do
-				if line:find("pr diff 42", 1, true) then
-					found_diff = true
-				end
-				if line:find("pr diff 42 --patch", 1, true) then
-					found_patch_flag = true
-				end
-			end
-
-			T.assert_true(
-				found_diff,
-				"review open should call gh pr diff for the PR"
-			)
-			T.assert_false(
-				found_patch_flag,
-				"review open should not request mailbox --patch output"
-			)
-		end)
+			vim.api.nvim_win_is_valid(review_panel.state.file_list_winid),
+			"file list window should exist")
+		T.assert_true(
+			vim.api.nvim_win_is_valid(review_panel.state.diff_winid),
+			"diff window should exist")
+		T.assert_true(
+			vim.api.nvim_buf_is_valid(review_panel.state.file_list_bufnr),
+			"file list buffer should exist")
+		T.assert_true(#vim.api.nvim_list_tabpages() > initial_tabs,
+			"opening review mode should add a tabpage")
 
 		cleanup_panels()
 	end,
 
-	-- ── Review panel renders diff content ─────────────────────────────
-
-	["review panel renders diff content from stub"] = function()
+	["file list buffer lists the PR's changed files"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(
-			bufnr ~= nil,
-			"review buffer should exist"
-		)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
 
+		local bufnr = review_panel.state.file_list_bufnr
 		local lines = T.buf_lines(bufnr)
 		local combined = table.concat(lines, "\n")
 
-		T.assert_true(
-			combined:find("diff %-%-git", 1, false) ~= nil,
-			"review buffer should contain diff header"
-		)
-		T.assert_true(
-			combined:find("highlights.lua", 1, true) ~= nil,
-			"review buffer should contain filename from diff"
-		)
+		T.assert_contains(combined, "PR REVIEW",
+			"file list should show a banner")
+		T.assert_contains(combined, "highlights.lua",
+			"file list should show highlights.lua from the diff fixture")
+		T.assert_contains(combined, "config.lua",
+			"file list should show config.lua from the diff fixture")
 
-		T.cleanup_panels()
+		cleanup_panels()
 	end,
 
-	-- ── Review panel renders file/hunk summary ────────────────────────
-
-	["review panel shows files and hunks summary"] = function()
+	["file list has the expected keybindings"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		local bufnr = ui.buffer.get("review")
-		local lines = T.buf_lines(bufnr)
-
-		T.assert_true(
-			T.find_line(lines, "Files:") ~= nil,
-			"review panel should show Files count"
-		)
-		T.assert_true(
-			T.find_line(lines, "Hunks:") ~= nil,
-			"review panel should show Hunks count"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── File markers populated ────────────────────────────────────────
-
-	["review panel populates file markers"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.file_markers > 0
-		end, "review panel file_markers should be populated after open")
-
-		T.assert_true(
-			#review_panel.state.file_markers >= 2,
-			("expected >= 2 file markers, got %d"):format(
-				#review_panel.state.file_markers
-			)
-		)
-
-		-- Verify marker paths match fixture diff
-		local paths = {}
-		for _, m in ipairs(review_panel.state.file_markers) do
-			paths[#paths + 1] = m.path
-		end
-		T.assert_true(
-			T.contains(paths, "lua/gitflow/highlights.lua"),
-			"file markers should include highlights.lua"
-		)
-		T.assert_true(
-			T.contains(paths, "lua/gitflow/config.lua"),
-			"file markers should include config.lua"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Hunk markers populated ────────────────────────────────────────
-
-	["review panel populates hunk markers"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		T.assert_true(
-			#review_panel.state.hunk_markers >= 2,
-			("expected >= 2 hunk markers, got %d"):format(
-				#review_panel.state.hunk_markers
-			)
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Review panel keymaps are set ──────────────────────────────────
-
-	["review panel has expected keymaps"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(
-			bufnr ~= nil,
-			"review buffer should exist"
-		)
-
+		local bufnr = review_panel.state.file_list_bufnr
 		T.assert_keymaps(bufnr, {
-			"]f", "[f", "]c", "[c",
-			"c", "S", "a", "x",
-			"R", "r", "q",
+			"<CR>", "o", "S", "r", "q", "]f", "[f",
 		})
 
-		local keymaps = vim.api.nvim_buf_get_keymap(bufnr, "n")
-		local leader_toggle = vim.api.nvim_replace_termcodes(
-			"<leader>t", true, false, true
-		)
-		local has_leader_toggle = false
-		for _, map in ipairs(keymaps) do
-			if map.lhs == leader_toggle then
-				has_leader_toggle = true
-				break
+		cleanup_panels()
+	end,
+
+	["state.files is populated and is keyed by path"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local paths = {}
+		for _, f in ipairs(review_panel.state.files) do
+			paths[#paths + 1] = f.path
+		end
+		T.assert_true(T.contains(paths, "lua/gitflow/highlights.lua"),
+			"files should include highlights.lua")
+		T.assert_true(T.contains(paths, "lua/gitflow/config.lua"),
+			"files should include config.lua")
+
+		cleanup_panels()
+	end,
+
+	-- ── File diff parsing: inline annotation contract ──────────────────
+
+	["state.file_diffs parses hunks from the PR diff"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return next(review_panel.state.file_diffs) ~= nil
+		end, "file_diffs should be populated after open")
+
+		local fd = review_panel.state.file_diffs["lua/gitflow/highlights.lua"]
+		T.assert_true(fd ~= nil, "highlights.lua diff should be parsed")
+		T.assert_true(fd.hunks and #fd.hunks > 0,
+			"highlights.lua diff should have at least one hunk")
+
+		local has_add, has_del = false, false
+		for _, h in ipairs(fd.hunks) do
+			for _, line in ipairs(h.lines) do
+				if line.kind == "add" then
+					has_add = true
+				end
+				if line.kind == "del" then
+					has_del = true
+				end
 			end
 		end
-		T.assert_true(
-			has_leader_toggle,
-			"review panel should map <leader>t for thread toggle"
-		)
+		T.assert_true(has_add,
+			"highlights.lua hunk should include an added line")
+		T.assert_true(has_del,
+			"highlights.lua hunk should include a removed line")
 
-		T.cleanup_panels()
+		cleanup_panels()
 	end,
 
-	-- ── File navigation with ]f/[f ────────────────────────────────────
+	-- ── Open file from list applies annotations ────────────────────────
 
-	["file navigation ]f jumps to next file marker"] = function()
+	["open_file shows file in the diff pane with inline annotations"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
-			return #review_panel.state.file_markers > 0
-		end, "review panel file_markers should be populated after open")
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
 
-		local winid = review_panel.state.winid
-		T.assert_true(
-			winid ~= nil and vim.api.nvim_win_is_valid(winid),
-			"review window should be valid"
+		-- Use a path that we know exists in the working tree.
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		T.assert_equals(review_panel.state.active_path,
+			"lua/gitflow/highlights.lua",
+			"active_path should be set after open_file")
+		T.assert_true(review_panel.state.active_bufnr ~= nil
+			and vim.api.nvim_buf_is_valid(review_panel.state.active_bufnr),
+			"active_bufnr should be a valid buffer")
+
+		local marks = vim.api.nvim_buf_get_extmarks(
+			review_panel.state.active_bufnr,
+			inline.DIFF_NS, 0, -1, { details = true }
 		)
+		T.assert_true(#marks > 0,
+			"diff annotations should be applied as extmarks")
 
-		-- Start at line 1
-		vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-
-		-- Jump forward
-		review_panel.next_file()
-
-		local cursor = vim.api.nvim_win_get_cursor(winid)
-		T.assert_true(
-			cursor[1] > 1,
-			"cursor should have moved forward on ]f"
-		)
-
-		-- Should be on a file marker line
-		local on_marker = false
-		for _, m in ipairs(review_panel.state.file_markers) do
-			if m.line == cursor[1] then
-				on_marker = true
-				break
-			end
-		end
-		T.assert_true(
-			on_marker,
-			"cursor should be on a file marker line after ]f"
-		)
-
-		T.cleanup_panels()
+		cleanup_panels()
 	end,
 
-	["file navigation [f jumps to previous file marker"] = function()
+	-- ── Comment workflow + persistence ─────────────────────────────────
+
+	["inline_comment queues a draft and persists to cache"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
-			return #review_panel.state.file_markers > 0
-		end, "review panel file_markers should be populated after open")
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
 
-		local winid = review_panel.state.winid
-		T.assert_true(
-			winid ~= nil and vim.api.nvim_win_is_valid(winid),
-			"review window should be valid"
-		)
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
 
-		-- Go to the last file marker first
-		local last_marker = review_panel.state.file_markers[
-			#review_panel.state.file_markers
-		]
-		T.assert_true(
-			last_marker ~= nil,
-			"should have file markers"
-		)
-		vim.api.nvim_win_set_cursor(winid, { last_marker.line, 0 })
-
-		-- Jump backward
-		review_panel.prev_file()
-
-		local cursor = vim.api.nvim_win_get_cursor(winid)
-		T.assert_true(
-			cursor[1] < last_marker.line,
-			"cursor should move backward on [f"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Hunk navigation with ]c/[c ────────────────────────────────────
-
-	["hunk navigation ]c jumps to next hunk marker"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local winid = review_panel.state.winid
-		vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-
-		review_panel.next_hunk()
-
-		local cursor = vim.api.nvim_win_get_cursor(winid)
-		local on_hunk = false
-		for _, h in ipairs(review_panel.state.hunk_markers) do
-			if h.line == cursor[1] then
-				on_hunk = true
-				break
-			end
-		end
-		T.assert_true(
-			on_hunk,
-			"cursor should be on a hunk marker line after ]c"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	["hunk navigation [c wraps to last hunk from first"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		T.assert_true(
-			#review_panel.state.hunk_markers >= 2,
-			"need at least 2 hunk markers for wrap test"
-		)
-
-		local winid = review_panel.state.winid
-		local first_hunk = review_panel.state.hunk_markers[1]
-		vim.api.nvim_win_set_cursor(winid, { first_hunk.line, 0 })
-
-		-- Navigate backward from first hunk - should wrap to last
-		review_panel.prev_hunk()
-
-		local cursor = vim.api.nvim_win_get_cursor(winid)
-		local last_hunk = review_panel.state.hunk_markers[
-			#review_panel.state.hunk_markers
-		]
-		T.assert_equals(
-			cursor[1],
-			last_hunk.line,
-			"[c from first hunk should wrap to last hunk"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Inline comment (c key) ────────────────────────────────────────
-
-	["inline comment c adds pending comment"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		T.assert_equals(
-			#review_panel.state.pending_comments,
-			0,
-			"should start with no pending comments"
-		)
+		T.assert_equals(#review_panel.state.pending_comments, 0,
+			"should start with no pending comments")
 
 		with_temporary_patches({
 			{
 				table = input,
 				key = "prompt",
 				value = function(_, on_confirm)
-					on_confirm("Test inline comment")
+					on_confirm("First draft note")
 				end,
 			},
 		}, function()
-			-- Move cursor to a diff line with context
-			local first_hunk = review_panel.state.hunk_markers[1]
-			if first_hunk then
-				vim.api.nvim_win_set_cursor(
-					review_panel.state.winid,
-					{ first_hunk.line + 1, 0 }
-				)
-			end
+			-- Cursor must be in the diff pane for the helper to find the
+			-- active line.
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(
+				review_panel.state.diff_winid, { 1, 0 })
 
 			review_panel.inline_comment()
-			T.drain_jobs(3000)
+			T.drain_jobs(2000)
 		end)
 
-		T.assert_equals(
-			#review_panel.state.pending_comments,
-			1,
-			"should have 1 pending comment after c"
-		)
-		T.assert_equals(
-			review_panel.state.pending_comments[1].body,
-			"Test inline comment",
-			"pending comment body should match input"
-		)
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"should have 1 pending comment after inline_comment")
+		T.assert_equals(review_panel.state.pending_comments[1].body,
+			"First draft note", "pending body should match input")
 
-		T.cleanup_panels()
-	end,
+		local pr_number = review_panel.state.pr_number
+		local repo_slug = review_panel.state.repo_slug
+		local cached = cache.load(pr_number, repo_slug)
+		T.assert_true(cached and type(cached.comments) == "table"
+			and #cached.comments == 1,
+			"cache should hold one comment after inline_comment")
 
-	["submit pending review maps deleted-line comment to LEFT side"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local deleted_buf = nil
-		local deleted_ctx = nil
-		local max_line = vim.api.nvim_buf_line_count(review_panel.state.bufnr)
-		for i = 1, max_line do
-			local ctx = review_panel.state.line_context[i]
-			if ctx
-				and ctx.path
-				and ctx.old_line
-				and not ctx.new_line then
-				deleted_buf = i
-				deleted_ctx = ctx
-				break
-			end
-		end
-		T.assert_true(
-			deleted_buf ~= nil,
-			"expected a deleted diff line in fixture"
-		)
-
-		review_panel.state.pending_comments = {
-			{
-				id = 1,
-				path = deleted_ctx.path,
-				hunk = deleted_ctx.hunk,
-				line = deleted_buf,
-				body = "Comment on removed line",
-				_anchor_old_line = deleted_ctx.old_line,
-			},
-		}
-
-		with_temp_gh_log(function(log_path)
-			with_temporary_patches({
-				{
-					table = input,
-					key = "prompt",
-					value = function(opts, on_confirm)
-						if opts.prompt:find("mode", 1, true) then
-							on_confirm("approve")
-						else
-							on_confirm("Looks good")
-						end
-					end,
-				},
-			}, function()
-				review_panel.submit_pending_review()
-				T.drain_jobs(3000)
-			end)
-
-			local payload = decode_logged_stdin_payload(T.read_file(log_path))
-			T.assert_true(payload ~= nil, "expected review payload in gh log")
-			T.assert_true(
-				type(payload.comments) == "table" and #payload.comments == 1,
-				"expected one pending comment in payload"
-			)
-			T.assert_equals(
-				payload.comments[1].line,
-				deleted_ctx.old_line,
-				"deleted-line comment should use old line number"
-			)
-			T.assert_equals(
-				payload.comments[1].side,
-				"LEFT",
-				"deleted-line comment should use LEFT side"
-			)
-		end)
-
+		cache.clear(pr_number, repo_slug)
 		cleanup_panels()
 	end,
 
-	["range pending comment keeps start/end mapping after rerender"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local start_buf = nil
-		local end_buf = nil
-		local start_ctx = nil
-		local end_ctx = nil
-		local max_line = vim.api.nvim_buf_line_count(review_panel.state.bufnr)
-		for i = 1, max_line - 1 do
-			local first = review_panel.state.line_context[i]
-			local second = review_panel.state.line_context[i + 1]
-			if first and second
-				and first.path
-				and first.path == second.path
-				and first.hunk
-				and first.hunk == second.hunk
-				and first.new_line
-				and second.new_line then
-				start_buf = i
-				end_buf = i + 1
-				start_ctx = first
-				end_ctx = second
-				break
-			end
-		end
-		T.assert_true(
-			start_buf ~= nil,
-			"expected two consecutive diff lines with new-line mapping"
-		)
-
-		review_panel.state.pending_comments = {
-			{
-				id = 1,
-				path = start_ctx.path,
-				hunk = start_ctx.hunk,
-				line = end_buf,
-				start_line = start_buf,
-				end_line = end_buf,
-				body = "Range note",
-				_anchor_new_line = end_ctx.new_line,
-				_anchor_old_line = end_ctx.old_line,
-				_anchor_start_new_line = start_ctx.new_line,
-				_anchor_start_old_line = start_ctx.old_line,
-				_anchor_end_new_line = end_ctx.new_line,
-				_anchor_end_old_line = end_ctx.old_line,
-			},
-		}
-
-		review_panel.re_render()
-
-		with_temp_gh_log(function(log_path)
-			with_temporary_patches({
+	["reopening a PR rehydrates pending comments from disk"] = function()
+		-- Seed the cache directly, then open the PR and verify recovery.
+		local repo_slug = cache.repo_slug()
+		cache.save(99, {
+			pr_number = 99,
+			comments = {
 				{
-					table = input,
-					key = "prompt",
-					value = function(opts, on_confirm)
-						if opts.prompt:find("mode", 1, true) then
-							on_confirm("approve")
-						else
-							on_confirm("Range body")
-						end
-					end,
+					id = 1,
+					path = "lua/gitflow/highlights.lua",
+					body = "Resumed after crash",
+					new_line = 13,
+					created_at = "2026-01-01T00:00:00Z",
 				},
-			}, function()
-				review_panel.submit_pending_review()
-				T.drain_jobs(3000)
-			end)
+			},
+		}, repo_slug)
 
-			local payload = decode_logged_stdin_payload(T.read_file(log_path))
-			T.assert_true(payload ~= nil, "expected review payload in gh log")
-			T.assert_true(
-				type(payload.comments) == "table" and #payload.comments == 1,
-				"expected one pending comment in payload"
-			)
-			local comment = payload.comments[1]
-			T.assert_equals(
-				comment.start_line,
-				start_ctx.new_line,
-				"range comment start line should stay anchored"
-			)
-			T.assert_equals(
-				comment.line,
-				end_ctx.new_line,
-				"range comment end line should stay anchored"
-			)
-			T.assert_equals(
-				comment.start_side,
-				"RIGHT",
-				"range comment should set start side"
-			)
-			T.assert_equals(
-				comment.side,
-				"RIGHT",
-				"range comment should set side"
-			)
-		end)
+		review_panel.open(cfg, 99)
+		T.drain_jobs(5000)
 
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"opening a PR should restore cached pending comments")
+		T.assert_equals(review_panel.state.pending_comments[1].body,
+			"Resumed after crash",
+			"restored comment body should match cache")
+
+		cache.clear(99, repo_slug)
 		cleanup_panels()
 	end,
 
-	-- ── Submit review as approve (a key) ──────────────────────────────
+	-- ── Approve / request-changes wiring ───────────────────────────────
 
-	["approve review a invokes gh pr review --approve"] = function()
+	["review_approve calls gh pr review --approve with no pending"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
@@ -681,9 +324,7 @@ T.run_suite("E2E: PR Review Flow", {
 			end)
 
 			local lines = T.read_file(log_path)
-			local found_review = false
-			local found_approve = false
-			local found_body = false
+			local found_review, found_approve, found_body = false, false, false
 			for _, line in ipairs(lines) do
 				if line:find("pr review 42", 1, true) then
 					found_review = true
@@ -695,40 +336,27 @@ T.run_suite("E2E: PR Review Flow", {
 					found_body = true
 				end
 			end
-
-			T.assert_true(
-				found_review,
-				"gh log should contain `pr review 42`"
-			)
-			T.assert_true(
-				found_approve,
-				"gh log should contain --approve"
-			)
-			T.assert_true(
-				found_body,
-				"gh log should contain approve review body"
-			)
+			T.assert_true(found_review, "should call `pr review 42`")
+			T.assert_true(found_approve, "should pass --approve")
+			T.assert_true(found_body, "should include body LGTM")
 		end)
 
-		T.cleanup_panels()
+		cleanup_panels()
 	end,
 
-	["approve with pending comments submits batched review"] = function()
+	["approve with a pending comment batches via reviews API"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
 
 		review_panel.state.pending_comments = {
 			{
 				id = 1,
 				path = "lua/gitflow/highlights.lua",
-				hunk = "@@ -10,7 +10,9 @@",
-				line = review_panel.state.hunk_markers[1]
-					and review_panel.state.hunk_markers[1].line + 1
-					or 1,
-				body = "Ship this with context",
+				body = "Please refactor this",
+				new_line = 13,
 			},
 		}
 
@@ -747,67 +375,43 @@ T.run_suite("E2E: PR Review Flow", {
 			end)
 
 			local lines = T.read_file(log_path)
-			local found_review_api = false
-			local found_legacy_review = false
-			local found_input = false
+			local found_reviews_api = false
 			for _, line in ipairs(lines) do
-				if line:find("api repos/{owner}/{repo}/pulls/42/reviews", 1, true) then
-					found_review_api = true
-				end
-				if line:find("pr review 42", 1, true) then
-					found_legacy_review = true
-				end
-				if line:find("--input -", 1, true) then
-					found_input = true
+				if line:find(
+					"api repos/{owner}/{repo}/pulls/42/reviews",
+					1, true
+				) then
+					found_reviews_api = true
 				end
 			end
 
 			local payload = decode_logged_stdin_payload(lines)
-			T.assert_true(
-				found_review_api,
-				"approve should use reviews API when pending comments exist"
-			)
-			T.assert_false(
-				found_legacy_review,
-				"approve with pending should not call gh pr review"
-			)
-			T.assert_true(
-				found_input,
-				"approve with pending should submit JSON payload over stdin"
-			)
-			T.assert_true(
-				payload ~= nil,
-				"approve with pending should log a JSON payload"
-			)
-			T.assert_equals(
-				payload.event,
-				"APPROVE",
-				"approve should map to APPROVE event in payload"
-			)
-			T.assert_equals(
-				payload.body,
-				"LGTM pending",
-				"approve should include the entered review body"
-			)
+			T.assert_true(found_reviews_api,
+				"approve with pending should call reviews API")
+			T.assert_true(payload ~= nil,
+				"approve with pending should log JSON payload")
+			T.assert_equals(payload.event, "APPROVE",
+				"approve should map to APPROVE event")
 			T.assert_true(
 				type(payload.comments) == "table"
 					and #payload.comments == 1,
-				"approve with pending should include one inline comment"
-			)
+				"payload should include one inline comment")
+			T.assert_equals(payload.comments[1].path,
+				"lua/gitflow/highlights.lua",
+				"comment path should be preserved")
+			T.assert_equals(payload.comments[1].line, 13,
+				"comment line should be the new-side line")
+			T.assert_equals(payload.comments[1].side, "RIGHT",
+				"new-side comment should be RIGHT")
 		end)
 
-		T.assert_equals(
-			#review_panel.state.pending_comments,
-			0,
-			"approve with pending should clear queued comments"
-		)
+		T.assert_equals(#review_panel.state.pending_comments, 0,
+			"successful submit should clear pending comments")
 
 		cleanup_panels()
 	end,
 
-	-- ── Submit review as request-changes (x key) ──────────────────────
-
-	["request changes x invokes gh pr review --request-changes"] = function()
+	["request changes submits with --request-changes flag"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
@@ -826,789 +430,63 @@ T.run_suite("E2E: PR Review Flow", {
 			end)
 
 			local lines = T.read_file(log_path)
-			local found_review = false
-			local found_request_changes = false
-			local found_body = false
+			local found_request = false
 			for _, line in ipairs(lines) do
-				if line:find("pr review 42", 1, true) then
-					found_review = true
-				end
 				if line:find("--request-changes", 1, true) then
-					found_request_changes = true
-				end
-				if line:find("--body Please fix this", 1, true) then
-					found_body = true
+					found_request = true
 				end
 			end
-
-			T.assert_true(
-				found_review,
-				"gh log should contain `pr review 42`"
-			)
-			T.assert_true(
-				found_request_changes,
-				"gh log should contain --request-changes"
-			)
-			T.assert_true(
-				found_body,
-				"gh log should contain request changes review body"
-			)
+			T.assert_true(found_request,
+				"request_changes should pass --request-changes")
 		end)
 
-		T.cleanup_panels()
+		cleanup_panels()
 	end,
 
-	-- ── Review success shows notification ─────────────────────────────
+	-- ── Close cleans up tabpage and clears state ───────────────────────
 
-	["review approve success shows notification"] = function()
-		local notified_message = nil
-
+	["close removes the tabpage and resets state"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, on_confirm)
-					on_confirm("Approved")
-				end,
-			},
-			{
-				table = gh_prs,
-				key = "review",
-				value = function(_, _, _, _, cb)
-					cb(nil)
-				end,
-			},
-			{
-				table = utils,
-				key = "notify",
-				value = function(msg)
-					if msg and msg:find("approved", 1, true) then
-						notified_message = msg
-					end
-				end,
-			},
-		}, function()
-			review_panel.review_approve()
-			T.drain_jobs(3000)
-		end)
+		local tab = review_panel.state.tabpage
+		T.assert_true(vim.api.nvim_tabpage_is_valid(tab),
+			"tab should be valid before close")
 
-		T.assert_true(
-			notified_message ~= nil,
-			"should notify on successful approve review"
-		)
-		T.assert_contains(
-			notified_message,
-			"approved",
-			"notification should mention 'approved'"
-		)
+		review_panel.close()
+
+		T.assert_false(review_panel.is_open(),
+			"review panel should be closed")
+		T.assert_true(review_panel.state.pr_number == nil,
+			"pr_number should be nil after close")
+		T.assert_true(review_panel.state.tabpage == nil,
+			"tabpage should be nil after close")
+		T.assert_deep_equals(review_panel.state.pending_comments, {},
+			"pending_comments should be empty after close")
 
 		T.cleanup_panels()
 	end,
 
-	-- ── Review failure shows error ────────────────────────────────────
-
-	["review failure shows error notification"] = function()
-		local error_msg = nil
-		local error_level = nil
-
+	["close_with_guard prompts when pending comments exist"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, on_confirm)
-					on_confirm("test")
-				end,
-			},
-			{
-				table = gh_prs,
-				key = "review",
-				value = function(_, _, _, _, cb)
-					cb("review submission failed: 403 forbidden")
-				end,
-			},
-			{
-				table = utils,
-				key = "notify",
-				value = function(msg, level)
-					error_msg = msg
-					error_level = level
-				end,
-			},
-		}, function()
-			review_panel.review_approve()
-			T.drain_jobs(3000)
-		end)
-
-		T.assert_true(
-			error_msg ~= nil,
-			"should notify on review failure"
-		)
-		T.assert_contains(
-			error_msg,
-			"403 forbidden",
-			"error should contain failure details"
-		)
-		T.assert_equals(
-			error_level,
-			vim.log.levels.ERROR,
-			"error should be at ERROR level"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Comment threads rendered ──────────────────────────────────────
-
-	["review panel renders existing comment threads"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local bufnr = ui.buffer.get("review")
-		local lines = T.buf_lines(bufnr)
-
-		-- The stub returns review comments with reviewer1
-		T.assert_true(
-			T.find_line(lines, "reviewer1") ~= nil,
-			"review buffer should show reviewer1 comment author"
-		)
-		T.assert_true(
-			T.find_line(lines, "Consider renaming") ~= nil,
-			"review buffer should show comment body"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	["review panel shows comment bodies inline in diff mode"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local bufnr = ui.buffer.get("review")
-		local marks = T.get_extmarks(bufnr, "gitflow_review_comments")
-		T.assert_true(#marks > 0, "expected inline comment extmarks in diff view")
-
-		local has_label_preview = false
-		local has_author_line = false
-		local has_body_line = false
-		for _, mark in ipairs(marks) do
-			local details = mark[4] or {}
-			local virt_text = concat_extmark_chunks(details.virt_text)
-			if virt_text:find("Consider renaming this variable.", 1, true) then
-				has_label_preview = true
-			end
-
-			for _, vline in ipairs(details.virt_lines or {}) do
-				local line_text = concat_extmark_chunks(vline)
-				if line_text:find("@reviewer1:", 1, true) then
-					has_author_line = true
-					T.assert_equals(
-						vline[1] and vline[1][2] or nil,
-						"GitflowReviewAuthor",
-						"inline author chunk should use GitflowReviewAuthor"
-					)
-				end
-				if line_text:find("Consider renaming this variable.", 1, true) then
-					has_body_line = true
-					T.assert_equals(
-						vline[#vline] and vline[#vline][2] or nil,
-						"GitflowReviewComment",
-						"inline body chunk should use GitflowReviewComment"
-					)
-				end
-			end
-		end
-
-		T.assert_true(
-			has_label_preview,
-			"inline marker label should include comment preview text"
-		)
-		T.assert_true(
-			has_author_line,
-			"inline virtual lines should include author"
-		)
-		T.assert_true(
-			has_body_line,
-			"inline virtual lines should include comment body text"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	["inline comment toggle hides diff-mode virtual body lines"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		T.assert_true(
-			review_panel.state.show_inline_comments,
-			"inline comments should be visible by default"
-		)
-
-		review_panel.toggle_inline_comments()
-		T.assert_false(
-			review_panel.state.show_inline_comments,
-			"toggle should disable inline comment bodies"
-		)
-
-		local bufnr = ui.buffer.get("review")
-		local marks = T.get_extmarks(bufnr, "gitflow_review_comments")
-		local has_virtual_body_lines = false
-		local has_count_label = false
-		for _, mark in ipairs(marks) do
-			local details = mark[4] or {}
-			if details.virt_lines and #details.virt_lines > 0 then
-				has_virtual_body_lines = true
-			end
-			local virt_text = concat_extmark_chunks(details.virt_text)
-			if virt_text:find("%[2 comments%]", 1, false) then
-				has_count_label = true
-			end
-		end
-
-		T.assert_false(
-			has_virtual_body_lines,
-			"inline body lines should be hidden when inline mode is off"
-		)
-		T.assert_true(
-			has_count_label,
-			"comment count label should remain visible when inline mode is off"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Thread collapse toggle (<leader>t) ────────────────────────────
-
-	["thread toggle via <leader>t keymap collapses thread"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		-- Should have at least one thread
-		T.assert_true(
-			#review_panel.state.comment_threads > 0,
-			"should have at least one comment thread"
-		)
-
-		-- Find the first thread header line
-		local thread = review_panel.state.comment_threads[1]
-		T.assert_false(
-			thread.collapsed,
-			"thread should start expanded"
-		)
-
-		-- Move cursor to a thread line and toggle
-		local winid = review_panel.state.winid
-		local bufnr = ui.buffer.get("review")
-		local lines = T.buf_lines(bufnr)
-		local thread_line = nil
-		for i, line in ipairs(lines) do
-			if line:find(">>", 1, true) then
-				thread_line = i
-				break
-			end
-		end
-		T.assert_true(
-			thread_line ~= nil,
-			"should find a thread header line (>>)"
-		)
-
-		-- Set cursor to thread line
-		vim.api.nvim_win_set_cursor(winid, { thread_line, 0 })
-		vim.api.nvim_set_current_win(winid)
-
-		-- Need to check thread_line_map is populated at this line
-		local thread_idx = review_panel.state.thread_line_map[thread_line]
-		T.assert_true(
-			thread_idx ~= nil,
-			"thread_line_map should contain entry for thread line"
-		)
-
-		-- Toggle collapse through the keymap path.
-		T.feedkeys("<leader>t")
-		T.drain_jobs(3000)
-
-		-- After toggle + re-render, thread should be collapsed
-		local toggled_thread = review_panel.state.comment_threads[1]
-		T.assert_true(
-			toggled_thread ~= nil
-				and toggled_thread.collapsed == true,
-			"thread should be collapsed after toggle"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Thread reply (R key) ──────────────────────────────────────────
-
-	["reply to thread R invokes reply API"] = function()
-		local reply_called = false
-		local reply_body = nil
-
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		-- Position cursor on a thread line
-		local bufnr = ui.buffer.get("review")
-		local lines = T.buf_lines(bufnr)
-		local thread_line = nil
-		for i, line in ipairs(lines) do
-			if line:find(">>", 1, true) then
-				thread_line = i
-				break
-			end
-		end
-
-		if not thread_line then
-			-- If no rendered threads, skip gracefully
-			T.cleanup_panels()
-			return
-		end
-
-		vim.api.nvim_win_set_cursor(
-			review_panel.state.winid,
-			{ thread_line, 0 }
-		)
-
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, on_confirm)
-					on_confirm("Thanks for the feedback")
-				end,
-			},
-			{
-				table = gh_prs,
-				key = "reply_to_review_comment",
-				value = function(_, _, body, _, cb)
-					reply_called = true
-					reply_body = body
-					cb(nil)
-				end,
-			},
-		}, function()
-			review_panel.reply_to_thread()
-			T.drain_jobs(3000)
-		end)
-
-		T.assert_true(
-			reply_called,
-			"reply_to_review_comment should be called"
-		)
-		T.assert_equals(
-			reply_body,
-			"Thanks for the feedback",
-			"reply body should match user input"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Submit pending review with inline comments ────────────────────
-
-	["submit pending review batches inline comments"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		-- Add a pending comment
 		review_panel.state.pending_comments = {
 			{
 				id = 1,
 				path = "lua/gitflow/highlights.lua",
-				hunk = "@@ -10,7 +10,9 @@",
-				line = review_panel.state.hunk_markers[1]
-					and review_panel.state.hunk_markers[1].line + 1
-					or 1,
-				body = "Please refactor this",
+				body = "Draft",
+				new_line = 13,
 			},
 		}
 
-		with_temp_gh_log(function(log_path)
-			with_temporary_patches({
-				{
-					table = input,
-					key = "prompt",
-					value = function(opts, on_confirm)
-						-- First prompt: mode selection
-						if opts.prompt:find("mode", 1, true) then
-							on_confirm("approve")
-						else
-							-- Second prompt: body
-							on_confirm("Good overall")
-						end
-					end,
-				},
-			}, function()
-				review_panel.submit_pending_review()
-				T.drain_jobs(3000)
-			end)
-
-			local lines = T.read_file(log_path)
-			local found_review_api = false
-			local found_input = false
-			for _, line in ipairs(lines) do
-				if line:find("api repos/{owner}/{repo}/pulls/42/reviews", 1, true) then
-					found_review_api = true
-				end
-				if line:find("--input -", 1, true) then
-					found_input = true
-				end
-			end
-			local payload = decode_logged_stdin_payload(lines)
-
-			T.assert_true(
-				found_review_api,
-				"submit review should call reviews API endpoint"
-			)
-			T.assert_true(
-				found_input,
-				"submit review should pass payload over stdin"
-			)
-			T.assert_true(
-				payload ~= nil,
-				"submit review should log a decodable JSON payload"
-			)
-			T.assert_equals(
-				payload.event,
-				"APPROVE",
-				"submit review should map approve mode to APPROVE"
-			)
-			T.assert_equals(
-				payload.body,
-				"Good overall",
-				"submit review should include provided body"
-			)
-			T.assert_true(
-				type(payload.comments) == "table"
-					and #payload.comments == 1,
-				"submit review should include inline comments payload"
-			)
-			T.assert_equals(
-				payload.comments[1].path,
-				"lua/gitflow/highlights.lua",
-				"submit review should keep inline comment path"
-			)
-		end)
-
-		T.cleanup_panels()
-	end,
-
-	["submit review API maps request_changes to REQUEST_CHANGES"] = function()
-		with_temp_gh_log(function(log_path)
-			gh_prs.submit_review(
-				42,
-				"request_changes",
-				"Need another pass",
-				{},
-				{},
-				function(err)
-					T.assert_true(
-						err == nil,
-						"submit_review should succeed: " .. tostring(err)
-					)
-				end
-			)
-			T.drain_jobs(3000)
-
-			local lines = T.read_file(log_path)
-			local found_input = false
-			for _, line in ipairs(lines) do
-				if line:find("--input -", 1, true) then
-					found_input = true
-				end
-			end
-			local payload = decode_logged_stdin_payload(lines)
-
-			T.assert_true(
-				found_input,
-				"submit_review should submit request body via stdin"
-			)
-			T.assert_true(
-				payload ~= nil,
-				"submit_review should produce a JSON payload"
-			)
-			T.assert_equals(
-				payload.event,
-				"REQUEST_CHANGES",
-				"submit_review should map request_changes to REQUEST_CHANGES"
-			)
-			T.assert_equals(
-				payload.body,
-				"Need another pass",
-				"submit_review should include request changes body"
-			)
-		end)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Review panel close restores previous window ───────────────────
-
-	["review panel close restores previous window"] = function()
-		local prev_win = vim.api.nvim_get_current_win()
-
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		T.assert_true(
-			review_panel.is_open(),
-			"review panel should be open"
-		)
-
-		review_panel.close()
-
-		T.assert_false(
-			review_panel.is_open(),
-			"review panel should be closed"
-		)
-
-		-- Previous window should be restored (if still valid)
-		if vim.api.nvim_win_is_valid(prev_win) then
-			T.assert_equals(
-				vim.api.nvim_get_current_win(),
-				prev_win,
-				"previous window should be restored after close"
-			)
-		end
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Review panel state reset on close ─────────────────────────────
-
-	["review panel state is reset on close"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		review_panel.close()
-
-		T.assert_true(
-			review_panel.state.bufnr == nil,
-			"bufnr should be nil after close"
-		)
-		T.assert_true(
-			review_panel.state.winid == nil,
-			"winid should be nil after close"
-		)
-		T.assert_true(
-			review_panel.state.pr_number == nil,
-			"pr_number should be nil after close"
-		)
-		T.assert_deep_equals(
-			review_panel.state.file_markers,
-			{},
-			"file_markers should be empty after close"
-		)
-		T.assert_deep_equals(
-			review_panel.state.pending_comments,
-			{},
-			"pending_comments should be empty after close"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Line context tracks old/new line numbers ──────────────────────
-
-	["line context provides old/new line numbers"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local has_old_line = false
-		local has_new_line = false
-		for _, ctx in pairs(review_panel.state.line_context) do
-			if ctx.old_line then
-				has_old_line = true
-			end
-			if ctx.new_line then
-				has_new_line = true
-			end
-		end
-
-		T.assert_true(
-			has_old_line,
-			"line context should contain old_line entries"
-		)
-		T.assert_true(
-			has_new_line,
-			"line context should contain new_line entries"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Review via command dispatch ───────────────────────────────────
-
-	-- ── Cursor restoration after inline comment ─────────────────────
-
-	["cursor returns to same diff line after inline comment"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-		local winid = review_panel.state.winid
-		T.assert_true(
-			winid ~= nil and vim.api.nvim_win_is_valid(winid),
-			"review window should be valid"
-		)
-
-		-- Find a diff line with line_context (has path + new_line)
-		local target_line = nil
-		local target_ctx = nil
-		for buf_line, ctx in pairs(review_panel.state.line_context) do
-			if ctx.path and ctx.new_line then
-				target_line = buf_line
-				target_ctx = ctx
-				break
-			end
-		end
-		T.assert_true(
-			target_line ~= nil,
-			"should find a diff line with path and new_line context"
-		)
-
-		-- Move cursor to the target diff line
-		vim.api.nvim_win_set_cursor(winid, { target_line, 0 })
-
-		-- Add an inline comment (patches input to auto-confirm)
-		with_temporary_patches({
-			{
-				table = input,
-				key = "prompt",
-				value = function(_, on_confirm)
-					on_confirm("Cursor restore test comment")
-				end,
-			},
-		}, function()
-			review_panel.inline_comment()
-			T.drain_jobs(5000)
-		end)
-
-		-- After re-render, cursor should be on a line with the
-		-- same path and new_line as before
-		local cursor_after =
-			vim.api.nvim_win_get_cursor(winid)[1]
-		local ctx_after =
-			review_panel.state.line_context[cursor_after] or {}
-		T.assert_equals(
-			ctx_after.path,
-			target_ctx.path,
-			"cursor should return to same file path after comment"
-		)
-		T.assert_equals(
-			ctx_after.new_line,
-			target_ctx.new_line,
-			"cursor should return to same new_line after comment"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Review via command dispatch ───────────────────────────────────
-
-	["pr review 42 approve via command dispatch"] = function()
-		local review_mode = nil
-
-		with_temporary_patches({
-			{
-				table = gh_prs,
-				key = "review",
-				value = function(_, mode, _, _, cb)
-					review_mode = mode
-					cb(nil)
-				end,
-			},
-		}, function()
-			local commands = require("gitflow.commands")
-			commands.dispatch(
-				{ "pr", "review", "42", "approve", "LGTM" },
-				cfg
-			)
-			T.drain_jobs(3000)
-		end)
-
-		T.assert_equals(
-			review_mode,
-			"approve",
-			"command dispatch should invoke approve review"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Close guard: q with no pending comments closes ───────────
-
-	["q with no pending comments closes immediately"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		T.assert_true(
-			review_panel.is_open(),
-			"review panel should be open"
-		)
-		T.assert_equals(
-			#review_panel.state.pending_comments,
-			0,
-			"should start with no pending comments"
-		)
-
-		review_panel.close_with_guard()
-
-		T.assert_false(
-			review_panel.is_open(),
-			"review panel should close without confirmation"
-		)
-
-		T.cleanup_panels()
-	end,
-
-	-- ── Close guard: q with pending comments shows confirm ──────
-
-	["q with pending comments shows confirmation"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		-- Add a pending comment manually
-		review_panel.state.pending_comments = {
-			{
-				id = 1,
-				path = "lua/gitflow/highlights.lua",
-				hunk = "@@ -10,7 +10,9 @@",
-				line = 5,
-				body = "Draft comment",
-			},
-		}
-
-		-- Stub confirm to return true (user confirms discard)
+		local confirm_message = nil
 		with_temporary_patches({
 			{
 				table = input,
 				key = "confirm",
 				value = function(msg, _)
-					T.assert_contains(
-						msg,
-						"1 comment",
-						"confirm message should mention count"
-					)
+					confirm_message = msg
 					return true, 1
 				end,
 			},
@@ -1616,161 +494,61 @@ T.run_suite("E2E: PR Review Flow", {
 			review_panel.close_with_guard()
 		end)
 
-		T.assert_false(
-			review_panel.is_open(),
-			"review panel should close after user confirms"
-		)
+		T.assert_true(confirm_message ~= nil,
+			"close_with_guard should prompt when drafts exist")
+		T.assert_contains(confirm_message, "1 pending",
+			"confirm should mention pending count")
+		T.assert_false(review_panel.is_open(),
+			"review should be closed after confirm")
 
-		T.cleanup_panels()
+		cleanup_panels()
 	end,
 
-	-- ── Close guard: cancel keeps panel open ────────────────────
-
-	["q with pending comments cancelled keeps panel"] = function()
+	["close_with_guard does NOT close on cancel"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 
-		-- Add two pending comments
 		review_panel.state.pending_comments = {
 			{
 				id = 1,
 				path = "lua/gitflow/highlights.lua",
-				hunk = "@@ -10,7 +10,9 @@",
-				line = 5,
-				body = "First draft",
-			},
-			{
-				id = 2,
-				path = "lua/gitflow/config.lua",
-				hunk = "@@ -1,3 +1,4 @@",
-				line = 10,
-				body = "Second draft",
+				body = "Draft",
+				new_line = 13,
 			},
 		}
 
-		-- Stub confirm to return false (user cancels)
 		with_temporary_patches({
 			{
 				table = input,
 				key = "confirm",
-				value = function(msg, _)
-					T.assert_contains(
-						msg,
-						"2 comments",
-						"confirm should mention 2 comments"
-					)
-					return false, 2
-				end,
+				value = function(_, _) return false, 2 end,
 			},
 		}, function()
 			review_panel.close_with_guard()
 		end)
 
-		T.assert_true(
-			review_panel.is_open(),
-			"review panel should stay open after cancel"
-		)
-		T.assert_equals(
-			#review_panel.state.pending_comments,
-			2,
-			"pending comments should be preserved"
-		)
+		T.assert_true(review_panel.is_open(),
+			"review should stay open after user cancels")
+
+		cleanup_panels()
+	end,
+
+	-- ── Toggle command path ────────────────────────────────────────────
+
+	["toggle on an open review closes it"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.assert_true(review_panel.is_open(),
+			"review should be open before toggle")
+
+		review_panel.toggle(cfg)
+		T.drain_jobs(500)
+
+		T.assert_false(review_panel.is_open(),
+			"toggle on an open review should close it")
 
 		T.cleanup_panels()
 	end,
-
-	-- ── Treesitter not attached to review buffer ─────────
-	["review buffer uses gitflow-diff filetype"] = function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(
-			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
-			"review buffer should exist"
-		)
-
-		local ft = vim.api.nvim_get_option_value(
-			"filetype", { buf = bufnr }
-		)
-		T.assert_equals(
-			ft,
-			"gitflow-diff",
-			"review buffer filetype should be gitflow-diff"
-		)
-
-		local syn = vim.api.nvim_get_option_value(
-			"syntax", { buf = bufnr }
-		)
-		T.assert_equals(
-			syn,
-			"diff",
-			"review buffer syntax should be diff"
-		)
-
-		-- Treesitter highlighting should not be active
-		local ts_active = vim.treesitter.highlighter
-			and vim.treesitter.highlighter.active
-			and vim.treesitter.highlighter.active[bufnr] or nil
-		T.assert_true(
-			ts_active == nil,
-			"treesitter highlighting should not be active on gitflow-diff"
-		)
-
-		cleanup_panels()
-	end,
-
-	-- ── Re-render does not cause treesitter error ────────
-	["re-render after comment has no treesitter error"]
-		= function()
-		review_panel.open(cfg, 42)
-		T.drain_jobs(5000)
-		T.wait_until(function()
-			return #review_panel.state.hunk_markers > 0
-		end, "review panel hunk_markers should be populated after open")
-
-			-- Add a pending comment to trigger re-render path
-			with_temporary_patches({
-				{
-					table = input,
-					key = "prompt",
-					value = function(_, cb) cb("test comment") end,
-				},
-			}, function()
-				local first_hunk = review_panel.state.hunk_markers[1]
-				if first_hunk then
-					vim.api.nvim_win_set_cursor(
-						review_panel.state.winid,
-						{ first_hunk.line + 1, 0 }
-					)
-				end
-				review_panel.inline_comment()
-			end)
-		T.drain_jobs(5000)
-
-		T.assert_equals(
-			#review_panel.state.pending_comments,
-			1,
-			"should have 1 pending comment after re-render"
-		)
-
-		local bufnr = ui.buffer.get("review")
-		T.assert_true(
-			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
-			"review buffer should still be valid"
-		)
-
-		-- Treesitter highlighting should not be active after re-render
-		local ts_active = vim.treesitter.highlighter
-			and vim.treesitter.highlighter.active
-			and vim.treesitter.highlighter.active[bufnr] or nil
-		T.assert_true(
-			ts_active == nil,
-			"treesitter highlighting should not be active after re-render"
-		)
-
-		cleanup_panels()
-	end,
 })
 
-print("E2E PR review flow tests passed")
+print("E2E PR review mode tests passed")

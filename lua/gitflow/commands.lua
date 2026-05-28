@@ -1014,6 +1014,23 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands["pr-review"] = {
+		description = "Toggle PR review mode (tabpage with file list + inline diff)",
+		category = "GitHub",
+		run = function(ctx)
+			local positional = first_positional(ctx.args)
+			if positional then
+				review_panel.open(cfg, positional)
+				return ("Opening PR review mode for #%s..."):format(positional)
+			end
+			review_panel.toggle(cfg)
+			if review_panel.is_open() then
+				return "Closing PR review mode"
+			end
+			return "Opening PR picker for review mode"
+		end,
+	}
+
 	M.subcommands.status = {
 		description = "Open git status panel",
 		run = function()
@@ -2333,6 +2350,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowNotifications)", "<Cmd>Gitflow notifications<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPrReview)", "<Cmd>Gitflow pr-review<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -2364,6 +2382,7 @@ function M.setup(cfg)
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 		notifications = "<Plug>(GitflowNotifications)",
+		pr_review = "<Plug>(GitflowPrReview)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]
