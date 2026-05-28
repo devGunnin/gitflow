@@ -18,7 +18,7 @@ Normal-mode mappings available in any buffer. Configured via
 | `<leader>gP` | Push | `push` |
 | `<leader>gp` | Pull | `pull` |
 | `<leader>gf` | Fetch | `fetch` |
-| `gd` | Open diff view | `diff` |
+| `gD` | Open diff view | `diff` |
 | `gl` | Open log panel | `log` |
 | `gS` | Open stash list | `stash` |
 | `gZ` | Stash push (with prompt) | `stash_push` |

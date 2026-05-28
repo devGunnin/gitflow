@@ -552,6 +552,10 @@ local function build_comment_box(c)
 		header = header .. (" · %d repl%s"):format(
 			count - 1, (count - 1) == 1 and "y" or "ies")
 	end
+	local line_no = c.new_line or c.old_line
+	if line_no then
+		header = header .. (" · L%d"):format(line_no)
+	end
 
 	local body_lines = wrap_text(c.body or "", BOX_MAX_WIDTH)
 

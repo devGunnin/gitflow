@@ -98,7 +98,7 @@ Default keybindings:
     push            <leader>gP          <Plug>(GitflowPush)
     pull            <leader>gp          <Plug>(GitflowPull)
     fetch           <leader>gf          <Plug>(GitflowFetch)
-    diff            gd                  <Plug>(GitflowDiff)
+    diff            gD                  <Plug>(GitflowDiff)
     log             gl                  <Plug>(GitflowLog)
     stash           gS                  <Plug>(GitflowStash)
     stash_push      gZ                  <Plug>(GitflowStashPush)

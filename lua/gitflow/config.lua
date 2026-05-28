@@ -80,7 +80,7 @@ function M.defaults()
 			push = "<leader>gP",
 			pull = "<leader>gp",
 			fetch = "<leader>gf",
-			diff = "gd",
+			diff = "gD",
 			log = "gl",
 			stash = "gS",
 			stash_push = "gZ",
