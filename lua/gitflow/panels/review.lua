@@ -70,6 +70,7 @@ local cache = require("gitflow.review.cache")
 ---@field active_file_idx integer|nil
 ---@field hunk_anchors integer[]
 ---@field show_inline_comments boolean
+---@field collapsed_dirs table<string, boolean>
 ---@field file_markers table[]
 ---@field hunk_markers table[]
 ---@field line_context table
@@ -99,6 +100,7 @@ M.state = {
 	active_file_idx = nil,
 	hunk_anchors = {},
 	show_inline_comments = true,
+	collapsed_dirs = {},
 	-- Legacy compat shape (kept so :Gitflow pr submit-review / external
 	-- callers that read state.* don't crash).
 	file_markers = {},
@@ -108,7 +110,8 @@ M.state = {
 
 local FILE_LIST_HL_NS = vim.api.nvim_create_namespace("gitflow_review_file_list")
 
-local FILE_LIST_WIDTH = 38
+local FILE_LIST_WIDTH = 44
+local TREE_INDENT = "  "
 
 local function notify_info(msg)
 	utils.notify(msg, vim.log.levels.INFO)
@@ -347,18 +350,178 @@ local function refresh_comments_for_active()
 	)
 end
 
+--- Per-path counts of pending drafts and remote threads.
+---@return table<string, integer>, table<string, integer>
+local function comment_counts_by_path()
+	local pending, threads = {}, {}
+	for _, pc in ipairs(M.state.pending_comments) do
+		if pc.path then
+			pending[pc.path] = (pending[pc.path] or 0) + 1
+		end
+	end
+	for _, t in ipairs(M.state.comment_threads) do
+		if t.path then
+			threads[t.path] = (threads[t.path] or 0) + 1
+		end
+	end
+	return pending, threads
+end
+
+--- Build a nested directory tree from the flat file list.  Each node
+--- has `dirs` (name → child), `dir_order` (insertion order) and `files`
+--- (leaf entries carrying the original 1-based index into state.files).
+---@param files GitflowPrReviewFile[]
+local function build_file_tree(files)
+	local root = { dirs = {}, dir_order = {}, files = {} }
+	for idx, f in ipairs(files) do
+		local parts = vim.split(f.path, "/", { plain = true })
+		local node = root
+		for i = 1, #parts - 1 do
+			local part = parts[i]
+			local child = node.dirs[part]
+			if not child then
+				child = { dirs = {}, dir_order = {}, files = {} }
+				node.dirs[part] = child
+				node.dir_order[#node.dir_order + 1] = part
+			end
+			node = child
+		end
+		node.files[#node.files + 1] = {
+			idx = idx, name = parts[#parts], file = f,
+		}
+	end
+	return root
+end
+
+---@return integer
+local function dir_leaf_count(node)
+	local n = #node.files
+	for _, d in ipairs(node.dir_order) do
+		n = n + dir_leaf_count(node.dirs[d])
+	end
+	return n
+end
+
+--- Turn a list of `{ text, hl|nil }` chunks into a single string plus a
+--- list of `{ col_start, col_end, hl }` byte-range highlight spans.
+---@param chunks table[]
+---@return string, table[]
+local function join_chunks(chunks)
+	local s, spans, col = "", {}, 0
+	for _, ch in ipairs(chunks) do
+		local text = ch[1] or ""
+		if ch[2] and text ~= "" then
+			spans[#spans + 1] = {
+				col_start = col, col_end = col + #text, hl = ch[2],
+			}
+		end
+		s = s .. text
+		col = col + #text
+	end
+	return s, spans
+end
+
+--- Recursively emit tree lines into `ctx`.
+---@param node table
+---@param depth integer
+---@param prefix string  parent dir path (for collapse keys)
+---@param ctx table
+local function render_tree_node(node, depth, prefix, ctx)
+	local dnames = vim.deepcopy(node.dir_order)
+	table.sort(dnames)
+	for _, dname in ipairs(dnames) do
+		local child = node.dirs[dname]
+		local label = dname
+		local full = prefix == "" and dname or (prefix .. "/" .. dname)
+		-- Compact single-child directory chains: foo/bar/baz on one row.
+		while #child.dir_order == 1 and #child.files == 0 do
+			local only = child.dir_order[1]
+			label = label .. "/" .. only
+			full = full .. "/" .. only
+			child = child.dirs[only]
+		end
+		ctx.all_dirs[full] = true
+		local collapsed = M.state.collapsed_dirs[full] == true
+		local arrow = collapsed and "▸" or "▾"
+		local indent = string.rep(TREE_INDENT, depth)
+		local line, spans = join_chunks({
+			{ " " .. indent, nil },
+			{ arrow .. " ", "GitflowReviewTreeGuide" },
+			{ label .. "/", "GitflowReviewTreeDir" },
+			{ ("  (%d)"):format(dir_leaf_count(child)),
+				"GitflowReviewHint" },
+		})
+		ctx.lines[#ctx.lines + 1] = line
+		local lineno = #ctx.lines
+		ctx.dir_line_map[lineno] = full
+		for _, sp in ipairs(spans) do
+			sp.line = lineno - 1
+			ctx.highlights[#ctx.highlights + 1] = sp
+		end
+		if not collapsed then
+			render_tree_node(child, depth + 1, full, ctx)
+		end
+	end
+
+	local files = vim.deepcopy(node.files)
+	table.sort(files, function(a, b) return a.name < b.name end)
+	for _, entry in ipairs(files) do
+		local f = entry.file
+		local indent = string.rep(TREE_INDENT, depth)
+		local is_active = M.state.active_path == f.path
+		local chunks = {
+			{ " " .. indent, nil },
+			{ status_indicator(f.status) .. " ", status_hl(f.status) },
+			{ entry.name, is_active and "GitflowTitle" or nil },
+		}
+		local addn, deln = f.additions or 0, f.deletions or 0
+		if addn > 0 or deln > 0 then
+			chunks[#chunks + 1] = { "  ", nil }
+			chunks[#chunks + 1] = { "+" .. addn, "GitflowReviewCountAdd" }
+			chunks[#chunks + 1] = { " ", nil }
+			chunks[#chunks + 1] = { "-" .. deln, "GitflowReviewCountDel" }
+		end
+		local threads = ctx.threads[f.path] or 0
+		if threads > 0 then
+			chunks[#chunks + 1] = {
+				(" [%d]"):format(threads), "GitflowReviewComment",
+			}
+		end
+		local pending = ctx.pending[f.path] or 0
+		if pending > 0 then
+			chunks[#chunks + 1] = {
+				(" ●%d"):format(pending), "GitflowReviewChangesRequested",
+			}
+		end
+		local fd = M.state.file_diffs[f.path]
+		if fd and fd.truncated then
+			chunks[#chunks + 1] = {
+				" ⚠", "GitflowReviewChangesRequested",
+			}
+		end
+		local line, spans = join_chunks(chunks)
+		ctx.lines[#ctx.lines + 1] = line
+		local lineno = #ctx.lines
+		ctx.file_line_map[lineno] = entry.idx
+		for _, sp in ipairs(spans) do
+			sp.line = lineno - 1
+			ctx.highlights[#ctx.highlights + 1] = sp
+		end
+	end
+end
+
 local function render_file_list()
 	local bufnr = M.state.file_list_bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
 
+	local sep = string.rep("─", FILE_LIST_WIDTH - 2)
 	local n = M.state.pr_number and tostring(M.state.pr_number) or "?"
 	local title = M.state.pr_title or "(loading)"
-	local lines = {
-		" GITFLOW PR REVIEW ",
-		(" #%s  %s"):format(n, title),
-	}
+
+	local lines = { (" PR REVIEW · #%s"):format(n), (" %s"):format(title) }
+	local header_lines = 2
 	if M.state.pr_author then
 		lines[#lines + 1] = ("  by @%s"):format(M.state.pr_author)
 	end
@@ -367,82 +530,86 @@ local function render_file_list()
 			M.state.pr_base, M.state.pr_head
 		)
 	end
-	lines[#lines + 1] = string.rep("─", FILE_LIST_WIDTH - 2)
-	lines[#lines + 1] = (" Files (%d)"):format(#M.state.files)
-	lines[#lines + 1] = string.rep("─", FILE_LIST_WIDTH - 2)
+	lines[#lines + 1] = sep
+
+	-- Files header with an aggregate +/- summary.
+	local total_add, total_del = 0, 0
+	for _, f in ipairs(M.state.files) do
+		total_add = total_add + (f.additions or 0)
+		total_del = total_del + (f.deletions or 0)
+	end
+	local files_header, files_header_spans = join_chunks({
+		{ (" Files (%d)"):format(#M.state.files), nil },
+		{ ("  +%d"):format(total_add), "GitflowReviewCountAdd" },
+		{ (" -%d"):format(total_del), "GitflowReviewCountDel" },
+	})
+	lines[#lines + 1] = files_header
+	local files_header_line = #lines
+	lines[#lines + 1] = sep
+
+	local pending_map, threads_map = comment_counts_by_path()
+	local ctx = {
+		lines = lines,
+		highlights = {},
+		file_line_map = {},
+		dir_line_map = {},
+		all_dirs = {},
+		pending = pending_map,
+		threads = threads_map,
+	}
 
 	local file_lines_start = #lines + 1
-	local file_line_map = {}
 	if #M.state.files == 0 then
 		lines[#lines + 1] = "  (no files)"
 	else
-		for idx, f in ipairs(M.state.files) do
-			local pending = 0
-			for _, pc in ipairs(M.state.pending_comments) do
-				if pc.path == f.path then
-					pending = pending + 1
-				end
-			end
-			local threads = 0
-			for _, t in ipairs(M.state.comment_threads) do
-				if t.path == f.path then
-					threads = threads + 1
-				end
-			end
-			local suffix = ""
-			if threads > 0 then
-				suffix = suffix .. (" [%d]"):format(threads)
-			end
-			if pending > 0 then
-				suffix = suffix .. (" *%d"):format(pending)
-			end
-			local addn = f.additions or 0
-			local deln = f.deletions or 0
-			local counts = ""
-			if addn > 0 or deln > 0 then
-				counts = (" +%d -%d"):format(addn, deln)
-			end
-			local fd = M.state.file_diffs[f.path]
-			if fd and fd.truncated then
-				suffix = suffix .. " ⚠ patch truncated"
-			end
-			lines[#lines + 1] = (" %s %s%s%s"):format(
-				status_indicator(f.status), f.path, counts, suffix
-			)
-			file_line_map[#lines] = idx
-		end
+		render_tree_node(build_file_tree(M.state.files), 0, "", ctx)
 	end
+
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = string.rep("─", FILE_LIST_WIDTH - 2)
-	lines[#lines + 1] = " <CR> open file"
-	lines[#lines + 1] = " c    comment on line"
-	lines[#lines + 1] = " S    submit review…"
-	lines[#lines + 1] = " R    reply to thread"
-	lines[#lines + 1] = " <leader>x  delete comment"
-	lines[#lines + 1] = " ]f/[f  next/prev file"
-	lines[#lines + 1] = " ]c/[c  next/prev hunk"
-	lines[#lines + 1] = " r    refresh   q close"
+	lines[#lines + 1] = sep
+	local hints = {
+		" <CR>/o open · <Tab> fold",
+		" zR/zM  unfold/fold all",
+		" c comment · S submit",
+		" R reply · <leader>x delete",
+		" ]f/[f file · ]c/[c hunk",
+		" r refresh · q close",
+	}
+	local hint_start = #lines + 1
+	for _, h in ipairs(hints) do
+		lines[#lines + 1] = h
+	end
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
 
 	vim.api.nvim_buf_clear_namespace(bufnr, FILE_LIST_HL_NS, 0, -1)
-	pcall(vim.api.nvim_buf_add_highlight,
-		bufnr, FILE_LIST_HL_NS, "GitflowTitle", 0, 0, -1)
-	pcall(vim.api.nvim_buf_add_highlight,
-		bufnr, FILE_LIST_HL_NS, "GitflowHeader", 1, 0, -1)
-	for line_no, idx in pairs(file_line_map) do
-		local file = M.state.files[idx]
-		if file then
-			pcall(vim.api.nvim_buf_add_highlight,
-				bufnr, FILE_LIST_HL_NS,
-				status_hl(file.status),
-				line_no - 1, 0, -1)
-		end
+	local function hl(line, cs, ce, group)
+		pcall(vim.api.nvim_buf_add_highlight,
+			bufnr, FILE_LIST_HL_NS, group, line, cs, ce)
+	end
+	-- Header chrome.
+	hl(0, 0, -1, "GitflowTitle")
+	hl(1, 0, -1, "GitflowHeader")
+	for line = header_lines, files_header_line - 2 do
+		hl(line, 0, -1, "GitflowReviewHint")
+	end
+	for _, sp in ipairs(files_header_spans) do
+		hl(files_header_line - 1, sp.col_start, sp.col_end, sp.hl)
+	end
+	-- Tree spans.
+	for _, sp in ipairs(ctx.highlights) do
+		hl(sp.line, sp.col_start, sp.col_end, sp.hl)
+	end
+	-- Footer hints.
+	for i = 0, #hints - 1 do
+		hl(hint_start - 1 + i, 0, -1, "GitflowReviewHint")
 	end
 
-	M.state._file_line_map = file_line_map
+	M.state._file_line_map = ctx.file_line_map
+	M.state._dir_line_map = ctx.dir_line_map
+	M.state._all_dirs = ctx.all_dirs
 	M.state._file_lines_start = file_lines_start
 end
 
@@ -577,10 +744,42 @@ function M.open_file(path)
 		end
 	end
 
+	-- Reveal the active file by expanding its ancestor folders.
+	local parts = vim.split(path, "/", { plain = true })
+	local acc = ""
+	for i = 1, #parts - 1 do
+		acc = acc == "" and parts[i] or (acc .. "/" .. parts[i])
+		M.state.collapsed_dirs[acc] = nil
+	end
+
 	render_file_list()
 end
 
+--- Toggle the collapsed state of the directory on the cursor line.
+---@return boolean  true if a directory line was toggled
+function M.toggle_dir_under_cursor()
+	if not M.state.file_list_winid
+		or not vim.api.nvim_win_is_valid(M.state.file_list_winid) then
+		return false
+	end
+	local cursor = vim.api.nvim_win_get_cursor(M.state.file_list_winid)[1]
+	local full = M.state._dir_line_map and M.state._dir_line_map[cursor]
+	if not full then
+		return false
+	end
+	M.state.collapsed_dirs[full] = not M.state.collapsed_dirs[full]
+	render_file_list()
+	local total = vim.api.nvim_buf_line_count(M.state.file_list_bufnr)
+	pcall(vim.api.nvim_win_set_cursor, M.state.file_list_winid,
+		{ math.min(cursor, total), 0 })
+	return true
+end
+
 function M.open_file_under_cursor()
+	-- A folder row folds/unfolds; a file row opens.
+	if M.toggle_dir_under_cursor() then
+		return
+	end
 	local idx = file_idx_under_cursor()
 	if not idx then
 		return
@@ -592,11 +791,27 @@ function M.open_file_under_cursor()
 	M.open_file(file.path)
 end
 
+function M.collapse_all_dirs()
+	for full in pairs(M.state._all_dirs or {}) do
+		M.state.collapsed_dirs[full] = true
+	end
+	render_file_list()
+end
+
+function M.expand_all_dirs()
+	M.state.collapsed_dirs = {}
+	render_file_list()
+end
+
 local function set_up_file_list_keymaps(bufnr)
 	local opts = { buffer = bufnr, silent = true, nowait = true }
 	vim.keymap.set("n", "<CR>", M.open_file_under_cursor, opts)
 	vim.keymap.set("n", "o", M.open_file_under_cursor, opts)
 	vim.keymap.set("n", "<2-LeftMouse>", M.open_file_under_cursor, opts)
+	vim.keymap.set("n", "<Tab>", M.open_file_under_cursor, opts)
+	vim.keymap.set("n", "za", function() M.toggle_dir_under_cursor() end, opts)
+	vim.keymap.set("n", "zM", function() M.collapse_all_dirs() end, opts)
+	vim.keymap.set("n", "zR", function() M.expand_all_dirs() end, opts)
 	vim.keymap.set("n", "r", function() M.refresh() end, opts)
 	vim.keymap.set("n", "q", function() M.close_with_guard() end, opts)
 	vim.keymap.set("n", "S", function() M.submit_pending_review() end, opts)
@@ -857,6 +1072,7 @@ function M.open(cfg, pr_number)
 	M.state.active_file_idx = nil
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
+	M.state.collapsed_dirs = {}
 	M.state.repo_slug = cache.repo_slug()
 
 	-- Restore any cached draft comments BEFORE building the tab so that
@@ -925,6 +1141,7 @@ function M.close()
 	M.state.active_file_idx = nil
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
+	M.state.collapsed_dirs = {}
 	M.state.repo_slug = nil
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}

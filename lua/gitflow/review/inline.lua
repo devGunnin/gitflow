@@ -475,12 +475,139 @@ end
 ---@field pending boolean
 ---@field count integer|nil  number of comments in this thread (for label)
 
+local BOX_MAX_WIDTH = 72
+local BOX_MIN_WIDTH = 28
+-- Left margin so the box floats slightly off the gutter rather than
+-- hugging the sign/number column.
+local BOX_INDENT = "  "
+
+---@param s string
+---@return integer
+local function disp_width(s)
+	local ok, w = pcall(vim.fn.strdisplaywidth, s)
+	if ok and type(w) == "number" then
+		return w
+	end
+	return #s
+end
+
+--- Word-wrap `text` (which may contain embedded newlines) to `width`
+--- display columns, hard-splitting words longer than the width.
+---@param text string
+---@param width integer
+---@return string[]
+local function wrap_text(text, width)
+	local out = {}
+	for _, raw in ipairs(vim.split(text or "", "\n",
+		{ plain = true, trimempty = false })) do
+		if raw == "" then
+			out[#out + 1] = ""
+		else
+			local line = ""
+			for token in raw:gmatch("%S+") do
+				local word = token
+				while disp_width(word) > width do
+					if line ~= "" then
+						out[#out + 1] = line
+						line = ""
+					end
+					out[#out + 1] = word:sub(1, width)
+					word = word:sub(width + 1)
+				end
+				if line == "" then
+					line = word
+				elseif disp_width(line) + 1 + disp_width(word) <= width then
+					line = line .. " " .. word
+				else
+					out[#out + 1] = line
+					line = word
+				end
+			end
+			out[#out + 1] = line
+		end
+	end
+	if #out == 0 then
+		out[1] = ""
+	end
+	return out
+end
+
+--- Build the virt_lines for a single comment, drawn as a rounded box:
+---
+---   ╭─ draft · you ─────────╮
+---   │ the comment body      │
+---   ╰───────────────────────╯
+---
+---@param c GitflowReviewInlineComment
+---@return table[]  list of virt_line chunk-lists
+local function build_comment_box(c)
+	local is_draft = c.pending
+	local border_hl = is_draft
+		and "GitflowReviewDraftBox" or "GitflowReviewCommentBox"
+	local kind = is_draft and "draft" or "thread"
+	local author = (c.author and c.author ~= "") and c.author or "unknown"
+	local count = c.count or 1
+	local header = ("%s · %s"):format(kind, author)
+	if count > 1 then
+		header = header .. (" · %d repl%s"):format(
+			count - 1, (count - 1) == 1 and "y" or "ies")
+	end
+
+	local body_lines = wrap_text(c.body or "", BOX_MAX_WIDTH)
+
+	-- Inner content width: widest of header (+ "─ " " " framing) or body.
+	local inner = disp_width(header) + 2
+	for _, bl in ipairs(body_lines) do
+		inner = math.max(inner, disp_width(bl))
+	end
+	inner = math.max(BOX_MIN_WIDTH, math.min(inner, BOX_MAX_WIDTH))
+	local span = inner + 2 -- cells between the two corner glyphs
+
+	local function pad(s)
+		local gap = inner - disp_width(s)
+		if gap > 0 then
+			return s .. string.rep(" ", gap)
+		end
+		return s
+	end
+
+	local virt_lines = {}
+
+	-- Top border with the header embedded in the dashes.
+	local header_seg_w = 2 + disp_width(header) + 1 -- "─ " + header + " "
+	local dashes = math.max(0, span - header_seg_w)
+	virt_lines[#virt_lines + 1] = {
+		{ BOX_INDENT, "GitflowReviewCommentBox" },
+		{ "╭─ ", border_hl },
+		{ header, "GitflowReviewAuthor" },
+		{ " " .. string.rep("─", dashes) .. "╮", border_hl },
+	}
+
+	-- Body rows.
+	for _, bl in ipairs(body_lines) do
+		virt_lines[#virt_lines + 1] = {
+			{ BOX_INDENT, "GitflowReviewCommentBox" },
+			{ "│ ", border_hl },
+			{ pad(bl), "GitflowReviewCommentBody" },
+			{ " │", border_hl },
+		}
+	end
+
+	-- Bottom border.
+	virt_lines[#virt_lines + 1] = {
+		{ BOX_INDENT, "GitflowReviewCommentBox" },
+		{ "╰" .. string.rep("─", span) .. "╯", border_hl },
+	}
+
+	return virt_lines
+end
+
 --- Render a list of comment markers on the buffer.
 ---
---- show_body=true (default): comment shown as virt_lines below the
----   anchor line.  The EOL marker is just a short label (kind + author +
----   count) so the body never appears twice.
---- show_body=false: only the EOL marker is shown (collapsed).
+--- show_body=true (default): each comment is drawn as a rounded note box
+---   in virt_lines below its anchor line.
+--- show_body=false: only a compact end-of-line marker is shown so the
+---   line still advertises that a comment exists (collapsed view).
 ---@param bufnr integer
 ---@param comments GitflowReviewInlineComment[]
 ---@param opts table|nil  { show_body: boolean }
@@ -495,43 +622,29 @@ function M.apply_comments(bufnr, comments, opts)
 	for _, c in ipairs(comments or {}) do
 		local anchor = c.new_line or c.old_line
 		if anchor and anchor >= 1 and anchor <= total then
-			local marker = c.pending and " [draft] " or " [thread] "
-			local marker_hl = c.pending
-				and "GitflowReviewChangesRequested"
-				or "GitflowReviewAuthor"
-			local count = c.count or 1
-			local count_label = count > 1
-				and (" (%d comments)"):format(count) or ""
-			local author_label = ""
-			if c.author and c.author ~= "" then
-				author_label = ("@%s"):format(c.author)
-			end
-
-			local virt_text = {
-				{ marker, marker_hl },
-				{ author_label, "GitflowReviewAuthor" },
-				{ count_label, "GitflowReviewComment" },
-			}
-
-			local extmark = {
-				virt_text = virt_text,
-				virt_text_pos = "eol",
-			}
+			local extmark = {}
 
 			if show_body and c.body and c.body ~= "" then
-				local virt_lines = {}
-				local body_lines = vim.split(c.body, "\n", {
-					plain = true, trimempty = false,
-				})
-				for _, bl in ipairs(body_lines) do
-					if #bl > 120 then
-						bl = bl:sub(1, 117) .. "..."
-					end
-					virt_lines[#virt_lines + 1] = {
-						{ "  " .. bl, "GitflowReviewComment" },
-					}
+				extmark.virt_lines = build_comment_box(c)
+			else
+				-- Collapsed: compact end-of-line badge only.
+				local marker = c.pending and " ● draft " or " ● thread "
+				local marker_hl = c.pending
+					and "GitflowReviewChangesRequested"
+					or "GitflowReviewAuthor"
+				local count = c.count or 1
+				local count_label = count > 1
+					and (" (%d)"):format(count) or ""
+				local author_label = ""
+				if c.author and c.author ~= "" then
+					author_label = ("@%s"):format(c.author)
 				end
-				extmark.virt_lines = virt_lines
+				extmark.virt_text = {
+					{ marker, marker_hl },
+					{ author_label, "GitflowReviewAuthor" },
+					{ count_label, "GitflowReviewComment" },
+				}
+				extmark.virt_text_pos = "eol"
 			end
 
 			pcall(

@@ -80,6 +80,16 @@ local function build_default_groups(palette)
 		GitflowReviewChangesRequested = { link = "WarningMsg" },
 		GitflowReviewAuthor = { fg = palette.accent_secondary, bold = true },
 		GitflowReviewComment = { link = "Comment" },
+		-- Inline comment "note box" rendered below diff lines
+		GitflowReviewCommentBox = { fg = palette.separator_fg },
+		GitflowReviewCommentBody = { link = "Normal" },
+		GitflowReviewDraftBox = { fg = palette.accent_secondary },
+		-- PR review file-tree chrome (folders / counts / decorations)
+		GitflowReviewTreeDir = { fg = palette.accent_primary, bold = true },
+		GitflowReviewTreeGuide = { fg = palette.separator_fg },
+		GitflowReviewCountAdd = { link = "GitflowAdded" },
+		GitflowReviewCountDel = { link = "GitflowRemoved" },
+		GitflowReviewHint = { link = "Comment" },
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },
 		GitflowStashRef = { fg = palette.stash_ref, bold = true },

@@ -137,7 +137,64 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		local bufnr = review_panel.state.file_list_bufnr
 		T.assert_keymaps(bufnr, {
 			"<CR>", "o", "S", "r", "q", "]f", "[f",
+			"<Tab>", "za", "zM", "zR",
 		})
+
+		cleanup_panels()
+	end,
+
+	-- ── File tree: folders, folding, leaf rendering ────────────────────
+
+	["file list renders changed files as a collapsible folder tree"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local bufnr = review_panel.state.file_list_bufnr
+		local combined = table.concat(T.buf_lines(bufnr), "\n")
+
+		-- A directory row is shown (compacted) with a fold arrow + trailing /.
+		T.assert_contains(combined, "lua/gitflow/",
+			"tree should show the compacted lua/gitflow folder row")
+		T.assert_true(
+			combined:find("▾", 1, true) ~= nil,
+			"an expanded folder should show a ▾ fold arrow")
+
+		-- Leaves are basenames, and a dir line map exists for folding.
+		T.assert_contains(combined, "highlights.lua",
+			"leaf file basename should be shown")
+		T.assert_true(
+			review_panel.state._dir_line_map ~= nil
+				and next(review_panel.state._dir_line_map) ~= nil,
+			"a directory line map should be populated for folding")
+
+		cleanup_panels()
+	end,
+
+	["collapse_all hides leaves and expand_all restores them"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local bufnr = review_panel.state.file_list_bufnr
+
+		review_panel.collapse_all_dirs()
+		local collapsed = table.concat(T.buf_lines(bufnr), "\n")
+		T.assert_true(
+			not collapsed:find("highlights.lua", 1, true),
+			"collapse_all should hide leaf basenames")
+		T.assert_true(
+			collapsed:find("▸", 1, true) ~= nil,
+			"collapsed folders should show a ▸ arrow")
+
+		review_panel.expand_all_dirs()
+		local expanded = table.concat(T.buf_lines(bufnr), "\n")
+		T.assert_contains(expanded, "highlights.lua",
+			"expand_all should restore leaf basenames")
 
 		cleanup_panels()
 	end,
