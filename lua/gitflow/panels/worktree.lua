@@ -249,12 +249,42 @@ function M.refresh()
 	end)
 end
 
+---Run the worktree add and report the outcome.
+---@param path string
+---@param opts table  { ref?, new_branch?, force?, detach? }
+local function run_add(path, opts)
+	git_worktree.add(path, opts, function(err)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		local detail
+		if opts.new_branch then
+			detail = ("new branch '%s'%s"):format(
+				opts.new_branch,
+				opts.ref and (" from " .. opts.ref) or " from HEAD"
+			)
+		elseif opts.ref then
+			detail = ("checked out %s"):format(opts.ref)
+		else
+			detail = "new branch from HEAD"
+		end
+		utils.notify(
+			("Created worktree at %s (%s)"):format(path, detail),
+			vim.log.levels.INFO
+		)
+		M.refresh()
+		emit_post_operation()
+	end)
+end
+
 function M.add_worktree()
 	local cfg = M.state.cfg
 	if not cfg then
 		return
 	end
 
+	-- 1) Where the worktree lives on disk.
 	ui.input.prompt(
 		{ prompt = "New worktree path: " },
 		function(path)
@@ -263,26 +293,46 @@ function M.add_worktree()
 			end
 			path = vim.trim(path)
 
+			-- 2) Optional new branch to create for this worktree. Leaving
+			--    this empty switches to the "check out an existing ref" path.
+			--    (Cancelling with <Esc> aborts entirely — on_confirm only
+			--    fires for a typed value, including the empty string.)
 			ui.input.prompt(
-				{ prompt = "Checkout (branch/commit, empty = new branch): " },
-				function(ref)
-					local opts = {}
-					if ref and vim.trim(ref) ~= "" then
-						opts.ref = vim.trim(ref)
-					end
+				{ prompt = "New branch name (empty = check out existing): " },
+				function(new_branch)
+					new_branch = new_branch and vim.trim(new_branch) or ""
 
-					git_worktree.add(path, opts, function(err)
-						if err then
-							utils.notify(err, vim.log.levels.ERROR)
-							return
-						end
-						utils.notify(
-							("Created worktree at %s"):format(path),
-							vim.log.levels.INFO
+					if new_branch ~= "" then
+						-- 3a) Creating a branch: ask what to base it on.
+						ui.input.prompt(
+							{
+								prompt = ("Base '%s' on (branch/commit, empty = HEAD): ")
+									:format(new_branch),
+							},
+							function(base)
+								local opts = { new_branch = new_branch }
+								if base and vim.trim(base) ~= "" then
+									opts.ref = vim.trim(base)
+								end
+								run_add(path, opts)
+							end
 						)
-						M.refresh()
-						emit_post_operation()
-					end)
+					else
+						-- 3b) Checking out an existing ref (or, if empty, let
+						--     git create a branch named after the folder).
+						ui.input.prompt(
+							{
+								prompt = "Check out (branch/commit, empty = new branch from HEAD): ",
+							},
+							function(ref)
+								local opts = {}
+								if ref and vim.trim(ref) ~= "" then
+									opts.ref = vim.trim(ref)
+								end
+								run_add(path, opts)
+							end
+						)
+					end
 				end
 			)
 		end

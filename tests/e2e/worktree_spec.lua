@@ -33,6 +33,31 @@ local function with_temp_git_log(fn)
 	end
 end
 
+-- Stub ui.input.prompt so a sequence of prompts is answered from a queue.
+-- A `nil` answer simulates <Esc> (on_confirm is not called); an empty string
+-- simulates an empty-but-confirmed entry.
+---@param answers (string|nil)[]
+---@param fn fun()
+local function with_prompt_answers(answers, fn)
+	local input = require("gitflow.ui.input")
+	local original = input.prompt
+	local i = 0
+	input.prompt = function(_, on_confirm)
+		i = i + 1
+		local answer = answers[i]
+		if answer == nil then
+			return
+		end
+		on_confirm(answer)
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+	input.prompt = original
+	if not ok then
+		error(err, 0)
+	end
+end
+
 T.run_suite("E2E: Worktree Panel", {
 
 	-- ── Subcommand registration ─────────────────────────────────────
@@ -246,6 +271,81 @@ T.run_suite("E2E: Worktree Panel", {
 			T.assert_true(found, "should invoke `git worktree prune`")
 		end)
 		T.cleanup_panels()
+	end,
+
+	-- ── Panel add flow (sequential prompts) ─────────────────────────
+
+	["panel add: new branch + base runs `add -b <branch> <path> <base>`"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(2000)
+
+		with_temp_git_log(function(log_path)
+			-- path, new branch name, base branch
+			with_prompt_answers(
+				{ "/tmp/gitflow-wt-flow", "feat/from-main", "main" },
+				function()
+					worktree_panel.add_worktree()
+					T.drain_jobs(2000)
+				end
+			)
+
+			local lines = T.read_file(log_path)
+			local found = false
+			for _, line in ipairs(lines) do
+				if line:find("worktree add", 1, true)
+					and line:find("-b feat/from-main", 1, true)
+					and line:find("/tmp/gitflow-wt-flow", 1, true)
+					and line:match("%smain%s*$") then
+					found = true
+				end
+			end
+			T.assert_true(
+				found,
+				"new-branch flow should base the branch on the chosen ref"
+			)
+		end)
+
+		worktree_panel.close()
+	end,
+
+	["panel add: empty branch + ref checks out existing (no -b)"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(2000)
+
+		with_temp_git_log(function(log_path)
+			-- path, empty branch name (=> existing-checkout path), existing ref
+			with_prompt_answers(
+				{ "/tmp/gitflow-wt-existing", "", "develop" },
+				function()
+					worktree_panel.add_worktree()
+					T.drain_jobs(2000)
+				end
+			)
+
+			local lines = T.read_file(log_path)
+			local found_checkout, found_b = false, false
+			for _, line in ipairs(lines) do
+				if line:find("worktree add", 1, true)
+					and line:find("/tmp/gitflow-wt-existing", 1, true)
+					and line:find("develop", 1, true) then
+					found_checkout = true
+				end
+				if line:find("worktree add", 1, true)
+					and line:find("-b ", 1, true) then
+					found_b = true
+				end
+			end
+			T.assert_true(
+				found_checkout, "should check out the existing ref"
+			)
+			T.assert_false(
+				found_b, "existing-checkout flow should not pass -b"
+			)
+		end)
+
+		worktree_panel.close()
 	end,
 
 	["unknown worktree action returns usage"] = function()

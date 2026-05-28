@@ -365,7 +365,9 @@ Label panel ~
     q       Close
 
 Worktree panel ~
-    a       Add a worktree (prompts for path, then branch/commit)
+    a       Add a worktree. Prompts for: path, a new branch name, and
+            the ref to base it on. Leave the branch name empty to instead
+            check out an existing branch/commit.
     d       Remove worktree under cursor
     D       Force-remove worktree under cursor (discards changes)
     p       Prune stale worktree entries
