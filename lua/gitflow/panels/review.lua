@@ -547,6 +547,48 @@ local function render_tree_node(node, depth, prefix, ctx)
 	end
 end
 
+--- Does the PR diff for `path` contain `line` on the given side?
+--- GitHub can only resolve a review comment whose line/side matches a line
+--- that actually appears in the diff (RIGHT = new-side, LEFT = old-side).
+---@param path string
+---@param line integer|nil
+---@param side "RIGHT"|"LEFT"
+---@return boolean
+local function diff_has_line(path, line, side)
+	if not line then
+		return false
+	end
+	local fd = M.state.file_diffs[path]
+	if not fd then
+		return false
+	end
+	for _, h in ipairs(fd.hunks) do
+		for _, l in ipairs(h.lines) do
+			if side == "LEFT" then
+				if l.old_line == line then
+					return true
+				end
+			elseif l.new_line == line then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+--- Is a pending draft anchored to a line that's actually in the PR diff?
+--- Out-of-scope drafts will be rejected on submit, so we flag them.
+---@param pc table
+---@return boolean
+local function draft_in_scope(pc)
+	if pc.new_line then
+		return diff_has_line(pc.path, pc.new_line, "RIGHT")
+	elseif pc.old_line then
+		return diff_has_line(pc.path, pc.old_line, "LEFT")
+	end
+	return false
+end
+
 local function render_file_list()
 	local bufnr = M.state.file_list_bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -602,6 +644,45 @@ local function render_file_list()
 		render_tree_node(build_file_tree(M.state.files), 0, "", ctx)
 	end
 
+	-- Drafts section: list every pending (unsubmitted) comment, flagging
+	-- any that no longer map to a line in the PR diff (those are the ones
+	-- that get rejected on submit).
+	local draft_line_map = {}
+	local draft_hl = {}
+	local pending = M.state.pending_comments
+	if #pending > 0 then
+		local off_count = 0
+		for _, pc in ipairs(pending) do
+			if not draft_in_scope(pc) then
+				off_count = off_count + 1
+			end
+		end
+
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = sep
+		local hdr = (" Drafts (%d)"):format(#pending)
+		if off_count > 0 then
+			hdr = hdr .. ("  ✗%d off-diff"):format(off_count)
+		end
+		lines[#lines + 1] = hdr
+		draft_hl[#lines] = off_count > 0
+			and "GitflowReviewDraftOutOfScope" or "GitflowReviewHint"
+
+		for idx, pc in ipairs(pending) do
+			local in_scope = draft_in_scope(pc)
+			local marker = in_scope and "●" or "✗"
+			local lno = pc.new_line or pc.old_line or 0
+			local name = vim.fn.fnamemodify(pc.path or "?", ":t")
+			local preview = vim.trim((pc.body or ""):gsub("%s+", " "))
+			local label = ("  %s %s:%d  %s"):format(marker, name, lno, preview)
+			label = vim.fn.strcharpart(label, 0, FILE_LIST_WIDTH - 1)
+			lines[#lines + 1] = label
+			draft_line_map[#lines] = idx
+			draft_hl[#lines] = in_scope
+				and "GitflowReviewDraftBox" or "GitflowReviewDraftOutOfScope"
+		end
+	end
+
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = sep
 	local hints = {
@@ -612,6 +693,8 @@ local function render_file_list()
 		" c comment · S submit",
 		" R reply · <leader>x delete",
 		" ]f/[f file · ]c/[c hunk",
+		" on draft: <CR> jump · dd del",
+		" X delete all off-diff drafts",
 		" r refresh · q close",
 	}
 	local hint_start = #lines + 1
@@ -645,11 +728,16 @@ local function render_file_list()
 	for i = 0, #hints - 1 do
 		hl(hint_start - 1 + i, 0, -1, "GitflowReviewHint")
 	end
+	-- Drafts section spans.
+	for line1, group in pairs(draft_hl) do
+		hl(line1 - 1, 0, -1, group)
+	end
 
 	M.state._file_line_map = ctx.file_line_map
 	M.state._dir_line_map = ctx.dir_line_map
 	M.state._all_dirs = ctx.all_dirs
 	M.state._file_lines_start = file_lines_start
+	M.state._draft_line_map = draft_line_map
 end
 
 ---@return integer|nil
@@ -660,6 +748,18 @@ local function file_idx_under_cursor()
 	end
 	local cursor = vim.api.nvim_win_get_cursor(M.state.file_list_winid)[1]
 	return M.state._file_line_map and M.state._file_line_map[cursor] or nil
+end
+
+--- Index into M.state.pending_comments for the draft row under the cursor
+--- in the file-list pane (the "Drafts" section), or nil.
+---@return integer|nil
+local function draft_idx_under_cursor()
+	if not M.state.file_list_winid
+		or not vim.api.nvim_win_is_valid(M.state.file_list_winid) then
+		return nil
+	end
+	local cursor = vim.api.nvim_win_get_cursor(M.state.file_list_winid)[1]
+	return M.state._draft_line_map and M.state._draft_line_map[cursor] or nil
 end
 
 ---@param path string
@@ -825,12 +925,6 @@ function M._maybe_annotate_buffer(bufnr)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	-- Already decorated?
-	for _, b in ipairs(M.state.annotated_buffers) do
-		if b == bufnr then
-			return
-		end
-	end
 	-- Only act inside the review tabpage to avoid surprising the user when
 	-- they open the same file in an unrelated tab/window.
 	if M.state.tabpage
@@ -840,6 +934,17 @@ function M._maybe_annotate_buffer(bufnr)
 	local rel = buf_repo_relative(bufnr)
 	if not rel or not M.state.file_diffs[rel] then
 		return
+	end
+	-- Already decorated? Don't re-annotate, but DO re-sync the active
+	-- pointers — otherwise switching back to a previously-opened file (via
+	-- Telescope, :bnext, window focus, …) leaves active_path pointing at the
+	-- other file, and a new comment gets saved against the wrong path.
+	for _, b in ipairs(M.state.annotated_buffers) do
+		if b == bufnr then
+			M.state.active_path = rel
+			M.state.active_bufnr = bufnr
+			return
+		end
 	end
 	local winid = vim.fn.bufwinid(bufnr)
 	if winid == -1 then
@@ -917,7 +1022,31 @@ function M.toggle_dir_under_cursor()
 	return true
 end
 
+--- Open the draft's file and place the diff-pane cursor on its line.
+---@param pc table  a pending comment
+function M.jump_to_draft(pc)
+	if not pc or not pc.path then
+		return
+	end
+	M.open_file(pc.path)
+	local line = pc.new_line or pc.old_line
+	if line and M.state.diff_winid
+		and vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		local total = vim.api.nvim_buf_line_count(
+			vim.api.nvim_win_get_buf(M.state.diff_winid))
+		pcall(vim.api.nvim_win_set_cursor, M.state.diff_winid,
+			{ math.min(line, total), 0 })
+		vim.api.nvim_set_current_win(M.state.diff_winid)
+	end
+end
+
 function M.open_file_under_cursor()
+	-- A draft row jumps to that comment in the diff pane.
+	local draft_idx = draft_idx_under_cursor()
+	if draft_idx then
+		M.jump_to_draft(M.state.pending_comments[draft_idx])
+		return
+	end
 	-- A folder row folds/unfolds; a file row opens.
 	if M.toggle_dir_under_cursor() then
 		return
@@ -931,6 +1060,61 @@ function M.open_file_under_cursor()
 		return
 	end
 	M.open_file(file.path)
+end
+
+--- Delete the draft comment under the cursor in the file-list pane.
+function M.delete_draft_under_cursor()
+	local idx = draft_idx_under_cursor()
+	if not idx then
+		notify_warn("No draft comment under the cursor")
+		return
+	end
+	local pc = M.state.pending_comments[idx]
+	if not pc then
+		return
+	end
+	local preview = vim.trim((pc.body or ""):gsub("%s+", " ")):sub(1, 60)
+	local confirmed = input.confirm(
+		("Delete draft comment?\n\n  %s"):format(preview),
+		{ choices = { "&Yes", "&No" }, default_choice = 2 }
+	)
+	if not confirmed then
+		return
+	end
+	table.remove(M.state.pending_comments, idx)
+	persist_pending()
+	notify_info("Draft comment deleted")
+	render_file_list()
+	refresh_comments_for_active()
+end
+
+--- Delete every draft whose line no longer maps to the PR diff (the ones
+--- that would be rejected on submit).
+function M.delete_off_diff_drafts()
+	local victims = {}
+	for idx = #M.state.pending_comments, 1, -1 do
+		if not draft_in_scope(M.state.pending_comments[idx]) then
+			victims[#victims + 1] = idx
+		end
+	end
+	if #victims == 0 then
+		notify_info("No off-diff drafts to delete")
+		return
+	end
+	local confirmed = input.confirm(
+		("Delete %d off-diff draft comment(s)?"):format(#victims),
+		{ choices = { "&Yes", "&No" }, default_choice = 2 }
+	)
+	if not confirmed then
+		return
+	end
+	for _, idx in ipairs(victims) do
+		table.remove(M.state.pending_comments, idx)
+	end
+	persist_pending()
+	notify_info(("Deleted %d off-diff draft(s)"):format(#victims))
+	render_file_list()
+	refresh_comments_for_active()
 end
 
 function M.collapse_all_dirs()
@@ -959,6 +1143,10 @@ local function set_up_file_list_keymaps(bufnr)
 	vim.keymap.set("n", "S", function() M.submit_pending_review() end, opts)
 	vim.keymap.set("n", "]f", function() M.next_file() end, opts)
 	vim.keymap.set("n", "[f", function() M.prev_file() end, opts)
+	-- Draft management (acts on the "Drafts" section rows).
+	vim.keymap.set("n", "dd", function() M.delete_draft_under_cursor() end, opts)
+	vim.keymap.set("n", "x", function() M.delete_draft_under_cursor() end, opts)
+	vim.keymap.set("n", "X", function() M.delete_off_diff_drafts() end, opts)
 end
 
 local function ensure_file_list_buffer()
@@ -1129,6 +1317,10 @@ end
 --- resolved"). Offer to check the PR out. Prompts at most once per session.
 local function maybe_prompt_pr_checkout()
 	if M.state._checkout_prompted then
+		return
+	end
+	-- Never pop a modal when there's no UI attached (headless / tests).
+	if #vim.api.nvim_list_uis() == 0 then
 		return
 	end
 	local head = M.state.pr_head
@@ -1466,48 +1658,38 @@ local function find_hunk_line_for(path, line)
 	return nil, nil
 end
 
---- Does the PR diff for `path` contain `line` on the given side?
---- GitHub can only resolve a review comment whose line/side matches a line
---- that actually appears in the diff (RIGHT = new-side, LEFT = old-side).
----@param path string
----@param line integer|nil
----@param side "RIGHT"|"LEFT"
----@return boolean
-local function diff_has_line(path, line, side)
-	if not line then
-		return false
-	end
-	local fd = M.state.file_diffs[path]
-	if not fd then
-		return false
-	end
-	for _, h in ipairs(fd.hunks) do
-		for _, l in ipairs(h.lines) do
-			if side == "LEFT" then
-				if l.old_line == line then
-					return true
-				end
-			elseif l.new_line == line then
-				return true
-			end
-		end
-	end
-	return false
-end
-
 local OFF_DIFF_HINT =
 	"You can only comment on lines that are part of the PR diff "
 	.. "(changed or context lines within a hunk). If line numbers look "
 	.. "off, check out the PR branch first (gh pr checkout)."
 
+--- Resolve the file + line a comment should anchor to. The path is taken
+--- from the buffer actually displayed in the diff window (not the tracked
+--- active_path, which can lag behind file switches), so path and line are
+--- always read from the same file the cursor is in.
+---@return { path: string, line: integer }|nil
 local function require_active_diff_line()
-	if not M.state.active_path or not M.state.diff_winid
+	if not M.state.diff_winid
 		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
 		notify_warn("Open a file from the PR file list first")
 		return nil
 	end
+	local buf = vim.api.nvim_win_get_buf(M.state.diff_winid)
+	local path = buf_repo_relative(buf)
+	if not path or not M.state.file_diffs[path] then
+		-- Non-file buffer (e.g. a deleted-file placeholder): fall back to
+		-- the tracked active path.
+		path = M.state.active_path
+	end
+	if not path then
+		notify_warn("Open a file from the PR file list first")
+		return nil
+	end
+	-- Keep the tracked pointers consistent with what we're commenting on.
+	M.state.active_path = path
+	M.state.active_bufnr = buf
 	local cur = vim.api.nvim_win_get_cursor(M.state.diff_winid)[1]
-	return { path = M.state.active_path, line = cur }
+	return { path = path, line = cur }
 end
 
 function M.inline_comment()
@@ -1555,10 +1737,19 @@ function M.inline_comment_visual()
 		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
 		return
 	end
-	if not M.state.active_path then
+	-- Resolve the path from the buffer the visual selection is in, so the
+	-- comment can't be misattributed to a previously-active file.
+	local buf = vim.api.nvim_get_current_buf()
+	local path = buf_repo_relative(buf)
+	if not path or not M.state.file_diffs[path] then
+		path = M.state.active_path
+	end
+	if not path then
 		notify_warn("Open a file from the PR file list first")
 		return
 	end
+	M.state.active_path = path
+	M.state.active_bufnr = buf
 
 	local start_line = vim.fn.line("v")
 	local end_line = vim.fn.line(".")
@@ -1571,8 +1762,8 @@ function M.inline_comment_visual()
 	end
 
 	-- Both ends of the range must be diff lines, or GitHub can't resolve it.
-	local end_hunk, hunk_header = find_hunk_line_for(M.state.active_path, end_line)
-	local start_hunk = find_hunk_line_for(M.state.active_path, start_line)
+	local end_hunk, hunk_header = find_hunk_line_for(path, end_line)
+	local start_hunk = find_hunk_line_for(path, start_line)
 	if not end_hunk or not start_hunk then
 		notify_warn(OFF_DIFF_HINT)
 		return
@@ -1588,7 +1779,7 @@ function M.inline_comment_visual()
 			end
 			local pending = {
 				id = next_pending_id(),
-				path = M.state.active_path,
+				path = path,
 				body = body,
 				hunk = hunk_header,
 				new_line = end_hunk.new_line,
