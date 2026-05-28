@@ -195,7 +195,7 @@ All commands use the `:Gitflow` prefix.
 | `:Gitflow stash apply [index]` | Apply stash entry |
 
 | `:Gitflow branch` | Open branch list panel |
-| `:Gitflow worktree [list\|add\|remove\|prune]` | Manage git worktrees |
+| `:Gitflow worktree [list\|add\|remove\|move\|lock\|unlock\|prune]` | Manage git worktrees |
 | `:Gitflow blame` | Open the git blame panel |
 | `:Gitflow blame-inline` | Toggle inline blame on the current line |
 | `:Gitflow merge <branch> [--abort]` | Merge a branch |

@@ -143,7 +143,7 @@ end
 
 ---Remove a worktree.
 ---@param path string
----@param opts table|nil  { force?: boolean }
+---@param opts table|nil  { force?: boolean, force_locked?: boolean }
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
 function M.remove(path, opts, cb)
 	if not path or vim.trim(path) == "" then
@@ -153,12 +153,87 @@ function M.remove(path, opts, cb)
 	local args = { "worktree", "remove" }
 	if options.force then
 		args[#args + 1] = "--force"
+		-- git requires a second --force to remove a *locked* worktree.
+		if options.force_locked then
+			args[#args + 1] = "--force"
+		end
 	end
 	args[#args + 1] = path
 
 	git.git(args, {}, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "worktree remove"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---Move a worktree to a new path.
+---@param path string
+---@param new_path string
+---@param opts table|nil  { force?: boolean }
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.move(path, new_path, opts, cb)
+	if not path or vim.trim(path) == "" then
+		error("gitflow worktree error: move requires a path", 2)
+	end
+	if not new_path or vim.trim(new_path) == "" then
+		error("gitflow worktree error: move requires a destination", 2)
+	end
+	local options = opts or {}
+	local args = { "worktree", "move" }
+	if options.force then
+		args[#args + 1] = "--force"
+	end
+	args[#args + 1] = path
+	args[#args + 1] = new_path
+
+	git.git(args, {}, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "worktree move"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---Lock a worktree (prevents pruning / removal).
+---@param path string
+---@param opts table|nil  { reason?: string }
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.lock(path, opts, cb)
+	if not path or vim.trim(path) == "" then
+		error("gitflow worktree error: lock requires a path", 2)
+	end
+	local options = opts or {}
+	local args = { "worktree", "lock" }
+	if options.reason and vim.trim(options.reason) ~= "" then
+		args[#args + 1] = "--reason"
+		args[#args + 1] = options.reason
+	end
+	args[#args + 1] = path
+
+	git.git(args, {}, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "worktree lock"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---Unlock a worktree.
+---@param path string
+---@param opts table|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.unlock(path, opts, cb)
+	if not path or vim.trim(path) == "" then
+		error("gitflow worktree error: unlock requires a path", 2)
+	end
+	git.git({ "worktree", "unlock", path }, opts or {}, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "worktree unlock"), result)
 			return
 		end
 		cb(nil, result)

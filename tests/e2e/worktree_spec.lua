@@ -138,7 +138,8 @@ T.run_suite("E2E: Worktree Panel", {
 
 		local bufnr = ui.buffer.get("worktree")
 		T.assert_true(bufnr ~= nil, "worktree buffer should exist")
-		T.assert_keymaps(bufnr, { "q", "r", "a", "d", "D", "p", "<CR>" })
+		T.assert_keymaps(bufnr,
+			{ "q", "r", "a", "d", "D", "m", "L", "p", "<CR>" })
 
 		worktree_panel.close()
 	end,
@@ -376,6 +377,107 @@ T.run_suite("E2E: Worktree Panel", {
 			"unknown action should report an error"
 		)
 		T.cleanup_panels()
+	end,
+
+	-- ── lock / unlock / move ────────────────────────────────────────
+
+	["worktree move/lock/unlock dispatch the matching git command"] = function()
+		with_temp_git_log(function(log_path)
+			commands.dispatch(
+				{ "worktree", "move", "/tmp/a", "/tmp/b" }, cfg)
+			commands.dispatch(
+				{ "worktree", "lock", "/tmp/a", "in", "use" }, cfg)
+			commands.dispatch({ "worktree", "unlock", "/tmp/a" }, cfg)
+			T.drain_jobs(3000)
+
+			local lines = T.read_file(log_path)
+			local move_, lock_, unlock_ = false, false, false
+			for _, line in ipairs(lines) do
+				if line:find("worktree move /tmp/a /tmp/b", 1, true) then
+					move_ = true
+				end
+				if line:find("worktree lock", 1, true)
+					and line:find("/tmp/a", 1, true) then
+					lock_ = true
+				end
+				if line:find("worktree unlock /tmp/a", 1, true) then
+					unlock_ = true
+				end
+			end
+			T.assert_true(move_, "move should run `git worktree move <a> <b>`")
+			T.assert_true(lock_, "lock should run `git worktree lock <a>`")
+			T.assert_true(unlock_, "unlock should run `git worktree unlock <a>`")
+		end)
+		T.cleanup_panels()
+	end,
+
+	["toggle_lock on a locked worktree unlocks it"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		-- The stub fixture marks /tmp/gitflow-feature as locked.
+		local locked_line
+		for line, entry in pairs(worktree_panel.state.line_entries) do
+			if entry.is_locked then
+				locked_line = line
+			end
+		end
+		T.assert_true(locked_line ~= nil, "fixture should have a locked worktree")
+
+		with_temp_git_log(function(log_path)
+			vim.api.nvim_set_current_win(worktree_panel.state.winid)
+			vim.api.nvim_win_set_cursor(
+				worktree_panel.state.winid, { locked_line, 0 })
+			worktree_panel.toggle_lock_under_cursor()
+			T.drain_jobs(2000)
+
+			local lines = T.read_file(log_path)
+			local found = false
+			for _, line in ipairs(lines) do
+				if line:find("worktree unlock", 1, true)
+					and line:find("/tmp/gitflow-feature", 1, true) then
+					found = true
+				end
+			end
+			T.assert_true(found, "a locked worktree should be unlocked")
+		end)
+
+		worktree_panel.close()
+	end,
+
+	["removing a locked worktree without force is blocked"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		local locked_line
+		for line, entry in pairs(worktree_panel.state.line_entries) do
+			if entry.is_locked then
+				locked_line = line
+			end
+		end
+		T.assert_true(locked_line ~= nil, "fixture should have a locked worktree")
+
+		with_temp_git_log(function(log_path)
+			vim.api.nvim_set_current_win(worktree_panel.state.winid)
+			vim.api.nvim_win_set_cursor(
+				worktree_panel.state.winid, { locked_line, 0 })
+			worktree_panel.remove_under_cursor(false)
+			T.drain_jobs(1000)
+
+			local lines = T.read_file(log_path)
+			local removed = false
+			for _, line in ipairs(lines) do
+				if line:find("worktree remove", 1, true) then
+					removed = true
+				end
+			end
+			T.assert_false(removed,
+				"a non-force remove of a locked worktree must not run")
+		end)
+
+		worktree_panel.close()
 	end,
 })
 

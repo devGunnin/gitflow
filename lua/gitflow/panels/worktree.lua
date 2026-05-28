@@ -15,9 +15,12 @@ local list_picker = require("gitflow.ui.list_picker")
 local M = {}
 local WORKTREE_FLOAT_TITLE = "Gitflow Worktrees"
 local WORKTREE_FLOAT_FOOTER =
-	"a add  d remove  D force-remove  p prune  <CR> switch  r refresh  q close"
+	"a add  d/D remove  m move  L lock  p prune"
+	.. "  <CR> switch  r refresh  q close"
 local WORKTREE_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_worktree_hl")
+local WORKTREE_AUGROUP =
+	vim.api.nvim_create_augroup("GitflowWorktreePanel", { clear = true })
 
 ---@type GitflowWorktreePanelState
 M.state = {
@@ -107,6 +110,14 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "D", function()
 		M.remove_under_cursor(true)
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "m", function()
+		M.move_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "L", function()
+		M.toggle_lock_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "p", function()
@@ -233,6 +244,19 @@ end
 function M.open(cfg)
 	M.state.cfg = cfg
 	ensure_window(cfg)
+
+	-- Keep the list fresh when worktrees change via commands / other panels.
+	vim.api.nvim_clear_autocmds({ group = WORKTREE_AUGROUP })
+	vim.api.nvim_create_autocmd("User", {
+		group = WORKTREE_AUGROUP,
+		pattern = "GitflowPostOperation",
+		callback = function()
+			if M.is_open() then
+				M.refresh()
+			end
+		end,
+	})
+
 	M.refresh()
 end
 
@@ -377,6 +401,16 @@ function M.remove_under_cursor(force)
 		return
 	end
 
+	-- A locked worktree can't be removed without force; nudge the user to
+	-- unlock (L) or force (D) rather than letting git error out.
+	if entry.is_locked and not force then
+		utils.notify(
+			"Worktree is locked — press L to unlock, or D to force-remove",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
 	local prompt = force
 		and ("Force-remove worktree '%s'? (discards changes)"):format(entry.path)
 		or ("Remove worktree '%s'?"):format(entry.path)
@@ -388,18 +422,113 @@ function M.remove_under_cursor(force)
 		return
 	end
 
-	git_worktree.remove(entry.path, { force = force }, function(err)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
+	git_worktree.remove(
+		entry.path,
+		{ force = force, force_locked = entry.is_locked },
+		function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Removed worktree '%s'"):format(entry.path),
+				vim.log.levels.INFO
+			)
+			M.refresh()
+			emit_post_operation()
 		end
+	)
+end
+
+--- Lock or unlock the worktree under the cursor (toggles based on state).
+function M.toggle_lock_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
+		utils.notify("No worktree selected", vim.log.levels.WARN)
+		return
+	end
+
+	if entry.is_locked then
+		git_worktree.unlock(entry.path, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Unlocked worktree '%s'"):format(entry.path),
+				vim.log.levels.INFO
+			)
+			M.refresh()
+		end)
+		return
+	end
+
+	-- Locking: offer an optional reason.
+	ui.input.prompt(
+		{ prompt = "Lock reason (optional): " },
+		function(reason)
+			local opts = {}
+			if reason and vim.trim(reason) ~= "" then
+				opts.reason = vim.trim(reason)
+			end
+			git_worktree.lock(entry.path, opts, function(err)
+				if err then
+					utils.notify(err, vim.log.levels.ERROR)
+					return
+				end
+				utils.notify(
+					("Locked worktree '%s'"):format(entry.path),
+					vim.log.levels.INFO
+				)
+				M.refresh()
+			end)
+		end
+	)
+end
+
+--- Move the worktree under the cursor to a new path.
+function M.move_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
+		utils.notify("No worktree selected", vim.log.levels.WARN)
+		return
+	end
+	if entry.is_bare then
+		utils.notify("Cannot move a bare worktree", vim.log.levels.WARN)
+		return
+	end
+	if normalize(entry.path) == cwd_abs() then
 		utils.notify(
-			("Removed worktree '%s'"):format(entry.path),
-			vim.log.levels.INFO
+			"Cannot move the worktree you are currently in",
+			vim.log.levels.WARN
 		)
-		M.refresh()
-		emit_post_operation()
-	end)
+		return
+	end
+
+	ui.input.prompt(
+		{ prompt = ("Move '%s' to: "):format(entry.path), default = entry.path },
+		function(dest)
+			if not dest or vim.trim(dest) == "" then
+				return
+			end
+			dest = vim.trim(dest)
+			if normalize(dest) == normalize(entry.path) then
+				return
+			end
+			git_worktree.move(entry.path, dest, {}, function(err)
+				if err then
+					utils.notify(err, vim.log.levels.ERROR)
+					return
+				end
+				utils.notify(
+					("Moved worktree to %s"):format(dest),
+					vim.log.levels.INFO
+				)
+				M.refresh()
+				emit_post_operation()
+			end)
+		end
+	)
 end
 
 function M.prune()
@@ -452,6 +581,8 @@ function M.switch_under_cursor()
 end
 
 function M.close()
+	pcall(vim.api.nvim_clear_autocmds, { group = WORKTREE_AUGROUP })
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else

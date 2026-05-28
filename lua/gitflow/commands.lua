@@ -1950,7 +1950,7 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands.worktree = {
-		description = "Worktree operations: list|add|remove|prune",
+		description = "Worktree operations: list|add|remove|move|lock|unlock|prune",
 		run = function(ctx)
 			local action = ctx.args[2] or "list"
 			if action == "list" then
@@ -2011,6 +2011,65 @@ local function register_builtin_subcommands(cfg)
 					emit_post_operation()
 				end)
 				return ("Removing worktree %s..."):format(path)
+			end
+
+			if action == "move" then
+				local path = trimmed_or_nil(ctx.args[3])
+				local dest = trimmed_or_nil(ctx.args[4])
+				if not path or not dest then
+					return "Usage: :Gitflow worktree move <path> <new-path>"
+				end
+				git_worktree.move(path, dest, {
+					force = has_flag(ctx.args, "--force"),
+				}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Moved worktree to %s"):format(dest))
+					if worktree_panel.is_open() then
+						worktree_panel.refresh()
+					end
+					emit_post_operation()
+				end)
+				return ("Moving worktree %s..."):format(path)
+			end
+
+			if action == "lock" then
+				local path = trimmed_or_nil(ctx.args[3])
+				if not path then
+					return "Usage: :Gitflow worktree lock <path> [reason]"
+				end
+				local reason = table.concat(ctx.args, " ", 4)
+				git_worktree.lock(path, { reason = reason }, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Locked worktree %s"):format(path))
+					if worktree_panel.is_open() then
+						worktree_panel.refresh()
+					end
+				end)
+				return ("Locking worktree %s..."):format(path)
+			end
+
+			if action == "unlock" then
+				local path = trimmed_or_nil(ctx.args[3])
+				if not path then
+					return "Usage: :Gitflow worktree unlock <path>"
+				end
+				git_worktree.unlock(path, {}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Unlocked worktree %s"):format(path))
+					if worktree_panel.is_open() then
+						worktree_panel.refresh()
+					end
+				end)
+				return ("Unlocking worktree %s..."):format(path)
 			end
 
 			if action == "prune" then
@@ -2141,6 +2200,20 @@ local pr_actions = {
 }
 local label_actions = { "list", "create", "delete" }
 local tag_actions = { "list", "create", "delete", "push" }
+local worktree_actions =
+	{ "list", "add", "remove", "move", "lock", "unlock", "prune" }
+
+---@return string[]
+local function list_worktree_paths()
+	local paths = {}
+	for _, line in ipairs(system_lines({ "worktree", "list", "--porcelain" })) do
+		local p = line:match("^worktree (.+)$")
+		if p then
+			paths[#paths + 1] = p
+		end
+	end
+	return paths
+end
 
 ---@param cmdline string
 ---@param args string[]
@@ -2396,6 +2469,21 @@ function M.complete(arglead, cmdline, _cursorpos)
 	if subcommand == "tag" then
 		if completing_action(cmdline, args) then
 			return filter_candidates(arglead, tag_actions)
+		end
+		return {}
+	end
+	if subcommand == "worktree" then
+		if completing_action(cmdline, args) then
+			return filter_candidates(arglead, worktree_actions)
+		end
+		-- For path-taking actions, complete existing worktree paths.
+		local sub = args[3]
+		if sub == "remove" or sub == "move"
+			or sub == "lock" or sub == "unlock" then
+			return filter_candidates(arglead, list_worktree_paths())
+		end
+		if sub == "add" then
+			return filter_candidates(arglead, list_branch_candidates())
 		end
 		return {}
 	end

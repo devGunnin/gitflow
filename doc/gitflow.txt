@@ -198,7 +198,8 @@ Git ~
     :Gitflow stash drop                 Drop latest stash entry
     :Gitflow branch                     Open branch list panel
     :Gitflow worktree [list|add|        Manage git worktrees
-                   remove|prune]
+                   remove|move|lock|
+                   unlock|prune]
     :Gitflow blame                      Open the git blame panel
     :Gitflow blame-inline               Toggle inline blame on current line
     :Gitflow merge <branch> [--abort]   Merge a branch
@@ -369,8 +370,10 @@ Worktree panel ~
             branch picker for the base ref, then asks for an optional new
             branch name. Leave the branch name empty to check out the
             picked ref directly. (In the picker: / filter, <CR> select.)
-    d       Remove worktree under cursor
-    D       Force-remove worktree under cursor (discards changes)
+    d       Remove worktree under cursor (refuses if locked)
+    D       Force-remove worktree under cursor (discards changes; locked too)
+    m       Move worktree under cursor to a new path
+    L       Lock / unlock worktree under cursor
     p       Prune stale worktree entries
     <CR>    Switch to worktree under cursor (changes cwd)
     r       Refresh

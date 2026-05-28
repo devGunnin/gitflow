@@ -459,6 +459,15 @@ DIFF
       remove)
         : # no stdout on success
         ;;
+      move)
+        : # no stdout on success
+        ;;
+      lock)
+        : # no stdout on success
+        ;;
+      unlock)
+        : # no stdout on success
+        ;;
       prune)
         : # no stdout on success
         ;;
