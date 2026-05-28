@@ -52,6 +52,12 @@ local utils = require("gitflow.utils")
 ---@class GitflowIconsConfig
 ---@field enable boolean
 
+---@class GitflowBlameConfig
+---@field enable boolean
+---@field auto boolean
+---@field delay integer
+---@field date_format string
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
@@ -62,6 +68,7 @@ local utils = require("gitflow.utils")
 ---@field highlights GitflowHighlightConfig
 ---@field signs GitflowSignsConfig
 ---@field icons GitflowIconsConfig
+---@field blame GitflowBlameConfig
 
 local M = {}
 
@@ -90,6 +97,7 @@ function M.defaults()
 			cherry_pick = "gC",
 			conflict = "<leader>gm",
 			palette = "<leader>go",
+			blame = "<leader>gB",
 		},
 		ui = {
 			default_layout = "float",
@@ -134,6 +142,17 @@ function M.defaults()
 		},
 		icons = {
 			enable = true,
+		},
+		blame = {
+			-- Master switch for the inline-blame feature. When false,
+			-- :Gitflow blame does nothing and no autocmds are installed.
+			enable = true,
+			-- Automatically show inline blame in every file buffer.
+			auto = false,
+			-- Debounce (ms) before blaming the cursor line.
+			delay = 200,
+			-- os.date() format for the author date.
+			date_format = "%Y-%m-%d",
 		},
 	}
 end
@@ -368,6 +387,25 @@ local function validate_icons(config)
 end
 
 ---@param config GitflowConfig
+local function validate_blame(config)
+	if type(config.blame) ~= "table" then
+		error("gitflow config error: blame must be a table", 3)
+	end
+	if type(config.blame.enable) ~= "boolean" then
+		error("gitflow config error: blame.enable must be a boolean", 3)
+	end
+	if type(config.blame.auto) ~= "boolean" then
+		error("gitflow config error: blame.auto must be a boolean", 3)
+	end
+	if type(config.blame.delay) ~= "number" or config.blame.delay < 0 then
+		error("gitflow config error: blame.delay must be a non-negative number", 3)
+	end
+	if not utils.is_non_empty_string(config.blame.date_format) then
+		error("gitflow config error: blame.date_format must be a non-empty string", 3)
+	end
+end
+
+---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
 	validate_ui(config)
@@ -378,6 +416,7 @@ function M.validate(config)
 	validate_highlights(config)
 	validate_signs(config)
 	validate_icons(config)
+	validate_blame(config)
 end
 
 ---@param opts table|nil

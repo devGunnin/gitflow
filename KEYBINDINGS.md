@@ -25,6 +25,7 @@ Normal-mode mappings available in any buffer. Configured via
 | `gZ` | Stash push (with prompt) | `stash_push` |
 | `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
+| `<leader>gB` | Toggle inline blame on current line | `blame` |
 | `<leader>gi` | Open issue list | `issue` |
 | `<leader>gr` | Open PR list | `pr` |
 | `<leader>gL` | Open label list | `label` |

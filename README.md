@@ -72,6 +72,7 @@ require("gitflow").setup({
     label      = "<leader>gL",
     conflict   = "<leader>gm",
     palette    = "<leader>gp",
+    blame      = "<leader>gB",
   },
   ui = {
     default_layout = "split",   -- "split" or "float"
@@ -117,6 +118,12 @@ require("gitflow").setup({
   icons = {
     enable = true,              -- Nerd Font icons; false = ASCII fallback
   },
+  blame = {
+    enable      = true,         -- master switch for inline blame
+    auto        = false,        -- auto-show inline blame in every file buffer
+    delay       = 200,          -- debounce (ms) before blaming the cursor line
+    date_format = "%Y-%m-%d",   -- os.date() format for the author date
+  },
 })
 ```
 
@@ -149,6 +156,10 @@ require("gitflow").setup({
 | `signs.deleted` | `string` | `"\u{2212}"` | Sign text for deleted lines |
 | `signs.conflict` | `string` | `"!"` | Sign text for conflict markers |
 | `icons.enable` | `boolean` | `true` | Use Nerd Font icons; `false` = ASCII |
+| `blame.enable` | `boolean` | `true` | Master switch for inline blame; `false` disables `:Gitflow blame` |
+| `blame.auto` | `boolean` | `false` | Automatically show inline blame in every file buffer |
+| `blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
+| `blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
 
 ## Commands
 
@@ -181,6 +192,7 @@ All commands use the `:Gitflow` prefix.
 | `:Gitflow stash pop` | Pop latest stash entry |
 | `:Gitflow stash drop` | Drop latest stash entry |
 | `:Gitflow branch` | Open branch list panel |
+| `:Gitflow blame` | Toggle inline blame on the current line |
 | `:Gitflow merge <branch> [--abort]` | Merge a branch |
 | `:Gitflow rebase <branch> [--abort\|--continue]` | Rebase onto a branch |
 | `:Gitflow cherry-pick <commit>` | Cherry-pick a commit |
@@ -239,6 +251,7 @@ instructions.
 | `gZ` | Stash push |
 | `gX` | Stash pop |
 | `<leader>gb` | Branch list |
+| `<leader>gB` | Toggle inline blame |
 | `<leader>gi` | Issues |
 | `<leader>gr` | Pull requests |
 | `<leader>gL` | Labels |

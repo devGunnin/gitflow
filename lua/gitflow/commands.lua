@@ -24,6 +24,7 @@ local reset_panel = require("gitflow.panels.reset")
 local cherry_pick_panel = require("gitflow.panels.cherry_pick")
 local revert_panel = require("gitflow.panels.revert")
 local git_conflict = require("gitflow.git.conflict")
+local inline_blame = require("gitflow.inline_blame")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 
@@ -1818,6 +1819,19 @@ local function register_builtin_subcommands(cfg)
 			return "Cherry-pick panel opened"
 		end,
 	}
+
+	M.subcommands.blame = {
+		description = "Toggle inline git blame on the current line",
+		run = function()
+			if not cfg.blame or cfg.blame.enable == false then
+				return "Inline blame is disabled (blame.enable = false)"
+			end
+			local bufnr = vim.api.nvim_get_current_buf()
+			local enabled = inline_blame.toggle(bufnr)
+			return enabled and "Inline blame enabled"
+				or "Inline blame disabled"
+		end,
+	}
 end
 
 ---@param commandline string
@@ -2221,6 +2235,7 @@ function M.setup(cfg)
 	)
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -2246,6 +2261,7 @@ function M.setup(cfg)
 		cherry_pick = "<Plug>(GitflowCherryPick)",
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
+		blame = "<Plug>(GitflowBlame)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]

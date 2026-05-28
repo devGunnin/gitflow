@@ -109,6 +109,7 @@ Default keybindings:
     label           <leader>gL          <Plug>(GitflowLabel)
     conflict        <leader>gm          <Plug>(GitflowConflicts)
     palette         <leader>gp          <Plug>(GitflowPalette)
+    blame           <leader>gB          <Plug>(GitflowBlame)
 
                                                           *gitflow-config-ui*
 ui ~
@@ -152,6 +153,21 @@ quick_actions ~
     quick_commit    list        {"commit"}          Steps for quick-commit
     quick_push      list        {"commit","push"}   Steps for quick-push
 
+                                                      *gitflow-config-blame*
+blame ~
+
+    Current-line inline blame: shows "<author>, <date> * <summary>" as
+    virtual text at the end of the line under the cursor.  Toggle it per
+    buffer with `:Gitflow blame` (default <leader>gB), or set blame.auto to
+    show it in every file automatically.
+
+    Option          Type        Default         Description ~
+    enable          boolean     true            Master switch; false disables
+                                                the feature entirely
+    auto            boolean     false           Auto-show in every file buffer
+    delay           number      200             Debounce (ms) before blaming
+    date_format     string      "%Y-%m-%d"      os.date() format for the date
+
 ==============================================================================
 6. COMMANDS                                                *gitflow-commands*
 
@@ -178,6 +194,7 @@ Git ~
     :Gitflow stash pop                  Pop latest stash entry
     :Gitflow stash drop                 Drop latest stash entry
     :Gitflow branch                     Open branch list panel
+    :Gitflow blame                      Toggle inline blame on current line
     :Gitflow merge <branch> [--abort]   Merge a branch
     :Gitflow rebase <branch>            Rebase onto a branch
                    [--abort|--continue]
@@ -404,6 +421,7 @@ Link-based groups (track your colorscheme automatically):
     GitflowReviewApproved           DiagnosticOk
     GitflowReviewChangesRequested   WarningMsg
     GitflowReviewComment            Comment
+    GitflowBlameInline              Comment
     GitflowNormal                   NormalFloat
     GitflowPaletteSelection         PmenuSel
     GitflowPaletteHeader            Type

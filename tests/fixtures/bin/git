@@ -381,6 +381,31 @@ DIFF
     printf '0\n'
     ;;
 
+  # ── blame ────────────────────────────────────────────────────────────
+  blame)
+    if [ "$fail_cmd" = "blame" ]; then
+      echo "fatal: blame failed" >&2
+      exit 128
+    fi
+    # Consume any --contents stdin so the writer does not get SIGPIPE.
+    case "$*" in
+      *--contents\ -*) cat >/dev/null 2>&1 || true ;;
+    esac
+    # Canned --line-porcelain record for a single committed line.
+    printf 'abc1234567890abcdef1234567890abcdef123456 1 1 1\n'
+    printf 'author Test Author\n'
+    printf 'author-mail <test@example.com>\n'
+    printf 'author-time 1700000000\n'
+    printf 'author-tz +0000\n'
+    printf 'committer Test Author\n'
+    printf 'committer-mail <test@example.com>\n'
+    printf 'committer-time 1700000000\n'
+    printf 'committer-tz +0000\n'
+    printf 'summary Initial commit\n'
+    printf 'filename tracked.txt\n'
+    printf '\talpha\n'
+    ;;
+
   # ── Unknown command ───────────────────────────────────────────────────
   *)
     echo "git stub: unknown command '$subcmd'" >&2
