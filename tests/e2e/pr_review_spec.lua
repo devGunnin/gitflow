@@ -458,6 +458,24 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_equals(#review_panel.state.pending_comments, 0,
 			"should start with no pending comments")
 
+		-- Comments are only accepted on lines that are part of the PR diff,
+		-- so anchor the cursor to a real new-side line from the parsed hunks.
+		local fd = review_panel.state.file_diffs["lua/gitflow/highlights.lua"]
+		local diff_line
+		for _, h in ipairs(fd.hunks or {}) do
+			for _, l in ipairs(h.lines or {}) do
+				if l.new_line then
+					diff_line = l.new_line
+					break
+				end
+			end
+			if diff_line then
+				break
+			end
+		end
+		T.assert_true(diff_line ~= nil,
+			"fixture PR diff should expose a new-side line to comment on")
+
 		with_temporary_patches({
 			{
 				table = input,
@@ -471,7 +489,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			-- active line.
 			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
 			vim.api.nvim_win_set_cursor(
-				review_panel.state.diff_winid, { 1, 0 })
+				review_panel.state.diff_winid, { diff_line, 0 })
 
 			review_panel.inline_comment()
 			T.drain_jobs(2000)
@@ -626,6 +644,112 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		T.assert_equals(#review_panel.state.pending_comments, 0,
 			"successful submit should clear pending comments")
+
+		cleanup_panels()
+	end,
+
+	-- ── Off-diff comment guard (prevents the 422 "Line could not be
+	--    resolved" error) ────────────────────────────────────────────────
+
+	["inline_comment on a non-diff line is rejected, not queued"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- Find a buffer line that is NOT part of the PR diff.
+		local fd = review_panel.state.file_diffs["lua/gitflow/highlights.lua"]
+		local in_diff = {}
+		for _, h in ipairs(fd.hunks or {}) do
+			for _, l in ipairs(h.lines or {}) do
+				if l.new_line then
+					in_diff[l.new_line] = true
+				end
+			end
+		end
+		local bufnr = review_panel.state.active_bufnr
+		local n = vim.api.nvim_buf_line_count(bufnr)
+		local off_line
+		for i = 1, n do
+			if not in_diff[i] then
+				off_line = i
+				break
+			end
+		end
+		T.assert_true(off_line ~= nil, "should find an off-diff line")
+
+		with_temporary_patches({
+			{
+				table = input,
+				key = "prompt",
+				value = function(_, on_confirm)
+					on_confirm("comment off the diff")
+				end,
+			},
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(
+				review_panel.state.diff_winid, { off_line, 0 })
+			review_panel.inline_comment()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 0,
+			"a comment on a non-diff line must not be queued")
+
+		cleanup_panels()
+	end,
+
+	["submitting an out-of-diff comment is blocked, not sent to GitHub"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		-- A stale/bogus pending comment whose line is not in the diff.
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				body = "stale comment",
+				new_line = 999999,
+			},
+		}
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("LGTM")
+					end,
+				},
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
+
+			local lines = T.read_file(log_path)
+			local called_reviews_api = false
+			for _, line in ipairs(lines) do
+				if line:find(
+					"api repos/{owner}/{repo}/pulls/42/reviews", 1, true
+				) then
+					called_reviews_api = true
+				end
+			end
+			T.assert_false(called_reviews_api,
+				"an unresolvable comment must block the API call")
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"blocked submit should keep the pending comment for fixing")
 
 		cleanup_panels()
 	end,
