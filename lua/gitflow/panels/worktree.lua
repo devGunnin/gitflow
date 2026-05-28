@@ -1,8 +1,10 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_worktree = require("gitflow.git.worktree")
+local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local list_picker = require("gitflow.ui.list_picker")
 
 ---@class GitflowWorktreePanelState
 ---@field bufnr integer|nil
@@ -278,6 +280,48 @@ local function run_add(path, opts)
 	end)
 end
 
+---Open a searchable picker of branches (plus HEAD) and call `on_pick` with
+---the chosen ref. Cancelling the picker aborts silently.
+---@param title string
+---@param on_pick fun(ref: string)
+local function pick_base_ref(title, on_pick)
+	git_branch.list({}, function(err, entries)
+		local items = {
+			{ name = "HEAD", description = "current commit" },
+		}
+		if not err and entries then
+			for _, entry in ipairs(entries) do
+				local desc
+				if entry.is_remote then
+					desc = "remote"
+				elseif entry.is_current then
+					desc = "local · current"
+				else
+					desc = "local"
+				end
+				items[#items + 1] = {
+					name = entry.name,
+					description = desc,
+				}
+			end
+		end
+
+		list_picker.open({
+			title = title,
+			items = items,
+			multi_select = false,
+			on_submit = function(selected)
+				local ref = selected and selected[1]
+				if not ref or ref == "" then
+					return
+				end
+				on_pick(ref)
+			end,
+			on_cancel = function() end,
+		})
+	end)
+end
+
 function M.add_worktree()
 	local cfg = M.state.cfg
 	if not cfg then
@@ -293,48 +337,26 @@ function M.add_worktree()
 			end
 			path = vim.trim(path)
 
-			-- 2) Optional new branch to create for this worktree. Leaving
-			--    this empty switches to the "check out an existing ref" path.
-			--    (Cancelling with <Esc> aborts entirely — on_confirm only
-			--    fires for a typed value, including the empty string.)
-			ui.input.prompt(
-				{ prompt = "New branch name (empty = check out existing): " },
-				function(new_branch)
-					new_branch = new_branch and vim.trim(new_branch) or ""
-
-					if new_branch ~= "" then
-						-- 3a) Creating a branch: ask what to base it on.
-						ui.input.prompt(
-							{
-								prompt = ("Base '%s' on (branch/commit, empty = HEAD): ")
-									:format(new_branch),
-							},
-							function(base)
-								local opts = { new_branch = new_branch }
-								if base and vim.trim(base) ~= "" then
-									opts.ref = vim.trim(base)
-								end
-								run_add(path, opts)
-							end
-						)
-					else
-						-- 3b) Checking out an existing ref (or, if empty, let
-						--     git create a branch named after the folder).
-						ui.input.prompt(
-							{
-								prompt = "Check out (branch/commit, empty = new branch from HEAD): ",
-							},
-							function(ref)
-								local opts = {}
-								if ref and vim.trim(ref) ~= "" then
-									opts.ref = vim.trim(ref)
-								end
-								run_add(path, opts)
-							end
-						)
+			-- 2) Pick the base ref from a searchable list of branches.
+			pick_base_ref("Base worktree on", function(base)
+				-- 3) Optionally create a new branch from that base. Leaving
+				--    the name empty checks the base ref out directly.
+				--    (<Esc> aborts — on_confirm only fires on a typed value.)
+				ui.input.prompt(
+					{
+						prompt = ("New branch name (empty = check out '%s'): ")
+							:format(base),
+					},
+					function(new_branch)
+						new_branch = new_branch and vim.trim(new_branch) or ""
+						local opts = { ref = base }
+						if new_branch ~= "" then
+							opts.new_branch = new_branch
+						end
+						run_add(path, opts)
 					end
-				end
-			)
+				)
+			end)
 		end
 	)
 end

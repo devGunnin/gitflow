@@ -365,9 +365,10 @@ Label panel ~
     q       Close
 
 Worktree panel ~
-    a       Add a worktree. Prompts for: path, a new branch name, and
-            the ref to base it on. Leave the branch name empty to instead
-            check out an existing branch/commit.
+    a       Add a worktree. Prompts for a path, then opens a searchable
+            branch picker for the base ref, then asks for an optional new
+            branch name. Leave the branch name empty to check out the
+            picked ref directly. (In the picker: / filter, <CR> select.)
     d       Remove worktree under cursor
     D       Force-remove worktree under cursor (discards changes)
     p       Prune stale worktree entries

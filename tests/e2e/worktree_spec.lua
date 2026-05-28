@@ -58,6 +58,23 @@ local function with_prompt_answers(answers, fn)
 	end
 end
 
+-- Stub the branch picker so the base ref is chosen deterministically.
+---@param ref string
+---@param fn fun()
+local function with_picker_choice(ref, fn)
+	local list_picker = require("gitflow.ui.list_picker")
+	local original = list_picker.open
+	list_picker.open = function(opts)
+		opts.on_submit({ ref })
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+	list_picker.open = original
+	if not ok then
+		error(err, 0)
+	end
+end
+
 T.run_suite("E2E: Worktree Panel", {
 
 	-- ── Subcommand registration ─────────────────────────────────────
@@ -275,20 +292,22 @@ T.run_suite("E2E: Worktree Panel", {
 
 	-- ── Panel add flow (sequential prompts) ─────────────────────────
 
-	["panel add: new branch + base runs `add -b <branch> <path> <base>`"] = function()
+	["panel add: pick base + new branch runs `add -b <branch> <path> <base>`"] = function()
 		local worktree_panel = require("gitflow.panels.worktree")
 		commands.dispatch({ "worktree", "list" }, cfg)
 		T.drain_jobs(2000)
 
 		with_temp_git_log(function(log_path)
-			-- path, new branch name, base branch
-			with_prompt_answers(
-				{ "/tmp/gitflow-wt-flow", "feat/from-main", "main" },
-				function()
-					worktree_panel.add_worktree()
-					T.drain_jobs(2000)
-				end
-			)
+			-- path prompt, then picker chooses "main", then branch name
+			with_picker_choice("main", function()
+				with_prompt_answers(
+					{ "/tmp/gitflow-wt-flow", "feat/from-main" },
+					function()
+						worktree_panel.add_worktree()
+						T.drain_jobs(2000)
+					end
+				)
+			end)
 
 			local lines = T.read_file(log_path)
 			local found = false
@@ -302,27 +321,29 @@ T.run_suite("E2E: Worktree Panel", {
 			end
 			T.assert_true(
 				found,
-				"new-branch flow should base the branch on the chosen ref"
+				"new-branch flow should base the branch on the picked ref"
 			)
 		end)
 
 		worktree_panel.close()
 	end,
 
-	["panel add: empty branch + ref checks out existing (no -b)"] = function()
+	["panel add: pick base + empty branch checks out the ref (no -b)"] = function()
 		local worktree_panel = require("gitflow.panels.worktree")
 		commands.dispatch({ "worktree", "list" }, cfg)
 		T.drain_jobs(2000)
 
 		with_temp_git_log(function(log_path)
-			-- path, empty branch name (=> existing-checkout path), existing ref
-			with_prompt_answers(
-				{ "/tmp/gitflow-wt-existing", "", "develop" },
-				function()
-					worktree_panel.add_worktree()
-					T.drain_jobs(2000)
-				end
-			)
+			-- picker chooses "develop"; empty branch name => plain checkout
+			with_picker_choice("develop", function()
+				with_prompt_answers(
+					{ "/tmp/gitflow-wt-existing", "" },
+					function()
+						worktree_panel.add_worktree()
+						T.drain_jobs(2000)
+					end
+				)
+			end)
 
 			local lines = T.read_file(log_path)
 			local found_checkout, found_b = false, false
@@ -338,7 +359,7 @@ T.run_suite("E2E: Worktree Panel", {
 				end
 			end
 			T.assert_true(
-				found_checkout, "should check out the existing ref"
+				found_checkout, "should check out the picked ref"
 			)
 			T.assert_false(
 				found_b, "existing-checkout flow should not pass -b"

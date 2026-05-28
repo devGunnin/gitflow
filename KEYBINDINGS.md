@@ -290,7 +290,7 @@ Buffer-local bindings active in the worktree panel (`:Gitflow worktree`).
 
 | Key | Action |
 | --- | --- |
-| `a` | Add a worktree (prompts: path → new branch name → base ref; leave the branch name empty to check out an existing branch/commit instead) |
+| `a` | Add a worktree: prompts for a path, then a **searchable branch picker** for the base ref, then an optional new branch name (empty = check out the picked ref) |
 | `d` | Remove worktree under cursor |
 | `D` | Force-remove worktree under cursor (discards changes) |
 | `p` | Prune stale worktree entries |
