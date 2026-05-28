@@ -1,0 +1,261 @@
+-- tests/e2e/worktree_spec.lua — worktree panel E2E tests
+--
+-- Run: nvim --headless -u tests/minimal_init.lua -l tests/e2e/worktree_spec.lua
+--
+-- Verifies:
+--   1. worktree subcommand registration and dispatch
+--   2. Panel open/close, buffer creation, keymaps
+--   3. --porcelain parsing (branch / detached / locked / prunable / bare)
+--   4. add / remove / prune command dispatch through the git stub
+
+local T = _G.T
+local cfg = _G.TestConfig
+
+local commands = require("gitflow.commands")
+local ui = require("gitflow.ui")
+local git_worktree = require("gitflow.git.worktree")
+
+---@param fn fun(log_path: string)
+local function with_temp_git_log(fn)
+	local log_path = vim.fn.tempname()
+	local previous = vim.env.GITFLOW_GIT_LOG
+	vim.env.GITFLOW_GIT_LOG = log_path
+
+	local ok, err = xpcall(function()
+		fn(log_path)
+	end, debug.traceback)
+
+	vim.env.GITFLOW_GIT_LOG = previous
+	pcall(vim.fn.delete, log_path)
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
+T.run_suite("E2E: Worktree Panel", {
+
+	-- ── Subcommand registration ─────────────────────────────────────
+
+	["worktree subcommand is registered"] = function()
+		T.assert_true(
+			commands.subcommands["worktree"] ~= nil,
+			"worktree subcommand should be registered"
+		)
+	end,
+
+	["worktree subcommand has description and run"] = function()
+		local sub = commands.subcommands["worktree"]
+		T.assert_true(
+			type(sub.description) == "string" and sub.description ~= "",
+			"worktree should have a non-empty description"
+		)
+		T.assert_true(
+			type(sub.run) == "function",
+			"worktree should have a run function"
+		)
+	end,
+
+	-- ── Panel open / default action ─────────────────────────────────
+
+	["worktree list opens panel without crash"] = function()
+		local ok, err = T.pcall_message(function()
+			commands.dispatch({ "worktree", "list" }, cfg)
+		end)
+		T.assert_true(ok, "worktree list should not crash: " .. (err or ""))
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("worktree")
+		T.assert_true(
+			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+			"worktree buffer should exist after :Gitflow worktree list"
+		)
+		T.cleanup_panels()
+	end,
+
+	["worktree default action is list"] = function()
+		local result
+		local ok, err = T.pcall_message(function()
+			result = commands.dispatch({ "worktree" }, cfg)
+		end)
+		T.assert_true(ok, "worktree default should not crash: " .. (err or ""))
+		T.assert_contains(
+			result, "Worktree panel opened",
+			"default worktree action should open panel"
+		)
+		T.drain_jobs(3000)
+		T.cleanup_panels()
+	end,
+
+	-- ── Panel keymaps ───────────────────────────────────────────────
+
+	["worktree panel has expected keymaps"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("worktree")
+		T.assert_true(bufnr ~= nil, "worktree buffer should exist")
+		T.assert_keymaps(bufnr, { "q", "r", "a", "d", "D", "p", "<CR>" })
+
+		worktree_panel.close()
+	end,
+
+	-- ── Panel content from stub ─────────────────────────────────────
+
+	["worktree panel renders entries from stub"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("worktree")
+		T.assert_true(bufnr ~= nil, "worktree buffer should exist")
+
+		local lines = T.buf_lines(bufnr)
+		T.assert_true(
+			T.find_line(lines, "main") ~= nil,
+			"should render the main worktree branch"
+		)
+		T.assert_true(
+			T.find_line(lines, "feature/test") ~= nil,
+			"should render the feature worktree branch"
+		)
+		T.assert_true(
+			T.find_line(lines, "[locked]") ~= nil,
+			"should mark the locked worktree"
+		)
+		T.assert_true(
+			T.find_line(lines, "detached") ~= nil,
+			"should render the detached worktree"
+		)
+		T.assert_true(
+			T.find_line(lines, "[current]") ~= nil,
+			"the cwd worktree should be marked current"
+		)
+
+		worktree_panel.close()
+	end,
+
+	-- ── Parser ──────────────────────────────────────────────────────
+
+	["parse handles branch / detached / locked / prunable"] = function()
+		local out = table.concat({
+			"worktree /repo",
+			"HEAD abc1234",
+			"branch refs/heads/main",
+			"",
+			"worktree /repo-feat",
+			"HEAD def5678",
+			"branch refs/heads/feature/x",
+			"locked needs review",
+			"",
+			"worktree /repo-old",
+			"HEAD 0001111",
+			"detached",
+			"prunable gitdir file points to non-existent location",
+			"",
+		}, "\n")
+
+		local entries = git_worktree.parse(out)
+		T.assert_equals(#entries, 3, "should parse three worktrees")
+
+		T.assert_equals(entries[1].branch, "main", "entry 1 branch")
+		T.assert_false(entries[1].is_detached, "entry 1 not detached")
+
+		T.assert_equals(entries[2].branch, "feature/x", "entry 2 branch")
+		T.assert_true(entries[2].is_locked, "entry 2 locked")
+		T.assert_equals(
+			entries[2].lock_reason, "needs review", "entry 2 lock reason"
+		)
+
+		T.assert_true(entries[3].is_detached, "entry 3 detached")
+		T.assert_equals(entries[3].branch, nil, "entry 3 has no branch")
+		T.assert_true(entries[3].is_prunable, "entry 3 prunable")
+	end,
+
+	["parse handles a bare worktree"] = function()
+		local out = table.concat({
+			"worktree /repo.git",
+			"bare",
+			"",
+		}, "\n")
+		local entries = git_worktree.parse(out)
+		T.assert_equals(#entries, 1, "should parse one entry")
+		T.assert_true(entries[1].is_bare, "should be bare")
+		T.assert_equals(entries[1].branch, nil, "bare has no branch")
+	end,
+
+	["parse handles empty output"] = function()
+		T.assert_equals(#git_worktree.parse(""), 0, "empty => no entries")
+	end,
+
+	-- ── Command dispatch hits the git stub ──────────────────────────
+
+	["worktree add dispatches git worktree add"] = function()
+		with_temp_git_log(function(log_path)
+			commands.dispatch(
+				{ "worktree", "add", "/tmp/gitflow-wt-new", "main" }, cfg
+			)
+			T.drain_jobs(3000)
+
+			local lines = T.read_file(log_path)
+			local found = false
+			for _, line in ipairs(lines) do
+				if line:find("worktree add", 1, true)
+					and line:find("/tmp/gitflow-wt-new", 1, true) then
+					found = true
+				end
+			end
+			T.assert_true(found, "should invoke `git worktree add <path>`")
+		end)
+		T.cleanup_panels()
+	end,
+
+	["worktree add -b passes a new branch flag"] = function()
+		with_temp_git_log(function(log_path)
+			commands.dispatch(
+				{ "worktree", "add", "/tmp/gitflow-wt-b", "-b", "feat/new" }, cfg
+			)
+			T.drain_jobs(3000)
+
+			local lines = T.read_file(log_path)
+			local found = false
+			for _, line in ipairs(lines) do
+				if line:find("worktree add", 1, true)
+					and line:find("-b feat/new", 1, true) then
+					found = true
+				end
+			end
+			T.assert_true(found, "should pass `-b feat/new`")
+		end)
+		T.cleanup_panels()
+	end,
+
+	["worktree prune dispatches git worktree prune"] = function()
+		with_temp_git_log(function(log_path)
+			commands.dispatch({ "worktree", "prune" }, cfg)
+			T.drain_jobs(3000)
+
+			local lines = T.read_file(log_path)
+			local found = false
+			for _, line in ipairs(lines) do
+				if line:find("worktree prune", 1, true) then
+					found = true
+				end
+			end
+			T.assert_true(found, "should invoke `git worktree prune`")
+		end)
+		T.cleanup_panels()
+	end,
+
+	["unknown worktree action returns usage"] = function()
+		local result = commands.dispatch({ "worktree", "bogus" }, cfg)
+		T.assert_contains(
+			result, "Unknown worktree action",
+			"unknown action should report an error"
+		)
+		T.cleanup_panels()
+	end,
+})
+
+print("E2E worktree panel tests passed")

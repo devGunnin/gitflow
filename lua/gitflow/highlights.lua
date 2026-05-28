@@ -67,6 +67,10 @@ local function build_default_groups(palette)
 		-- Branch
 		GitflowBranchCurrent = { link = "Title" },
 		GitflowBranchRemote = { link = "Comment" },
+		-- Worktree panel
+		GitflowWorktreeCurrent = { link = "GitflowBranchCurrent" },
+		GitflowWorktreeLocked = { link = "WarningMsg" },
+		GitflowWorktreePrunable = { link = "Comment" },
 		-- PR state
 		GitflowPROpen = { link = "DiagnosticOk" },
 		GitflowPRMerged = { link = "Special" },

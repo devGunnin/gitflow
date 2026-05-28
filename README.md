@@ -71,6 +71,7 @@ require("gitflow").setup({
     label      = "<leader>gL",
     conflict   = "<leader>gm",
     palette      = "gP",
+    worktree     = "gW",
     blame        = "gB",
     blame_inline = "<leader>gB",
   },
@@ -194,6 +195,7 @@ All commands use the `:Gitflow` prefix.
 | `:Gitflow stash apply [index]` | Apply stash entry |
 
 | `:Gitflow branch` | Open branch list panel |
+| `:Gitflow worktree [list\|add\|remove\|prune]` | Manage git worktrees |
 | `:Gitflow blame` | Open the git blame panel |
 | `:Gitflow blame-inline` | Toggle inline blame on the current line |
 | `:Gitflow merge <branch> [--abort]` | Merge a branch |
@@ -254,6 +256,7 @@ instructions.
 | `gZ` | Stash push |
 | `gX` | Stash pop |
 | `<leader>gb` | Branch list |
+| `gW` | Worktree panel |
 | `gB` | Open blame panel |
 | `<leader>gB` | Toggle inline blame |
 | `<leader>gi` | Issues |

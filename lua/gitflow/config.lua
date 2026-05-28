@@ -106,6 +106,7 @@ function M.defaults()
 			tag = "gT",
 			blame = "gB",
 			blame_inline = "<leader>gB",
+			worktree = "gW",
 			reflog = "gF",
 			cherry_pick = "gC",
 			rebase_interactive = "gI",

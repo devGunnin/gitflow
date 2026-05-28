@@ -24,6 +24,7 @@ Normal-mode mappings available in any buffer. Configured via
 | `gZ` | Stash push (with prompt) | `stash_push` |
 | `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
+| `gW` | Open worktree panel | `worktree` |
 | `<leader>gB` | Toggle inline blame on current line | `blame_inline` |
 | `<leader>gi` | Open issue list | `issue` |
 | `<leader>gr` | Open PR list | `pr` |
@@ -280,6 +281,20 @@ Buffer-local bindings active in the tag panel (`:Gitflow tag list`).
 | `D` | Delete local tag |
 | `X` | Delete remote tag |
 | `P` | Push tag to remote |
+| `r` | Refresh |
+| `q` | Close |
+
+## Worktree Panel
+
+Buffer-local bindings active in the worktree panel (`:Gitflow worktree`).
+
+| Key | Action |
+| --- | --- |
+| `a` | Add a worktree (prompts for path, then branch/commit) |
+| `d` | Remove worktree under cursor |
+| `D` | Force-remove worktree under cursor (discards changes) |
+| `p` | Prune stale worktree entries |
+| `<CR>` | Switch to worktree under cursor (changes cwd) |
 | `r` | Refresh |
 | `q` | Close |
 

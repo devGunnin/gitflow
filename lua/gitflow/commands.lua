@@ -30,6 +30,8 @@ local notifications_panel = require("gitflow.panels.notifications")
 local rebase_panel = require("gitflow.panels.rebase")
 local blame_panel = require("gitflow.panels.blame")
 local reflog_panel = require("gitflow.panels.reflog")
+local worktree_panel = require("gitflow.panels.worktree")
+local git_worktree = require("gitflow.git.worktree")
 local git_conflict = require("gitflow.git.conflict")
 local inline_blame = require("gitflow.inline_blame")
 local label_completion = require("gitflow.completion.labels")
@@ -1001,6 +1003,7 @@ local function register_builtin_subcommands(cfg)
 			actions_panel.close()
 			blame_panel.close()
 			reflog_panel.close()
+			worktree_panel.close()
 			palette_panel.close()
 			notifications_panel.close()
 			return "Gitflow panels closed"
@@ -1945,6 +1948,89 @@ local function register_builtin_subcommands(cfg)
 				or "Inline blame disabled"
 		end,
 	}
+
+	M.subcommands.worktree = {
+		description = "Worktree operations: list|add|remove|prune",
+		run = function(ctx)
+			local action = ctx.args[2] or "list"
+			if action == "list" then
+				worktree_panel.open(cfg)
+				return "Worktree panel opened"
+			end
+
+			if action == "add" then
+				local path = trimmed_or_nil(ctx.args[3])
+				if not path then
+					return "Usage: :Gitflow worktree add <path> [ref] [-b <branch>]"
+				end
+				local opts = {}
+				for i = 4, #ctx.args do
+					local token = ctx.args[i]
+					if token == "-b" or token == "--branch" then
+						opts.new_branch = trimmed_or_nil(ctx.args[i + 1])
+					elseif token == "--force" then
+						opts.force = true
+					elseif token == "--detach" then
+						opts.detach = true
+					elseif not vim.startswith(token, "-")
+						and ctx.args[i - 1] ~= "-b"
+						and ctx.args[i - 1] ~= "--branch"
+					then
+						opts.ref = token
+					end
+				end
+				git_worktree.add(path, opts, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Created worktree at %s"):format(path))
+					if worktree_panel.is_open() then
+						worktree_panel.refresh()
+					end
+					emit_post_operation()
+				end)
+				return ("Creating worktree at %s..."):format(path)
+			end
+
+			if action == "remove" then
+				local path = trimmed_or_nil(ctx.args[3])
+				if not path then
+					return "Usage: :Gitflow worktree remove <path> [--force]"
+				end
+				local force = has_flag(ctx.args, "--force")
+				git_worktree.remove(path, { force = force }, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(("Removed worktree %s"):format(path))
+					if worktree_panel.is_open() then
+						worktree_panel.refresh()
+					end
+					emit_post_operation()
+				end)
+				return ("Removing worktree %s..."):format(path)
+			end
+
+			if action == "prune" then
+				git_worktree.prune({}, function(err)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info("Pruned stale worktree entries")
+					if worktree_panel.is_open() then
+						worktree_panel.refresh()
+					end
+					emit_post_operation()
+				end)
+				return "Pruning worktrees..."
+			end
+
+			return ("Unknown worktree action: %s"):format(action)
+		end,
+	}
 end
 
 ---@param commandline string
@@ -2364,6 +2450,7 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowBlameInline)", "<Cmd>Gitflow blame-inline<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowWorktree)", "<Cmd>Gitflow worktree list<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowNotifications)", "<Cmd>Gitflow notifications<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowPrReview)", "<Cmd>Gitflow pr-review<CR>", { silent = true })
 
@@ -2397,6 +2484,7 @@ function M.setup(cfg)
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 		blame_inline = "<Plug>(GitflowBlameInline)",
+		worktree = "<Plug>(GitflowWorktree)",
 		notifications = "<Plug>(GitflowNotifications)",
 		pr_review = "<Plug>(GitflowPrReview)",
 	}
