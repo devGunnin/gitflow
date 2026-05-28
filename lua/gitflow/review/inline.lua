@@ -218,6 +218,134 @@ local function buf_line_count(bufnr)
 end
 
 ---@param bufnr integer
+---@return string|nil
+local function buf_treesitter_lang(bufnr)
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return nil
+	end
+	local ft = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+	if not ft or ft == "" then
+		return nil
+	end
+	if not vim.treesitter or not vim.treesitter.language then
+		return nil
+	end
+	local ok, lang = pcall(vim.treesitter.language.get_lang, ft)
+	if ok and type(lang) == "string" and lang ~= "" then
+		-- Confirm the parser is actually installed before returning.
+		local ok_add, _ = pcall(vim.treesitter.language.add, lang)
+		if ok_add then
+			return lang
+		end
+	end
+	return nil
+end
+
+--- Turn a single-line piece of text into a list of `{chunk, hl}` tuples
+--- using the treesitter highlights query for `lang`. Each chunk's
+--- highlight is a stack `{ base_hl, capture_hl }` so the caller's
+--- base highlight (typically `DiffDelete`) supplies the background
+--- and the treesitter capture supplies the foreground.
+---
+--- Falls back to a single `{ text, base_hl }` chunk if treesitter is
+--- unavailable, the language has no highlights query, or parsing fails.
+---@param text string
+---@param lang string|nil
+---@param base_hl string
+---@return table[]
+local function ts_highlight_line(text, lang, base_hl)
+	if not text or text == "" then
+		return { { text or "", base_hl } }
+	end
+	if not lang or not vim.treesitter or not vim.treesitter.query then
+		return { { text, base_hl } }
+	end
+
+	local ok_parser, parser = pcall(vim.treesitter.get_string_parser, text, lang)
+	if not ok_parser or not parser then
+		return { { text, base_hl } }
+	end
+
+	local ok_parse, trees = pcall(function() return parser:parse() end)
+	if not ok_parse or type(trees) ~= "table" or not trees[1] then
+		return { { text, base_hl } }
+	end
+	local root = trees[1]:root()
+	if not root then
+		return { { text, base_hl } }
+	end
+
+	local get_query = vim.treesitter.query.get
+		or vim.treesitter.query.get_query
+	if not get_query then
+		return { { text, base_hl } }
+	end
+	local ok_q, query = pcall(get_query, lang, "highlights")
+	if not ok_q or not query then
+		return { { text, base_hl } }
+	end
+
+	-- Sweep positions 0..#text-1 to compute the active hl at each col.
+	-- Longer captures get overwritten by shorter (more specific) ones.
+	local len = #text
+	local hl_at = {}
+	local ok_iter = pcall(function()
+		for id, node in query:iter_captures(root, text, 0, 1) do
+			local capture_name = query.captures[id]
+			if capture_name then
+				local sr, sc, er, ec = node:range()
+				if sr == 0 and er == 0 and sc < ec then
+					local span_len = ec - sc
+					-- Tag with span length so shorter (more specific) wins.
+					for i = sc, math.min(ec, len) - 1 do
+						local existing = hl_at[i]
+						if not existing or existing.len >= span_len then
+							hl_at[i] = {
+								hl = "@" .. capture_name .. "." .. lang,
+								len = span_len,
+							}
+						end
+					end
+				end
+			end
+		end
+	end)
+	if not ok_iter then
+		return { { text, base_hl } }
+	end
+
+	local chunks = {}
+	local i = 0
+	while i < len do
+		local cur = hl_at[i]
+		local j = i + 1
+		while j < len do
+			local nxt = hl_at[j]
+			if (cur and nxt and cur.hl == nxt.hl)
+				or (not cur and not nxt) then
+				j = j + 1
+			else
+				break
+			end
+		end
+		local segment = text:sub(i + 1, j)
+		if cur and cur.hl then
+			chunks[#chunks + 1] = { segment, { base_hl, cur.hl } }
+		else
+			chunks[#chunks + 1] = { segment, base_hl }
+		end
+		i = j
+	end
+
+	if #chunks == 0 then
+		return { { text, base_hl } }
+	end
+	return chunks
+end
+
+M._ts_highlight_line = ts_highlight_line
+
+---@param bufnr integer
 ---@param new_line integer
 ---@return integer
 local function clamp_anchor(bufnr, new_line)
@@ -254,6 +382,7 @@ function M.apply_annotations(bufnr, file_diff)
 	end
 
 	local total = buf_line_count(bufnr)
+	local lang = buf_treesitter_lang(bufnr)
 
 	for _, hunk in ipairs(file_diff.hunks) do
 		local pending_removals = {}
@@ -274,9 +403,13 @@ function M.apply_annotations(bufnr, file_diff)
 			end
 			local virt_lines = {}
 			for _, removed in ipairs(pending_removals) do
-				virt_lines[#virt_lines + 1] = {
-					{ "- " .. removed.text, "DiffDelete" },
-				}
+				local chunks = { { "- ", "DiffDelete" } }
+				for _, ch in ipairs(
+					ts_highlight_line(removed.text, lang, "DiffDelete")
+				) do
+					chunks[#chunks + 1] = ch
+				end
+				virt_lines[#virt_lines + 1] = chunks
 			end
 			local opts = {
 				virt_lines = virt_lines,

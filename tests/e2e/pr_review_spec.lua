@@ -221,6 +221,32 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_true(#marks > 0,
 			"diff annotations should be applied as extmarks")
 
+		-- Removed lines are rendered as virt_lines.  With a treesitter
+		-- parser available for the buffer's filetype, each removed line
+		-- should be split into a "- " prefix chunk plus syntax-highlighted
+		-- chunks (more than one chunk total), rather than a single plain
+		-- DiffDelete chunk.
+		local found_del_virt = false
+		local found_ts_chunks = false
+		for _, m in ipairs(marks) do
+			local details = m[4]
+			if details and details.virt_lines then
+				for _, vline in ipairs(details.virt_lines) do
+					if vline[1] and vline[1][1] == "- " then
+						found_del_virt = true
+						if #vline > 1 then
+							found_ts_chunks = true
+						end
+					end
+				end
+			end
+		end
+		T.assert_true(found_del_virt,
+			"removed lines should render as '- ' prefixed virt_lines")
+		T.assert_true(found_ts_chunks,
+			"removed-line virt_lines should be syntax-highlighted into "
+				.. "multiple chunks via treesitter")
+
 		cleanup_panels()
 	end,
 
