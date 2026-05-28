@@ -101,6 +101,7 @@ M.state = {
 	hunk_anchors = {},
 	show_inline_comments = true,
 	collapsed_dirs = {},
+	repo_toplevel = nil,
 	-- Legacy compat shape (kept so :Gitflow pr submit-review / external
 	-- callers that read state.* don't crash).
 	file_markers = {},
@@ -109,6 +110,7 @@ M.state = {
 }
 
 local FILE_LIST_HL_NS = vim.api.nvim_create_namespace("gitflow_review_file_list")
+local AUGROUP = vim.api.nvim_create_augroup("GitflowReview", { clear = true })
 
 local FILE_LIST_WIDTH = 44
 local TREE_INDENT = "  "
@@ -676,6 +678,47 @@ local function repo_relative_path(path)
 	return path
 end
 
+--- Inverse of repo_relative_path: given a buffer backed by a real file on
+--- disk, return its path relative to the git toplevel so it can be looked up
+--- in M.state.file_diffs (whose keys are PR filenames, i.e. repo-relative).
+--- Returns nil for scratch/unnamed buffers or files outside the repo.
+---@param bufnr integer
+---@return string|nil
+local function buf_repo_relative(bufnr)
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return nil
+	end
+	-- Only real files: scratch/nofile buffers (e.g. the file list or a
+	-- deleted-file placeholder) have a non-empty buftype.
+	if vim.api.nvim_get_option_value("buftype", { buf = bufnr }) ~= "" then
+		return nil
+	end
+	local name = vim.api.nvim_buf_get_name(bufnr)
+	if not name or name == "" then
+		return nil
+	end
+	local full = vim.fn.fnamemodify(name, ":p")
+
+	local top = M.state.repo_toplevel
+	if not top then
+		local out = vim.fn.systemlist({ "git", "rev-parse", "--show-toplevel" })
+		if vim.v.shell_error ~= 0 or not out or not out[1] then
+			return nil
+		end
+		top = vim.trim(out[1])
+		if top == "" then
+			return nil
+		end
+		top = (vim.fn.fnamemodify(top, ":p"):gsub("/$", ""))
+		M.state.repo_toplevel = top
+	end
+
+	if full:sub(1, #top + 1) == top .. "/" then
+		return full:sub(#top + 2)
+	end
+	return nil
+end
+
 --- Build a scratch buffer that shows a message instead of a real file
 --- (for deleted files or missing paths).
 ---@param path string
@@ -693,6 +736,115 @@ local function open_placeholder_buffer(path, message)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(message, "\n"))
 	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
 	return bufnr
+end
+
+--- Apply the full PR-review overlay to a buffer that displays the
+--- working-tree file at repo-relative `path`: inline diff annotations,
+--- comment boxes, the winbar banner, and the review keymaps.  `winid` is the
+--- window currently showing the buffer (used for cursor jumps + winbar).
+--- Shared by M.open_file (file-list navigation) and the BufWinEnter autocmd
+--- that catches files opened by other means (e.g. Telescope find_files).
+---@param bufnr integer
+---@param path string
+---@param winid integer|nil
+---@param opts table|nil  { jump = boolean }  jump to first hunk (default true)
+local function apply_review_overlay(bufnr, path, winid, opts)
+	opts = opts or {}
+	local file_diff = M.state.file_diffs[path]
+
+	M.state.active_path = path
+	M.state.active_bufnr = bufnr
+
+	local result = inline.apply_annotations(bufnr, file_diff)
+	M.state.hunk_anchors = result.hunk_anchors or {}
+	track_annotated(bufnr)
+
+	if file_diff and file_diff.truncated then
+		notify_warn(
+			("PR diff for %s exceeds the GitHub per-file size limit; "
+			.. "inline annotations are not available for this file."):format(path)
+		)
+	end
+
+	refresh_comments_for_active()
+	set_banner_winbar(winid)
+
+	-- Set up buffer-local keymaps for review actions in the diff pane.
+	local kopts = { buffer = bufnr, silent = true, nowait = true }
+	vim.keymap.set("n", "c", function() M.inline_comment() end, kopts)
+	vim.keymap.set("v", "c", function() M.inline_comment_visual() end, kopts)
+	vim.keymap.set("n", "S", function() M.submit_pending_review() end, kopts)
+	vim.keymap.set("n", "R", function() M.reply_to_thread() end, kopts)
+	vim.keymap.set("n", "<CR>", function() M.view_thread_at_cursor() end, kopts)
+	vim.keymap.set("n", "]c", function() M.next_hunk() end, kopts)
+	vim.keymap.set("n", "[c", function() M.prev_hunk() end, kopts)
+	vim.keymap.set("n", "<leader>i", function() M.toggle_inline_comments() end, kopts)
+	vim.keymap.set("n", "<leader>x", function() M.delete_comment_at_cursor() end, kopts)
+
+	-- Jump to first hunk so the change is immediately on screen.
+	if opts.jump ~= false
+		and winid and vim.api.nvim_win_is_valid(winid)
+		and #M.state.hunk_anchors > 0 then
+		pcall(vim.api.nvim_win_set_cursor, winid,
+			{ M.state.hunk_anchors[1], 0 })
+	end
+
+	-- Track which file index is now active (for next_file / prev_file)
+	for i, f in ipairs(M.state.files) do
+		if f.path == path then
+			M.state.active_file_idx = i
+			break
+		end
+	end
+
+	-- Reveal the active file by expanding its ancestor folders.
+	local parts = vim.split(path, "/", { plain = true })
+	local acc = ""
+	for i = 1, #parts - 1 do
+		acc = acc == "" and parts[i] or (acc .. "/" .. parts[i])
+		M.state.collapsed_dirs[acc] = nil
+	end
+
+	render_file_list()
+end
+
+--- Catch a file opened outside the file list (e.g. Telescope find_files,
+--- :edit, a quickfix jump) that happens to be part of the PR diff, and
+--- decorate it with the review overlay so the inline diff still shows.
+---@param bufnr integer
+function M._maybe_annotate_buffer(bufnr)
+	-- Guard against the recursive BufWinEnter fired by open_file's own :edit.
+	if M._applying then
+		return
+	end
+	if not M.state.diff_winid
+		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		return
+	end
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	-- Already decorated?
+	for _, b in ipairs(M.state.annotated_buffers) do
+		if b == bufnr then
+			return
+		end
+	end
+	-- Only act inside the review tabpage to avoid surprising the user when
+	-- they open the same file in an unrelated tab/window.
+	if M.state.tabpage
+		and vim.api.nvim_get_current_tabpage() ~= M.state.tabpage then
+		return
+	end
+	local rel = buf_repo_relative(bufnr)
+	if not rel or not M.state.file_diffs[rel] then
+		return
+	end
+	local winid = vim.fn.bufwinid(bufnr)
+	if winid == -1 then
+		winid = M.state.diff_winid
+	end
+	apply_review_overlay(bufnr, rel, winid)
 end
 
 ---@param path string
@@ -717,9 +869,12 @@ function M.open_file(path)
 		-- Open the real file via :edit so filetype detection, treesitter,
 		-- and LSP attach normally.  We deliberately do NOT use
 		-- `noautocmd` here — suppressing autocmds skips FileType and
-		-- BufRead* events, which breaks syntax highlighting.
+		-- BufRead* events, which breaks syntax highlighting.  The
+		-- _applying guard stops the BufWinEnter autocmd from racing us.
+		M._applying = true
 		pcall(vim.cmd, "silent edit " .. vim.fn.fnameescape(full_path))
 		bufnr = vim.api.nvim_get_current_buf()
+		M._applying = false
 
 		-- If for any reason filetype wasn't picked up (e.g. the buffer
 		-- was already open via another path), re-run filetype detection.
@@ -738,58 +893,7 @@ function M.open_file(path)
 		vim.api.nvim_win_set_buf(M.state.diff_winid, bufnr)
 	end
 
-	M.state.active_path = path
-	M.state.active_bufnr = bufnr
-
-	local result = inline.apply_annotations(bufnr, file_diff)
-	M.state.hunk_anchors = result.hunk_anchors or {}
-	track_annotated(bufnr)
-
-	if file_diff and file_diff.truncated then
-		notify_warn(
-			("PR diff for %s exceeds the GitHub per-file size limit; "
-			.. "inline annotations are not available for this file."):format(path)
-		)
-	end
-
-	refresh_comments_for_active()
-	set_banner_winbar(M.state.diff_winid)
-
-	-- Set up buffer-local keymaps for review actions in the diff pane.
-	local opts = { buffer = bufnr, silent = true, nowait = true }
-	vim.keymap.set("n", "c", function() M.inline_comment() end, opts)
-	vim.keymap.set("v", "c", function() M.inline_comment_visual() end, opts)
-	vim.keymap.set("n", "S", function() M.submit_pending_review() end, opts)
-	vim.keymap.set("n", "R", function() M.reply_to_thread() end, opts)
-	vim.keymap.set("n", "<CR>", function() M.view_thread_at_cursor() end, opts)
-	vim.keymap.set("n", "]c", function() M.next_hunk() end, opts)
-	vim.keymap.set("n", "[c", function() M.prev_hunk() end, opts)
-	vim.keymap.set("n", "<leader>i", function() M.toggle_inline_comments() end, opts)
-	vim.keymap.set("n", "<leader>x", function() M.delete_comment_at_cursor() end, opts)
-
-	-- Jump to first hunk
-	if #M.state.hunk_anchors > 0 then
-		pcall(vim.api.nvim_win_set_cursor, M.state.diff_winid,
-			{ M.state.hunk_anchors[1], 0 })
-	end
-
-	-- Track which file index is now active (for next_file / prev_file)
-	for i, f in ipairs(M.state.files) do
-		if f.path == path then
-			M.state.active_file_idx = i
-			break
-		end
-	end
-
-	-- Reveal the active file by expanding its ancestor folders.
-	local parts = vim.split(path, "/", { plain = true })
-	local acc = ""
-	for i = 1, #parts - 1 do
-		acc = acc == "" and parts[i] or (acc .. "/" .. parts[i])
-		M.state.collapsed_dirs[acc] = nil
-	end
-
-	render_file_list()
+	apply_review_overlay(bufnr, path, M.state.diff_winid)
 end
 
 --- Toggle the collapsed state of the directory on the cursor line.
@@ -1110,6 +1214,7 @@ function M.open(cfg, pr_number)
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
 	M.state.collapsed_dirs = {}
+	M.state.repo_toplevel = nil
 	M.state.repo_slug = cache.repo_slug()
 
 	-- Restore any cached draft comments BEFORE building the tab so that
@@ -1126,6 +1231,17 @@ function M.open(cfg, pr_number)
 	end
 
 	build_tabpage()
+
+	-- Decorate files opened outside the file list (Telescope, :edit, quickfix)
+	-- with the inline diff overlay when they belong to this PR.
+	vim.api.nvim_clear_autocmds({ group = AUGROUP })
+	vim.api.nvim_create_autocmd("BufWinEnter", {
+		group = AUGROUP,
+		callback = function(ev)
+			M._maybe_annotate_buffer(ev.buf)
+		end,
+	})
+
 	render_file_list()
 	M.refresh()
 end
@@ -1142,6 +1258,8 @@ function M.toggle(cfg)
 end
 
 function M.close()
+	pcall(vim.api.nvim_clear_autocmds, { group = AUGROUP })
+	M._applying = false
 	clear_all_annotations()
 
 	-- Close the tabpage if it's still around.
@@ -1179,6 +1297,7 @@ function M.close()
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
 	M.state.collapsed_dirs = {}
+	M.state.repo_toplevel = nil
 	M.state.repo_slug = nil
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}

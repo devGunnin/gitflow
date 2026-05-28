@@ -316,6 +316,63 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["opening a diff file via :edit (e.g. Telescope) shows annotations"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		-- Simulate Telescope find_files / a plain :edit: open the file
+		-- WITHOUT going through review_panel.open_file. The BufWinEnter
+		-- autocmd should still decorate it with the inline diff overlay.
+		local full = vim.fn.fnamemodify("lua/gitflow/highlights.lua", ":p")
+		vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+		vim.cmd("silent edit " .. vim.fn.fnameescape(full))
+		T.drain_jobs(1000)
+
+		T.assert_equals(review_panel.state.active_path,
+			"lua/gitflow/highlights.lua",
+			"active_path should be set by the autocmd, not just open_file")
+
+		local bufnr = vim.api.nvim_get_current_buf()
+		local marks = vim.api.nvim_buf_get_extmarks(
+			bufnr, inline.DIFF_NS, 0, -1, { details = true }
+		)
+		T.assert_true(#marks > 0,
+			"a file opened via :edit should receive diff annotations")
+
+		-- And the review keymaps should be attached to that buffer.
+		T.assert_keymaps(bufnr, { "c", "S", "<CR>", "]c", "[c" })
+
+		cleanup_panels()
+	end,
+
+	["opening a non-diff file via :edit leaves it untouched"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		-- This file is NOT part of PR #42's diff, so the autocmd must skip it.
+		local full = vim.fn.fnamemodify("README.md", ":p")
+		if vim.fn.filereadable(full) == 1 then
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.cmd("silent edit " .. vim.fn.fnameescape(full))
+			T.drain_jobs(500)
+
+			local bufnr = vim.api.nvim_get_current_buf()
+			local marks = vim.api.nvim_buf_get_extmarks(
+				bufnr, inline.DIFF_NS, 0, -1, {}
+			)
+			T.assert_equals(#marks, 0,
+				"a file outside the PR diff should not be annotated")
+		end
+
+		cleanup_panels()
+	end,
+
 	-- ── Thread discussion popup ────────────────────────────────────────
 
 	["<CR> on a comment line opens the full discussion popup"] = function()
