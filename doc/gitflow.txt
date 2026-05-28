@@ -281,19 +281,31 @@ PR list ~
     q       Close
 
 Review view ~
-    ]f      Jump to next file
-    [f      Jump to previous file
-    ]c      Jump to next hunk
-    [c      Jump to previous hunk
-    a       Approve review
-    x       Request changes
-    c       Inline comment (normal and visual mode)
+    The review opens in its own tabpage: a collapsible file tree on the
+    left, the real working-tree file (with inline PR diff annotations) on
+    the right.  Removed lines are shown as syntax-highlighted virt_lines;
+    comments render as rounded note boxes beneath the line they target.
+
+  File tree (left pane) ~
+    <CR>/o  Open file under cursor, or fold/unfold a folder row
+    <Tab>   Same as <CR>/o
+    za      Toggle the folder under the cursor
+    zR      Unfold all folders
+    zM      Fold all folders
+    ]f      Jump to / open next file
+    [f      Jump to / open previous file
     S       Submit pending review
-    R       Reply to comment thread
-    <leader>t   Toggle thread collapse/expand
-    <leader>b   Back to PR view
     r       Refresh
     q       Close
+
+  Diff pane (right) ~
+    ]c      Jump to next hunk
+    [c      Jump to previous hunk
+    c       Inline comment (normal and visual mode)
+    S       Submit pending review (Comment / Request changes / Approve)
+    R       Reply to comment thread on the current line
+    <leader>i   Toggle inline comment bodies (boxes) on/off
+    <leader>x   Delete draft/comment on the current line
 
 Conflict list ~
     <CR>    Open 3-way conflict view
