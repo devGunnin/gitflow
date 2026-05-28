@@ -182,9 +182,12 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		local bufnr = review_panel.state.file_list_bufnr
 
-		-- Inject a draft so the collapsed folder should advertise it.
+		-- Inject a draft so the collapsed folder should advertise it. Anchor
+		-- it to config.lua so the Drafts section (which lists the draft's
+		-- file) doesn't reintroduce the "highlights.lua" basename we assert
+		-- is hidden by folding.
 		review_panel.state.pending_comments[#review_panel.state.pending_comments + 1] = {
-			id = 1, path = "lua/gitflow/highlights.lua",
+			id = 1, path = "lua/gitflow/config.lua",
 			body = "draft", new_line = 1,
 		}
 
@@ -458,6 +461,24 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_equals(#review_panel.state.pending_comments, 0,
 			"should start with no pending comments")
 
+		-- Comments are only accepted on lines that are part of the PR diff,
+		-- so anchor the cursor to a real new-side line from the parsed hunks.
+		local fd = review_panel.state.file_diffs["lua/gitflow/highlights.lua"]
+		local diff_line
+		for _, h in ipairs(fd.hunks or {}) do
+			for _, l in ipairs(h.lines or {}) do
+				if l.new_line then
+					diff_line = l.new_line
+					break
+				end
+			end
+			if diff_line then
+				break
+			end
+		end
+		T.assert_true(diff_line ~= nil,
+			"fixture PR diff should expose a new-side line to comment on")
+
 		with_temporary_patches({
 			{
 				table = input,
@@ -471,7 +492,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			-- active line.
 			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
 			vim.api.nvim_win_set_cursor(
-				review_panel.state.diff_winid, { 1, 0 })
+				review_panel.state.diff_winid, { diff_line, 0 })
 
 			review_panel.inline_comment()
 			T.drain_jobs(2000)
@@ -627,6 +648,224 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_equals(#review_panel.state.pending_comments, 0,
 			"successful submit should clear pending comments")
 
+		cleanup_panels()
+	end,
+
+	-- ── Off-diff comment guard (prevents the 422 "Line could not be
+	--    resolved" error) ────────────────────────────────────────────────
+
+	["inline_comment on a non-diff line is rejected, not queued"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- Find a buffer line that is NOT part of the PR diff.
+		local fd = review_panel.state.file_diffs["lua/gitflow/highlights.lua"]
+		local in_diff = {}
+		for _, h in ipairs(fd.hunks or {}) do
+			for _, l in ipairs(h.lines or {}) do
+				if l.new_line then
+					in_diff[l.new_line] = true
+				end
+			end
+		end
+		local bufnr = review_panel.state.active_bufnr
+		local n = vim.api.nvim_buf_line_count(bufnr)
+		local off_line
+		for i = 1, n do
+			if not in_diff[i] then
+				off_line = i
+				break
+			end
+		end
+		T.assert_true(off_line ~= nil, "should find an off-diff line")
+
+		with_temporary_patches({
+			{
+				table = input,
+				key = "prompt",
+				value = function(_, on_confirm)
+					on_confirm("comment off the diff")
+				end,
+			},
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(
+				review_panel.state.diff_winid, { off_line, 0 })
+			review_panel.inline_comment()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 0,
+			"a comment on a non-diff line must not be queued")
+
+		cleanup_panels()
+	end,
+
+	["submitting an out-of-diff comment is blocked, not sent to GitHub"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		-- A stale/bogus pending comment whose line is not in the diff.
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				body = "stale comment",
+				new_line = 999999,
+			},
+		}
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = input,
+					key = "prompt",
+					value = function(_, on_confirm)
+						on_confirm("LGTM")
+					end,
+				},
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
+
+			local lines = T.read_file(log_path)
+			local called_reviews_api = false
+			for _, line in ipairs(lines) do
+				if line:find(
+					"api repos/{owner}/{repo}/pulls/42/reviews", 1, true
+				) then
+					called_reviews_api = true
+				end
+			end
+			T.assert_false(called_reviews_api,
+				"an unresolvable comment must block the API call")
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"blocked submit should keep the pending comment for fixing")
+
+		cleanup_panels()
+	end,
+
+	-- ── Drafts section in the file-list pane ───────────────────────────
+
+	["file-list pane lists drafts and flags off-diff ones"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		-- One in-scope draft (line 13 is in the fixture diff) and one off-diff.
+		review_panel.state.pending_comments = {
+			{ id = 1, path = "lua/gitflow/highlights.lua",
+				body = "valid draft", new_line = 13 },
+			{ id = 2, path = "lua/gitflow/highlights.lua",
+				body = "stale draft", new_line = 999999 },
+		}
+		-- Re-render the file list now that drafts exist.
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local lines = T.buf_lines(review_panel.state.file_list_bufnr)
+		local combined = table.concat(lines, "\n")
+		T.assert_contains(combined, "Drafts (2)",
+			"file-list should show a Drafts section with the count")
+		T.assert_contains(combined, "✗1 off-diff",
+			"header should report the off-diff draft count")
+		T.assert_true(
+			review_panel.state._draft_line_map ~= nil
+				and next(review_panel.state._draft_line_map) ~= nil,
+			"a draft line map should be populated")
+
+		cleanup_panels()
+	end,
+
+	["delete_off_diff_drafts removes only out-of-scope drafts"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		review_panel.state.pending_comments = {
+			{ id = 1, path = "lua/gitflow/highlights.lua",
+				body = "valid", new_line = 13 },
+			{ id = 2, path = "lua/gitflow/highlights.lua",
+				body = "stale", new_line = 999999 },
+		}
+
+		with_temporary_patches({
+			{ table = input, key = "confirm",
+				value = function() return true, 1 end },
+		}, function()
+			review_panel.delete_off_diff_drafts()
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"only the off-diff draft should be removed")
+		T.assert_equals(review_panel.state.pending_comments[1].new_line, 13,
+			"the in-scope draft should remain")
+
+		-- delete_off_diff_drafts persists the survivor to disk; clear it so
+		-- later tests that open PR #42 don't rehydrate a stray draft.
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["inline_comment anchors to the diff-window file, not stale active_path"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		-- Open file A, remember its buffer, then open file B (active_path = B).
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+		local hl_buf = review_panel.state.active_bufnr
+		review_panel.open_file("lua/gitflow/config.lua")
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path,
+			"lua/gitflow/config.lua", "active_path should be B after open")
+
+		-- Simulate switching the diff window back to A WITHOUT open_file
+		-- (e.g. Telescope/:bnext): the bug saved the comment against B.
+		vim.api.nvim_win_set_buf(review_panel.state.diff_winid, hl_buf)
+
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(_, on_confirm) on_confirm("note on A") end },
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(
+				review_panel.state.diff_winid, { 13, 0 })
+			review_panel.inline_comment()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"comment should be queued")
+		T.assert_equals(review_panel.state.pending_comments[1].path,
+			"lua/gitflow/highlights.lua",
+			"comment must anchor to the file shown in the diff window (A), "
+				.. "not the stale active_path (B)")
+		T.assert_equals(review_panel.state.pending_comments[1].new_line, 13,
+			"line should come from the same file")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
 		cleanup_panels()
 	end,
 

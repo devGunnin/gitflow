@@ -88,6 +88,7 @@ local function build_default_groups(palette)
 		GitflowReviewCommentBox = { fg = palette.separator_fg },
 		GitflowReviewCommentBody = { link = "Normal" },
 		GitflowReviewDraftBox = { fg = palette.accent_secondary },
+		GitflowReviewDraftOutOfScope = { link = "DiagnosticError" },
 		-- PR review file-tree chrome (folders / counts / decorations)
 		GitflowReviewTreeDir = { fg = palette.accent_primary, bold = true },
 		GitflowReviewTreeGuide = { fg = palette.separator_fg },
