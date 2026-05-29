@@ -1,3 +1,5 @@
+local icons = require("gitflow.icons")
+
 local M = {}
 
 local SEPARATOR_CHAR = "\u{2500}" -- ─ box drawing horizontal
@@ -118,10 +120,12 @@ function M.title(text)
 	return text
 end
 
----Format a section header with count and separator.
+---Format a section header with count and a slim underline.
+---The rule is sized to the header (not the full panel width) so sections read
+---as light, modern underlines rather than heavy full-width dividers.
 ---@param text string  section name
 ---@param count integer|nil  optional item count
----@param opts table|nil  separator width context
+---@param opts table|nil  separator width context (unused; kept for callers)
 ---@return string header, string separator  two lines
 function M.section(text, count, opts)
 	local header
@@ -130,7 +134,7 @@ function M.section(text, count, opts)
 	else
 		header = text
 	end
-	return header, M.separator(opts)
+	return header, M.separator(math.max(8, vim.fn.strdisplaywidth(header)))
 end
 
 ---Format an empty-state placeholder.
@@ -152,6 +156,83 @@ end
 ---@return string
 function M.footer(hints)
 	return hints
+end
+
+---Decorate a float-window title with the Gitflow brand mark and padding.
+---Trims any caller-supplied padding so every panel shares one chrome style:
+---  " <branch-glyph>  Branches "  (Nerd Font)  or  " Branches "  (ASCII).
+---@param text string
+---@return string
+function M.float_title(text)
+	local label = vim.trim(tostring(text or ""))
+	if label == "" then
+		return ""
+	end
+	local brand = icons.get("ui", "brand")
+	if brand ~= "" then
+		return (" %s  %s "):format(brand, label)
+	end
+	return (" %s "):format(label)
+end
+
+---Split a footer hint string into "key action" pairs.
+---Handles both the common double-space layout ("s stage  q close") and
+---bullet/pipe separated layouts ("[1-9] select │ q close").
+---@param hint string
+---@return string[]
+local function split_hint_pairs(hint)
+	-- Normalize explicit separators (│ • ·) to a sentinel, then split.
+	local normalized = tostring(hint or "")
+		:gsub("%s*\u{2502}%s*", "\31")
+		:gsub("%s*\u{2022}%s*", "\31")
+		:gsub("%s*\u{00B7}%s*", "\31")
+
+	local pairs_out = {}
+	for segment in vim.gsplit(normalized, "\31", { plain = true }) do
+		for piece in vim.gsplit(vim.trim(segment), "%s%s+") do
+			local trimmed = vim.trim(piece)
+			if trimmed ~= "" then
+				pairs_out[#pairs_out + 1] = trimmed
+			end
+		end
+	end
+	return pairs_out
+end
+
+---Build highlighted footer chunks for a float window border footer.
+---Keys render in the accent color, descriptions recede into muted text,
+---and pairs are joined by a dim bullet — the modern which-key/lazy look.
+---@param hint string|nil
+---@return table[]|nil  list of {text, hlgroup} chunks, or nil when empty
+function M.footer_chunks(hint)
+	if type(hint) ~= "string" or vim.trim(hint) == "" then
+		return nil
+	end
+
+	local pairs_list = split_hint_pairs(hint)
+	if #pairs_list == 0 then
+		return nil
+	end
+
+	local separator = (" %s "):format(icons.get("ui", "dot"))
+
+	local chunks = { { " ", "GitflowMuted" } }
+	for idx, pair in ipairs(pairs_list) do
+		if idx > 1 then
+			chunks[#chunks + 1] = { separator, "GitflowMuted" }
+		end
+		local key, desc = pair:match("^(%S+)%s+(.*)$")
+		if key then
+			chunks[#chunks + 1] = { key, "GitflowKey" }
+			if desc ~= "" then
+				chunks[#chunks + 1] = { " " .. desc, "GitflowKeyDesc" }
+			end
+		else
+			chunks[#chunks + 1] = { pair, "GitflowKey" }
+		end
+	end
+	chunks[#chunks + 1] = { " ", "GitflowMuted" }
+	return chunks
 end
 
 ---Format key hints as structured pairs for display.

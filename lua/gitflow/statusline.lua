@@ -1,6 +1,7 @@
 local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local git_status = require("gitflow.git.status")
+local icons = require("gitflow.icons")
 
 local M = {}
 
@@ -53,7 +54,16 @@ end
 ---@param dirty boolean
 ---@return string
 local function format_statusline(branch, ahead, behind, has_upstream, dirty)
-	local parts = { branch }
+	-- Prefix a branch glyph when icons resolve to a real Nerd Font symbol;
+	-- the ASCII fallback ("*") would collide with the dirty marker, so we
+	-- only decorate when the glyph is something other than that.
+	local branch_icon = icons.get("branch", "current")
+	local label = branch
+	if branch_icon ~= "" and branch_icon ~= "*" then
+		label = branch_icon .. " " .. branch
+	end
+
+	local parts = { label }
 	if has_upstream then
 		parts[#parts + 1] = ("↑%d ↓%d"):format(ahead, behind)
 	end

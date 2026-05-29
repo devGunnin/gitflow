@@ -892,6 +892,7 @@ function M.open(cfg, entries, on_select)
 		row = row,
 		col = col,
 		border = cfg.ui.float.border,
+		backdrop = false,
 		title = "  Gitflow  ",
 		title_pos = cfg.ui.float.title_pos,
 		footer = cfg.ui.float.footer
@@ -907,6 +908,7 @@ function M.open(cfg, entries, on_select)
 		row = row + prompt_height + 1,
 		col = col,
 		border = cfg.ui.float.border,
+		backdrop = false,
 		title = "  Command Palette  ",
 		title_pos = cfg.ui.float.title_pos,
 		footer = cfg.ui.float.footer

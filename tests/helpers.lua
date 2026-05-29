@@ -126,7 +126,15 @@ end
 ---@return boolean
 function M.is_float(winid)
 	local cfg = vim.api.nvim_win_get_config(winid)
-	return cfg.relative ~= nil and cfg.relative ~= ""
+	if cfg.relative == nil or cfg.relative == "" then
+		return false
+	end
+	-- Decorative Gitflow backdrop windows (drawn behind panels for modal
+	-- dimming) are not content floats; exclude them so float-finding helpers
+	-- still resolve the real panel window.
+	local bufnr = vim.api.nvim_win_get_buf(winid)
+	local ft = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+	return ft ~= "gitflowbackdrop"
 end
 
 --- Find all floating windows.

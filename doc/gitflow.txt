@@ -416,13 +416,13 @@ Palette values are defined in `lua/gitflow/highlights.lua` and can be
 referenced from user highlight overrides:
 
     Name                Dark         Light        Used by ~
-    accent_primary      #56B6C2      #0E7490      Border, Title, Header, Footer, icons
-    accent_secondary    #DCA561      #B5651D      Palette header bar background
-    separator_fg        #3E4452      #C8CCD4      Separator lines
-    backdrop_bg         #000000      #E8E8E8      Palette backdrop overlay
-    dark_fg             #222222      #222222      Palette header bar text
-    log_hash            #E5C07B      #986801      Log commit SHA, diff file headers
-    stash_ref           #C678DD      #A626A4      Stash ref, diff hunk headers
+    accent_primary      #74C7EC      #209FB5      Border, Title, Header, Footer, keys, icons
+    accent_secondary    #F9E2AF      #DF8E1D      Counts, palette header bar background
+    separator_fg        #45475A      #BCC0CC      Separator lines
+    backdrop_bg         #11111B      #DCE0E8      Palette backdrop overlay
+    dark_fg             #181825      #11111B      Palette header bar text
+    log_hash            #FAB387      #FE640B      Log commit SHA, diff file headers
+    stash_ref           #CBA6F7      #8839EF      Stash ref, diff hunk headers
 
 To change the accent colors for all related groups, override each
 group individually: >lua
@@ -484,21 +484,29 @@ Accent-colored groups (dark-background defaults shown below; light mode uses
 `PALETTE_LIGHT` values from the table above):
 
     Group                       Default Attrs ~
-    GitflowBorder               fg=#56B6C2
-    GitflowTitle                fg=#56B6C2, bold
-    GitflowHeader               fg=#56B6C2, bold
-    GitflowFooter               fg=#56B6C2, italic
-    GitflowSeparator            fg=#3E4452
-    GitflowFormLabel            fg=#56B6C2, bold
-    GitflowDiffFileHeader       fg=#E5C07B, bold
-    GitflowDiffHunkHeader       fg=#C678DD, bold
-    GitflowDiffLineNr           fg=#5C6370
-    GitflowLogHash              fg=#E5C07B, bold
-    GitflowStashRef             fg=#C678DD, bold
-    GitflowPaletteHeaderBar     fg=#222222, bg=#DCA561, bold
-    GitflowPaletteHeaderIcon    fg=#56B6C2, bg=#DCA561, bold
-    GitflowPaletteEntryIcon     fg=#56B6C2
-    GitflowPaletteBackdrop      bg=#000000
+    GitflowBorder               fg=#74C7EC
+    GitflowTitle                fg=#74C7EC, bold
+    GitflowHeader               fg=#74C7EC, bold
+    GitflowFooter               fg=#74C7EC, italic
+    GitflowSeparator            fg=#45475A
+    GitflowKey                  fg=#74C7EC, bold      (footer keycaps)
+    GitflowKeyDesc              Comment               (footer descriptions)
+    GitflowCount                fg=#F9E2AF, bold      (section counts)
+    GitflowMuted                Comment               (dim chrome / separators)
+    GitflowBackdrop             bg=#11111B            (dimmed float backdrop)
+    GitflowDashLogo             fg=#74C7EC, bold      (dashboard wordmark)
+    GitflowDashTagline          Comment               (dashboard tagline)
+    GitflowDashAction           fg=#F9E2AF, bold      (dashboard action labels)
+    GitflowFormLabel            fg=#74C7EC, bold
+    GitflowDiffFileHeader       fg=#FAB387, bold
+    GitflowDiffHunkHeader       fg=#CBA6F7, bold
+    GitflowDiffLineNr           fg=#6C7086
+    GitflowLogHash              fg=#FAB387, bold
+    GitflowStashRef             fg=#CBA6F7, bold
+    GitflowPaletteHeaderBar     fg=#181825, bg=#F9E2AF, bold
+    GitflowPaletteHeaderIcon    fg=#74C7EC, bg=#F9E2AF, bold
+    GitflowPaletteEntryIcon     fg=#74C7EC
+    GitflowPaletteBackdrop      bg=#11111B
 
 To make these groups track your colorscheme instead of using hardcoded
 colors, override them with link-based definitions: >lua

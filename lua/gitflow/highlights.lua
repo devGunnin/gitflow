@@ -1,33 +1,36 @@
 local M = {}
 
 --- Dark palette — used when vim.o.background == "dark" (default).
+--- A cohesive, contemporary scheme: a luminous sapphire keeps Gitflow's
+--- cyan brand identity while peach/mauve accents and a soft surface
+--- separator give panels a polished, modern feel.
 ---@type table<string, string>
 M.PALETTE_DARK = {
-	accent_primary = "#56B6C2",
-	accent_secondary = "#DCA561",
-	separator_fg = "#3E4452",
-	backdrop_bg = "#000000",
-	dark_fg = "#222222",
-	log_hash = "#E5C07B",
-	stash_ref = "#C678DD",
-	diff_file_header = "#E5C07B",
-	diff_hunk_header = "#C678DD",
-	diff_line_nr = "#5C6370",
+	accent_primary = "#74C7EC",   -- sapphire — chrome, borders, titles
+	accent_secondary = "#F9E2AF", -- soft gold — counts, header bars
+	separator_fg = "#45475A",     -- muted surface — quiet dividers
+	backdrop_bg = "#11111B",      -- deep crust — modal backdrop
+	dark_fg = "#181825",          -- near-black — text on accent fills
+	log_hash = "#FAB387",         -- peach — commit hashes
+	stash_ref = "#CBA6F7",        -- mauve — refs / stashes
+	diff_file_header = "#FAB387", -- peach — diff file headers
+	diff_hunk_header = "#CBA6F7", -- mauve — diff hunk headers
+	diff_line_nr = "#6C7086",     -- overlay — diff line numbers
 }
 
 --- Light palette — used when vim.o.background == "light".
 ---@type table<string, string>
 M.PALETTE_LIGHT = {
-	accent_primary = "#0E7490",
-	accent_secondary = "#B5651D",
-	separator_fg = "#C8CCD4",
-	backdrop_bg = "#E8E8E8",
-	dark_fg = "#222222",
-	log_hash = "#986801",
-	stash_ref = "#A626A4",
-	diff_file_header = "#986801",
-	diff_hunk_header = "#A626A4",
-	diff_line_nr = "#999999",
+	accent_primary = "#209FB5",   -- latte sapphire
+	accent_secondary = "#DF8E1D", -- latte gold
+	separator_fg = "#BCC0CC",     -- latte surface
+	backdrop_bg = "#DCE0E8",      -- latte crust
+	dark_fg = "#11111B",          -- near-black text on accent fills
+	log_hash = "#FE640B",         -- latte peach
+	stash_ref = "#8839EF",        -- latte mauve
+	diff_file_header = "#FE640B",
+	diff_hunk_header = "#8839EF",
+	diff_line_nr = "#9CA0B0",
 }
 
 --- Active palette — set by setup() based on vim.o.background.
@@ -106,6 +109,17 @@ local function build_default_groups(palette)
 		GitflowHeader = { fg = palette.accent_primary, bold = true },
 		GitflowFooter = { fg = palette.accent_primary, italic = true },
 		GitflowSeparator = { fg = palette.separator_fg },
+		-- Shared UI accents — footer keycaps, descriptions, section counts
+		GitflowMuted = { link = "Comment" },
+		GitflowKey = { fg = palette.accent_primary, bold = true },
+		GitflowKeyDesc = { link = "Comment" },
+		GitflowCount = { fg = palette.accent_secondary, bold = true },
+		-- Dimmed backdrop drawn behind every floating panel for modal focus
+		GitflowBackdrop = { bg = palette.backdrop_bg },
+		-- Dashboard chrome
+		GitflowDashLogo = { fg = palette.accent_primary, bold = true },
+		GitflowDashTagline = { link = "Comment" },
+		GitflowDashAction = { fg = palette.accent_secondary, bold = true },
 		GitflowNormal = { link = "NormalFloat" },
 		GitflowPaletteSelection = { link = "PmenuSel" },
 		GitflowPaletteHeader = { bold = true, link = "Type" },

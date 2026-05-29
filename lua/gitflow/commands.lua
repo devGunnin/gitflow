@@ -36,6 +36,7 @@ local git_conflict = require("gitflow.git.conflict")
 local inline_blame = require("gitflow.inline_blame")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
+local icons = require("gitflow.icons")
 
 ---@class GitflowSubcommand
 ---@field description string
@@ -47,7 +48,9 @@ local assignee_completion = require("gitflow.completion.assignees")
 ---@field panel_window integer|nil
 
 local M = {}
-local MAIN_FLOAT_FOOTER = ":Gitflow status  :Gitflow branch  :Gitflow prs  :Gitflow issues"
+-- Subcommand names shown as a launcher row in the dashboard footer. Single
+-- tokens render as accent keycaps via the shared footer-chunk styling.
+local MAIN_FLOAT_FOOTER = "status  branch  prs  issues  log  palette"
 
 ---@type table<string, GitflowSubcommand>
 M.subcommands = {}
@@ -88,18 +91,283 @@ local function result_message(result, fallback)
 	return output
 end
 
+local DASH_NS = vim.api.nvim_create_namespace("gitflow_dashboard")
+
+-- Action grid for the dashboard home screen. Each row maps a single keypress
+-- to a subcommand dispatched via M.dispatch, with an icon + label.
+local DASH_ACTIONS = {
+	{ key = "s", icon = "status", label = "Status", cmd = "status" },
+	{ key = "d", icon = "diff", label = "Diff", cmd = "diff" },
+	{ key = "l", icon = "log", label = "Log", cmd = "log" },
+	{ key = "b", icon = "branch", label = "Branches", cmd = "branch" },
+	{ key = "S", icon = "stash", label = "Stash", cmd = "stash" },
+	{ key = "w", icon = "branch", label = "Worktrees", cmd = "worktree" },
+	{ key = "r", icon = "pr", label = "Pull Requests", cmd = "pr" },
+	{ key = "i", icon = "issue", label = "Issues", cmd = "issue" },
+	{ key = "a", icon = "actions", label = "CI / Actions", cmd = "actions" },
+	{ key = "P", icon = "palette", label = "Palette", cmd = "palette" },
+}
+
+---Center text within width; returns the padded line and the leading pad width
+---in bytes (spaces are single-byte, so this doubles as a column offset).
+---@param text string
+---@param width integer
+---@return string, integer
+local function dash_center(text, width)
+	local display = vim.fn.strdisplaywidth(text)
+	local pad = math.max(0, math.floor((width - display) / 2))
+	return string.rep(" ", pad) .. text, pad
+end
+
+---Build the dashboard lines + highlight ranges.
+---@param info table|nil  live repo summary, or nil while loading
+---@param width integer
+---@return string[], table[]
+local function build_dashboard(info, width)
+	local lines, hls = {}, {}
+	local function add(line)
+		lines[#lines + 1] = line or ""
+		return #lines - 1
+	end
+	local function hl(row, col_start, col_end, group)
+		hls[#hls + 1] = { row = row, a = col_start, b = col_end, g = group }
+	end
+
+	add("")
+	add("")
+
+	-- Brand wordmark + tagline
+	local brand = icons.get("ui", "brand")
+	local wordmark = (brand ~= "" and (brand .. "  ") or "") .. "Gitflow"
+	local logo_line, logo_pad = dash_center(wordmark, width)
+	hl(add(logo_line), logo_pad, -1, "GitflowDashLogo")
+	local tag_line, tag_pad = dash_center("the git cockpit for neovim", width)
+	hl(add(tag_line), tag_pad, -1, "GitflowDashTagline")
+	add("")
+
+	-- Live repository summary, color-coded by segment
+	if info then
+		local segs = {}
+		local branch_icon = icons.get("branch", "current")
+		local branch_text = info.branch or "(detached)"
+		if branch_icon ~= "" and branch_icon ~= "*" then
+			branch_text = branch_icon .. " " .. branch_text
+		end
+		segs[#segs + 1] = { branch_text, "GitflowHeader" }
+		if info.has_upstream then
+			segs[#segs + 1] = { ("↑%d ↓%d"):format(info.ahead, info.behind), "GitflowCount" }
+		end
+		segs[#segs + 1] = { ("+%d"):format(info.staged), "GitflowAdded" }
+		segs[#segs + 1] = { ("~%d"):format(info.unstaged), "GitflowModified" }
+		segs[#segs + 1] = { ("?%d"):format(info.untracked), "GitflowUntracked" }
+		if info.stash > 0 then
+			segs[#segs + 1] = { ("\u{2691}%d"):format(info.stash), "GitflowStashRef" }
+		end
+
+		local sep = "   "
+		local parts = {}
+		for _, seg in ipairs(segs) do
+			parts[#parts + 1] = seg[1]
+		end
+		local summary = table.concat(parts, sep)
+		local line, pad = dash_center(summary, width)
+		local row = add(line)
+		local offset = pad
+		for _, seg in ipairs(segs) do
+			hl(row, offset, offset + #seg[1], seg[2])
+			offset = offset + #seg[1] + #sep
+		end
+	else
+		local line, pad = dash_center("loading repository…", width)
+		hl(add(line), pad, -1, "GitflowDashTagline")
+	end
+
+	add("")
+	add("")
+
+	-- Two-column action grid, centered as a block
+	local half = math.ceil(#DASH_ACTIONS / 2)
+	local rows = {}
+	for i = 1, half do
+		rows[i] = { DASH_ACTIONS[i], DASH_ACTIONS[i + half] }
+	end
+	-- Column width = widest "key  icon label" cell.
+	local function cell_text(action)
+		if not action then
+			return ""
+		end
+		local icon = icons.get("palette", action.icon)
+		local glyph = icon ~= "" and (icon .. " ") or ""
+		return ("%s   %s%s"):format(action.key, glyph, action.label)
+	end
+	local col_w = 0
+	for _, action in ipairs(DASH_ACTIONS) do
+		col_w = math.max(col_w, vim.fn.strdisplaywidth(cell_text(action)))
+	end
+	local col_gap = 6
+	local block_w = col_w * 2 + col_gap
+	local block_pad = math.max(0, math.floor((width - block_w) / 2))
+
+	for _, pair in ipairs(rows) do
+		local left, right = pair[1], pair[2]
+		local left_text = cell_text(left)
+		local left_disp = vim.fn.strdisplaywidth(left_text)
+		local right_text = cell_text(right)
+		local line = string.rep(" ", block_pad)
+			.. left_text
+			.. string.rep(" ", col_w - left_disp + col_gap)
+			.. right_text
+		local row = add(line)
+		-- Highlight the leading key glyph of each cell.
+		local left_key_at = block_pad
+		hl(row, left_key_at, left_key_at + #left.key, "GitflowKey")
+		hl(row, left_key_at + #left.key, left_key_at + #left_text, "GitflowDashAction")
+		if right then
+			local right_at = block_pad + #left_text
+				+ (col_w - left_disp + col_gap)
+			hl(row, right_at, right_at + #right.key, "GitflowKey")
+			hl(row, right_at + #right.key, right_at + #right_text, "GitflowDashAction")
+		end
+	end
+
+	add("")
+	return lines, hls
+end
+
+---Render the dashboard buffer with current (possibly nil) repo info.
+---@param cfg GitflowConfig
+---@param info table|nil
+local function render_dashboard(cfg, info)
+	local bufnr = M.state.panel_buffer
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	local width = ui.render.content_width({
+		winid = M.state.panel_window,
+		bufnr = bufnr,
+		min_width = 40,
+	})
+	local lines, hls = build_dashboard(info, width)
+
+	ui.buffer.update(bufnr, lines)
+	vim.api.nvim_buf_clear_namespace(bufnr, DASH_NS, 0, -1)
+	for _, h in ipairs(hls) do
+		pcall(vim.api.nvim_buf_add_highlight, bufnr, DASH_NS, h.g, h.row, h.a, h.b)
+	end
+end
+
+---Fetch a live repository summary for the dashboard, then invoke cb(info).
+---@param cb fun(info: table)
+local function gather_dashboard_info(cb)
+	local info = {
+		branch = nil,
+		ahead = 0,
+		behind = 0,
+		has_upstream = false,
+		staged = 0,
+		unstaged = 0,
+		untracked = 0,
+		stash = 0,
+	}
+	git_branch.current({}, function(_, branch)
+		info.branch = branch and branch ~= "" and branch or nil
+		git_status.fetch({}, function(_, _, grouped)
+			if grouped then
+				info.staged = #grouped.staged
+				info.unstaged = #grouped.unstaged
+				info.untracked = #grouped.untracked
+			end
+			git.git(
+				{ "rev-list", "--left-right", "--count", "@{upstream}...HEAD" },
+				{},
+				function(res)
+					if res.code == 0 then
+						local left, right =
+							vim.trim(res.stdout or ""):match("^(%d+)%s+(%d+)$")
+						if left and right then
+							info.behind = tonumber(left)
+							info.ahead = tonumber(right)
+							info.has_upstream = true
+						end
+					end
+					git_stash.list({}, function(_, entries)
+						if type(entries) == "table" then
+							info.stash = #entries
+						end
+						cb(info)
+					end)
+				end
+			)
+		end)
+	end)
+end
+
+---Refresh the dashboard's live summary if the main panel is open.
+function M.refresh_dashboard()
+	if not M.state.panel_buffer
+		or not vim.api.nvim_buf_is_valid(M.state.panel_buffer)
+	then
+		return
+	end
+	local cfg = config.current
+	gather_dashboard_info(function(info)
+		vim.schedule(function()
+			render_dashboard(cfg, info)
+		end)
+	end)
+end
+
+---Dismiss the dashboard window/buffer (and its backdrop) without touching the
+---other panels, so a launched action replaces the dashboard cleanly.
+local function dismiss_dashboard()
+	if M.state.panel_window then
+		ui.window.close(M.state.panel_window)
+	end
+	if M.state.panel_buffer then
+		ui.buffer.teardown(M.state.panel_buffer)
+	end
+	M.state.panel_window = nil
+	M.state.panel_buffer = nil
+end
+
+---@param cfg GitflowConfig
+---@param bufnr integer
+local function apply_dashboard_keymaps(cfg, bufnr)
+	local opts = { buffer = bufnr, silent = true, nowait = true }
+	for _, action in ipairs(DASH_ACTIONS) do
+		vim.keymap.set("n", action.key, function()
+			dismiss_dashboard()
+			M.dispatch({ action.cmd }, cfg)
+		end, opts)
+	end
+	vim.keymap.set("n", "R", function()
+		M.refresh_dashboard()
+	end, opts)
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			M.dispatch({ "close" }, cfg)
+		end, opts)
+	end
+end
+
 ---@param cfg GitflowConfig
 local function open_panel(cfg)
+	-- Idempotent: focus and refresh an already-open dashboard rather than
+	-- stranding the previous window (and its backdrop).
+	if M.state.panel_window
+		and vim.api.nvim_win_is_valid(M.state.panel_window)
+	then
+		vim.api.nvim_set_current_win(M.state.panel_window)
+		M.refresh_dashboard()
+		return
+	end
+
 	local bufnr = ui.buffer.create("main", {
 		filetype = "gitflow",
-		lines = {
-			"Gitflow",
-			"",
-			"Plugin skeleton initialized.",
-			"Run :Gitflow status to open Stage 2 status panel.",
-		},
+		lines = { "" },
 	})
 	M.state.panel_buffer = bufnr
+	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
 
 	if cfg.ui.default_layout == "float" then
 		M.state.panel_window = ui.window.open_float({
@@ -116,18 +384,21 @@ local function open_panel(cfg)
 				M.state.panel_window = nil
 			end,
 		})
-		return
+	else
+		M.state.panel_window = ui.window.open_split({
+			name = "main",
+			bufnr = bufnr,
+			orientation = cfg.ui.split.orientation,
+			size = cfg.ui.split.size,
+			on_close = function()
+				M.state.panel_window = nil
+			end,
+		})
 	end
 
-	M.state.panel_window = ui.window.open_split({
-		name = "main",
-		bufnr = bufnr,
-		orientation = cfg.ui.split.orientation,
-		size = cfg.ui.split.size,
-		on_close = function()
-			M.state.panel_window = nil
-		end,
-	})
+	apply_dashboard_keymaps(cfg, bufnr)
+	render_dashboard(cfg, nil)
+	M.refresh_dashboard()
 end
 
 ---@param output string
@@ -950,14 +1221,7 @@ local function register_builtin_subcommands(cfg)
 	M.subcommands.refresh = {
 		description = "Refresh main/status panel content",
 		run = function()
-			local bufnr = M.state.panel_buffer or ui.buffer.get("main")
-			if bufnr then
-				ui.buffer.update(bufnr, {
-					"Gitflow",
-					"",
-					("Last refresh: %s"):format(os.date("%Y-%m-%d %H:%M:%S")),
-				})
-			end
+			M.refresh_dashboard()
 
 			if status_panel.is_open() then
 				status_panel.refresh()

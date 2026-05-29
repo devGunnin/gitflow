@@ -113,12 +113,31 @@ local winid = window.open_float({
 local win_cfg = vim.api.nvim_win_get_config(winid)
 assert_equals(win_cfg.title_pos, "right", "open_float should pass title_pos")
 assert_equals(win_cfg.footer_pos, "left", "open_float should pass footer_pos")
+-- open_float now owns panel chrome: titles are branded/padded and string
+-- footers are tokenized into highlighted key/description chunks. Both still
+-- carry the caller's text, so assert on the joined chunk content.
+local function chunk_text(chunks)
+	if type(chunks) == "string" then
+		return chunks
+	end
+	if type(chunks) ~= "table" then
+		return tostring(chunks)
+	end
+	local parts = {}
+	for _, chunk in ipairs(chunks) do
+		parts[#parts + 1] = type(chunk) == "table"
+			and tostring(chunk[1] or "") or tostring(chunk)
+	end
+	return table.concat(parts, "")
+end
 assert_true(
-	type(win_cfg.title) == "table" and win_cfg.title[1][1] == "Window Title",
+	type(win_cfg.title) == "table"
+		and chunk_text(win_cfg.title):find("Window Title", 1, true) ~= nil,
 	"title text should be set"
 )
 assert_true(
-	type(win_cfg.footer) == "table" and win_cfg.footer[1][1] == "Footer Hints",
+	type(win_cfg.footer) == "table"
+		and chunk_text(win_cfg.footer):find("Footer Hints", 1, true) ~= nil,
 	"footer text should be set on Neovim 0.10+"
 )
 local winhighlight = vim.api.nvim_get_option_value("winhighlight", { win = winid })

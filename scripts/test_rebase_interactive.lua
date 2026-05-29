@@ -342,8 +342,8 @@ test("GitflowRebaseHash highlight group is defined", function()
 	)
 	assert_equals(
 		highlights.DEFAULT_GROUPS.GitflowRebaseHash.fg,
-		"#E5C07B",
-		"GitflowRebaseHash fg should be gold"
+		highlights.PALETTE.log_hash,
+		"GitflowRebaseHash fg should match the brand hash color"
 	)
 end)
 

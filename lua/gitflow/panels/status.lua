@@ -54,15 +54,53 @@ M.state = {
 	active = false,
 }
 
+---Prefix a section header with the accent chevron glyph (when icons resolve).
+---@param text string
+---@return string
+local function section_header_text(text)
+	local icon = icons.get("ui", "section")
+	if icon ~= "" then
+		return ("%s %s"):format(icon, text)
+	end
+	return text
+end
+
+-- Resolve nvim-web-devicons once, lazily. When the user has it installed, file
+-- rows gain colored filetype glyphs; otherwise rows render exactly as before.
+local devicons_mod
+local devicons_checked = false
+local function get_devicons()
+	if not devicons_checked then
+		devicons_checked = true
+		local ok, mod = pcall(require, "nvim-web-devicons")
+		devicons_mod = ok and mod or nil
+	end
+	return devicons_mod
+end
+
+---@param path string
+---@return string|nil glyph, string|nil hl_group
+local function file_icon(path)
+	local devicons = get_devicons()
+	if not devicons then
+		return nil, nil
+	end
+	local name = vim.fn.fnamemodify(path, ":t")
+	local ext = vim.fn.fnamemodify(path, ":e")
+	local glyph, group = devicons.get_icon(name, ext, { default = true })
+	return glyph, group
+end
+
 ---@param title string
 ---@param entries GitflowStatusEntry[]
 ---@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param diff_staged boolean
 ---@param render_opts table
-local function append_file_section(title, entries, lines, line_entries, diff_staged, render_opts)
+---@param icon_hls table[]  collects {row, a, b, group} devicon color ranges
+local function append_file_section(title, entries, lines, line_entries, diff_staged, render_opts, icon_hls)
 	local section_title, section_separator = ui_render.section(title, nil, render_opts)
-	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_header_text(section_title)
 	lines[#lines + 1] = section_separator
 	if #entries == 0 then
 		lines[#lines + 1] = ui_render.empty()
@@ -76,13 +114,27 @@ local function append_file_section(title, entries, lines, line_entries, diff_sta
 		if entry.untracked then
 			icon = icons.get("git_state", "untracked")
 		end
-		local line = ui_render.entry(("%s %s  %s"):format(icon, status, entry.path))
+		local glyph, glyph_group = file_icon(entry.path)
+		local glyph_prefix = glyph and (glyph .. " ") or ""
+		local line = ui_render.entry(
+			("%s %s  %s%s"):format(icon, status, glyph_prefix, entry.path)
+		)
 		lines[#lines + 1] = line
-		line_entries[#lines] = {
+		local row = #lines
+		line_entries[row] = {
 			kind = "file",
 			entry = entry,
 			diff_staged = diff_staged,
 		}
+		if glyph and glyph_group then
+			local col = #ui_render.entry(("%s %s  "):format(icon, status))
+			icon_hls[#icon_hls + 1] = {
+				row = row,
+				a = col,
+				b = col + #glyph,
+				group = glyph_group,
+			}
+		end
 	end
 	lines[#lines + 1] = ""
 end
@@ -95,7 +147,7 @@ end
 ---@param render_opts table
 local function append_commit_section(title, entries, lines, line_entries, pushable, render_opts)
 	local section_title, section_separator = ui_render.section(title, nil, render_opts)
-	lines[#lines + 1] = section_title
+	lines[#lines + 1] = section_header_text(section_title)
 	lines[#lines + 1] = section_separator
 	if #entries == 0 then
 		lines[#lines + 1] = ui_render.empty()
@@ -329,23 +381,19 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	}
 	local lines = ui_render.panel_header("Gitflow Status", render_opts)
 	local line_entries = {}
+	local icon_hls = {}
 
-	append_file_section(("Staged (%d)"):format(#grouped.staged), grouped.staged, lines, line_entries, true, render_opts)
+	append_file_section(
+		("Staged (%d)"):format(#grouped.staged),
+		grouped.staged, lines, line_entries, true, render_opts, icon_hls
+	)
 	append_file_section(
 		("Unstaged (%d)"):format(#grouped.unstaged),
-		grouped.unstaged,
-		lines,
-		line_entries,
-		false,
-		render_opts
+		grouped.unstaged, lines, line_entries, false, render_opts, icon_hls
 	)
 	append_file_section(
 		("Untracked (%d)"):format(#grouped.untracked),
-		grouped.untracked,
-		lines,
-		line_entries,
-		false,
-		render_opts
+		grouped.untracked, lines, line_entries, false, render_opts, icon_hls
 	)
 
 	if upstream_name then
@@ -365,7 +413,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false, render_opts)
 	else
 		local upstream_title, upstream_sep = ui_render.section(STATUS_NO_UPSTREAM_HEADER, nil, render_opts)
-		lines[#lines + 1] = upstream_title
+		lines[#lines + 1] = section_header_text(upstream_title)
 		lines[#lines + 1] = upstream_sep
 		lines[#lines + 1] = ui_render.entry("No upstream branch — push will set it automatically")
 		lines[#lines + 1] = ""
@@ -386,18 +434,22 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 
 	local entry_highlights = {}
 
-	-- Mark section headers
-	for line_no, line in ipairs(lines) do
+	-- Mark section headers structurally: a header is any non-separator line
+	-- immediately followed by a separator. This stays correct regardless of
+	-- the chevron glyph prefixed to each header. Line 1 is the panel title
+	-- (handled separately by apply_panel_highlights), so start at line 2.
+	local header_lines = {}
+	for line_no = 2, #lines do
+		local line = lines[line_no]
+		local next_line = lines[line_no + 1]
 		if
-			vim.startswith(line, "Staged")
-			or vim.startswith(line, "Unstaged")
-			or vim.startswith(line, "Untracked")
-			or vim.startswith(line, "Outgoing")
-			or vim.startswith(line, "Incoming")
-			or vim.startswith(line, "Commit History")
-			or line == STATUS_NO_UPSTREAM_HEADER
+			line ~= ""
+			and not ui_render.is_separator(line)
+			and next_line
+			and ui_render.is_separator(next_line)
 		then
 			entry_highlights[line_no] = "GitflowHeader"
+			header_lines[#header_lines + 1] = line_no
 		end
 	end
 
@@ -418,6 +470,25 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		footer_line = #lines,
 		entry_highlights = entry_highlights,
 	})
+
+	-- Accent the "(N)" count in each section header so totals pop.
+	for _, line_no in ipairs(header_lines) do
+		local first, last = lines[line_no]:find("%(%d+%)")
+		if first then
+			vim.api.nvim_buf_add_highlight(
+				bufnr, STATUS_HIGHLIGHT_NS, "GitflowCount",
+				line_no - 1, first - 1, last
+			)
+		end
+	end
+
+	-- Color filetype glyphs (nvim-web-devicons), layered over the row group.
+	for _, h in ipairs(icon_hls) do
+		pcall(
+			vim.api.nvim_buf_add_highlight,
+			bufnr, STATUS_HIGHLIGHT_NS, h.group, h.row - 1, h.a, h.b
+		)
+	end
 end
 
 ---@param err string|nil

@@ -316,8 +316,8 @@ test("GitflowCherryPickBranch highlight group is defined", function()
 	)
 	assert_equals(
 		highlights.DEFAULT_GROUPS.GitflowCherryPickBranch.fg,
-		"#C678DD",
-		"GitflowCherryPickBranch fg should be purple"
+		highlights.PALETTE.stash_ref,
+		"GitflowCherryPickBranch fg should match the brand ref color"
 	)
 	assert_true(
 		highlights.DEFAULT_GROUPS.GitflowCherryPickBranch.bold == true,
@@ -333,8 +333,8 @@ test("GitflowCherryPickHash highlight group is defined", function()
 	)
 	assert_equals(
 		highlights.DEFAULT_GROUPS.GitflowCherryPickHash.fg,
-		"#E5C07B",
-		"GitflowCherryPickHash fg should be gold"
+		highlights.PALETTE.log_hash,
+		"GitflowCherryPickHash fg should match the brand hash color"
 	)
 	assert_true(
 		highlights.DEFAULT_GROUPS.GitflowCherryPickHash.bold == true,
@@ -1700,20 +1700,22 @@ test("float footer includes B keybind hint", function()
 		local win_cfg =
 			vim.api.nvim_win_get_config(winid)
 		local footer = win_cfg.footer
+		-- Footers are tokenized into highlighted key/description chunks,
+		-- so join the chunk text before matching the "B into branch" hint.
+		local footer_str
 		if type(footer) == "string" then
-			has_B_hint = footer:find("B", 1, true)
-				and footer:find("branch", 1, true)
+			footer_str = footer
 		elseif type(footer) == "table" then
+			local parts = {}
 			for _, part in ipairs(footer) do
-				local text = type(part) == "table"
-					and part[1] or tostring(part)
-				if text:find("B", 1, true)
-					and text:find("branch", 1, true)
-				then
-					has_B_hint = true
-					break
-				end
+				parts[#parts + 1] = type(part) == "table"
+					and tostring(part[1] or "") or tostring(part)
 			end
+			footer_str = table.concat(parts, "")
+		end
+		if footer_str then
+			has_B_hint = footer_str:find("B", 1, true)
+				and footer_str:find("branch", 1, true)
 		end
 	end
 

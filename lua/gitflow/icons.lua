@@ -40,6 +40,10 @@ local NF = {
 	palette_git = "\u{f418}",      -- nf-oct-git_branch
 	palette_github = "\u{f408}",   -- nf-oct-mark_github
 	palette_ui = "\u{f013}",       -- nf-fa-gear
+	-- shared ui chrome
+	brand = "\u{f418}",            -- nf-oct-git_branch (Gitflow mark)
+	section = "\u{f0142}",         -- nf-md-chevron_right (section caret)
+	dot = "\u{2022}",              -- • bullet / footer separator
 }
 
 ---@type table<string, table<string, {nerd: string, ascii: string}>>
@@ -112,6 +116,11 @@ local registry = {
 		notifications = { nerd = NF.conflict, ascii = "N" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
+	},
+	ui = {
+		brand = { nerd = NF.brand, ascii = "" },
+		section = { nerd = NF.section, ascii = "▸" },
+		dot = { nerd = NF.dot, ascii = "·" },
 	},
 }
 

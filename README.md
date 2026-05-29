@@ -290,10 +290,10 @@ Gitflow defines two kinds of highlight groups:
 - **Accent-colored** groups (e.g. `GitflowBorder`, `GitflowTitle`,
   `GitflowDiffFileHeader`) that use a built-in palette selected by
   `vim.o.background`:
-  - dark defaults (`PALETTE_DARK`): cyan `#56B6C2`, gold `#DCA561`,
-    purple `#C678DD`
-  - light defaults (`PALETTE_LIGHT`): cyan `#0E7490`, gold `#B5651D`,
-    purple `#A626A4`
+  - dark defaults (`PALETTE_DARK`): sapphire `#74C7EC`, gold `#F9E2AF`,
+    mauve `#CBA6F7`, peach `#FAB387`
+  - light defaults (`PALETTE_LIGHT`): sapphire `#209FB5`, gold `#DF8E1D`,
+    mauve `#8839EF`, peach `#FE640B`
 
 Override any group via `setup({ highlights = { ... } })`. Each override
 fully replaces that group's default:
