@@ -1944,8 +1944,7 @@ local function register_builtin_subcommands(cfg)
 			end
 			local bufnr = vim.api.nvim_get_current_buf()
 			local enabled = inline_blame.toggle(bufnr)
-			return enabled and "Inline blame enabled"
-				or "Inline blame disabled"
+			return enabled and "Inline blame enabled" or "Inline blame disabled"
 		end,
 	}
 
@@ -1972,7 +1971,8 @@ local function register_builtin_subcommands(cfg)
 						opts.force = true
 					elseif token == "--detach" then
 						opts.detach = true
-					elseif not vim.startswith(token, "-")
+					elseif
+						not vim.startswith(token, "-")
 						and ctx.args[i - 1] ~= "-b"
 						and ctx.args[i - 1] ~= "--branch"
 					then
@@ -2200,8 +2200,7 @@ local pr_actions = {
 }
 local label_actions = { "list", "create", "delete" }
 local tag_actions = { "list", "create", "delete", "push" }
-local worktree_actions =
-	{ "list", "add", "remove", "move", "lock", "unlock", "prune" }
+local worktree_actions = { "list", "add", "remove", "move", "lock", "unlock", "prune" }
 
 ---@return string[]
 local function list_worktree_paths()
@@ -2478,8 +2477,7 @@ function M.complete(arglead, cmdline, _cursorpos)
 		end
 		-- For path-taking actions, complete existing worktree paths.
 		local sub = args[3]
-		if sub == "remove" or sub == "move"
-			or sub == "lock" or sub == "unlock" then
+		if sub == "remove" or sub == "move" or sub == "lock" or sub == "unlock" then
 			return filter_candidates(arglead, list_worktree_paths())
 		end
 		if sub == "add" then
