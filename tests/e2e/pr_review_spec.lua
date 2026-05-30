@@ -1137,12 +1137,64 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
-	["file-level comment submits with subject_type=file"] = function()
+	["edit_draft_under_cursor edits a file comment from the file row"] = function()
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
+
+		review_panel.state.pending_comments = {
+			{ id = 1, path = "lua/gitflow/config.lua",
+				body = "file note v1", file_level = true },
+		}
+		-- Repaint so the file tree + file_line_map exist.
+		review_panel.open_file("lua/gitflow/config.lua")
+		T.drain_jobs(1000)
+
+		-- Put the cursor on the config.lua *file* row (not the Drafts row).
+		local file_row
+		for line, idx in pairs(review_panel.state._file_line_map or {}) do
+			if review_panel.state.files[idx]
+				and review_panel.state.files[idx].path == "lua/gitflow/config.lua" then
+				file_row = line
+			end
+		end
+		T.assert_true(file_row ~= nil, "config.lua file row should be mapped")
+		vim.api.nvim_set_current_win(review_panel.state.file_list_winid)
+		vim.api.nvim_win_set_cursor(
+			review_panel.state.file_list_winid, { file_row, 0 })
+
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(opts, on_confirm)
+					T.assert_equals(opts.default, "file note v1",
+						"edit should pre-fill the existing file-comment body")
+					on_confirm("file note v2")
+				end },
+		}, function()
+			review_panel.edit_draft_under_cursor()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(review_panel.state.pending_comments[1].body,
+			"file note v2",
+			"a file comment should be editable from its file row")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["file-level comment posts via comments API with subject_type=file"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+		-- headRefOid from the PR view fixture supplies the commit_id.
+		T.wait_until(function()
+			return review_panel.state.pr_head_sha ~= nil
+		end, "pr_head_sha should be populated from headRefOid")
 
 		review_panel.state.pending_comments = {
 			{ id = 1, path = "lua/gitflow/config.lua",
@@ -1159,14 +1211,34 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			end)
 
 			local lines = T.read_file(log_path)
+			-- File comment must go to the review-comments endpoint (NOT the
+			-- reviews batch API, which would 422 on a comment with no line).
+			local posted_file_comment, has_subject_type, has_commit_id = false, false, false
+			for _, line in ipairs(lines) do
+				if line:find("api repos/{owner}/{repo}/pulls/42/comments", 1, true)
+					and line:find("--method POST", 1, true) then
+					posted_file_comment = true
+					if line:find("subject_type=file", 1, true) then
+						has_subject_type = true
+					end
+					if line:find("commit_id=", 1, true) then
+						has_commit_id = true
+					end
+				end
+			end
+			T.assert_true(posted_file_comment,
+				"file comment should POST to the review-comments API")
+			T.assert_true(has_subject_type,
+				"file comment should pass subject_type=file")
+			T.assert_true(has_commit_id,
+				"file comment should pass a commit_id")
+
+			-- And it must NOT appear in the reviews-batch payload.
 			local payload = decode_logged_stdin_payload(lines)
-			T.assert_true(payload ~= nil and type(payload.comments) == "table"
-				and #payload.comments == 1,
-				"file-level comment should be batched via the reviews API")
-			T.assert_equals(payload.comments[1].subject_type, "file",
-				"file-level comment should set subject_type=file")
-			T.assert_true(payload.comments[1].line == nil,
-				"file-level comment should not carry a line")
+			if payload and type(payload.comments) == "table" then
+				T.assert_equals(#payload.comments, 0,
+					"file comment must not be sent in the reviews batch payload")
+			end
 		end)
 
 		cleanup_panels()

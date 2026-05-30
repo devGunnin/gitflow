@@ -206,6 +206,8 @@ file list and the editing area with the standard `<C-w>w` motion.
 
 On a draft row in the **Drafts** section: `<CR>` jumps to the comment,
 `e` edits the draft body, `dd` deletes it, `X` deletes all off-diff drafts.
+`e` on a **file row** edits that file's file-level comment (the same place
+you created it with `c`).
 
 ### Editing pane (per-file)
 

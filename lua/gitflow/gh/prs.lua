@@ -26,6 +26,7 @@ local PR_VIEW_FIELDS = table.concat({
 	"author",
 	"assignees",
 	"headRefName",
+	"headRefOid",
 	"baseRefName",
 	"reviews",
 	"reviewRequests",
@@ -700,6 +701,52 @@ function M.delete_review_comment(number, comment_id, opts, cb)
 	}, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "delete_review_comment"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+--- Post a file-level review comment (#361).  The reviews batch API can't
+--- carry comments without a line, so file comments use the review-comments
+--- endpoint with subject_type=file + a commit_id (the PR head SHA).
+---@param number integer|string
+---@param commit_id string
+---@param path string
+---@param body string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.create_file_comment(number, commit_id, path, body, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, {
+			code = 1, signal = 0, stdout = "",
+			stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local normalized_body = vim.trim(tostring(body or ""))
+	if normalized_body == "" then
+		error("gitflow gh pr error: create_file_comment requires body", 2)
+	end
+	if not commit_id or vim.trim(tostring(commit_id)) == "" then
+		error("gitflow gh pr error: create_file_comment requires commit_id", 2)
+	end
+
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
+		normalize_number(number)
+	)
+	gh.run({
+		"api", endpoint, "--method", "POST",
+		-- Raw (-f) fields are always strings: never coerce a body or path.
+		"-f", ("path=%s"):format(path),
+		"-f", ("body=%s"):format(normalized_body),
+		"-f", ("commit_id=%s"):format(commit_id),
+		"-f", "subject_type=file",
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "create_file_comment"), result)
 			return
 		end
 		cb(nil, result)

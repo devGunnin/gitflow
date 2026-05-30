@@ -86,6 +86,7 @@ M.state = {
 	pr_title = nil,
 	pr_author = nil,
 	pr_head = nil,
+	pr_head_sha = nil,
 	pr_base = nil,
 	repo_slug = nil,
 	tabpage = nil,
@@ -724,8 +725,8 @@ local function render_file_list()
 		" <leader>d toggle diff view",
 		" <leader>x delete comment",
 		" ]f/[f file · ]c/[c hunk",
-		" on draft: <CR> jump · e edit",
-		"   dd del · X del off-diff",
+		" on draft: <CR> jump · dd del",
+		" e edit draft/file · X off-diff",
 		" r refresh · q close",
 	}
 	local hint_start = #lines + 1
@@ -1172,11 +1173,42 @@ end
 --- Edit the draft comment under the cursor in the file-list "Drafts" section.
 function M.edit_draft_under_cursor()
 	local idx = draft_idx_under_cursor()
-	if not idx then
-		notify_warn("No draft comment under the cursor")
+	if idx then
+		M.edit_draft(M.state.pending_comments[idx])
 		return
 	end
-	M.edit_draft(M.state.pending_comments[idx])
+
+	-- On a file row, edit that file's file-level comment(s) (#358/#361).
+	-- File comments are created from the file row, so it's natural to edit
+	-- them from the same row rather than hunting in the Drafts section.
+	local file_idx = file_idx_under_cursor()
+	if file_idx then
+		local file = M.state.files[file_idx]
+		local matches = {}
+		for _, pc in ipairs(M.state.pending_comments) do
+			if pc.file_level and file and pc.path == file.path then
+				matches[#matches + 1] = pc
+			end
+		end
+		if #matches == 1 then
+			M.edit_draft(matches[1])
+			return
+		elseif #matches > 1 then
+			vim.ui.select(matches, {
+				prompt = "Edit which file comment?",
+				format_item = function(pc)
+					return vim.trim((pc.body or ""):gsub("%s+", " ")):sub(1, 60)
+				end,
+			}, function(choice)
+				if choice then
+					M.edit_draft(choice)
+				end
+			end)
+			return
+		end
+	end
+
+	notify_warn("No draft comment under the cursor")
 end
 
 --- Edit the draft anchored to the current diff-pane line.  Mirrors the draft
@@ -1341,6 +1373,10 @@ local function pull_pr_metadata(view)
 	end
 	if view.headRefName and view.headRefName ~= vim.NIL then
 		M.state.pr_head = tostring(view.headRefName)
+	end
+	if view.headRefOid and view.headRefOid ~= vim.NIL then
+		-- Needed as commit_id when posting file-level comments (#361).
+		M.state.pr_head_sha = tostring(view.headRefOid)
 	end
 	if view.baseRefName and view.baseRefName ~= vim.NIL then
 		M.state.pr_base = tostring(view.baseRefName)
@@ -1763,6 +1799,7 @@ function M.open(cfg, pr_number)
 	M.state.pr_title = nil
 	M.state.pr_author = nil
 	M.state.pr_head = nil
+	M.state.pr_head_sha = nil
 	M.state.pr_base = nil
 	M.state.files = {}
 	M.state.file_diffs = {}
@@ -1846,6 +1883,7 @@ function M.close()
 	M.state.pr_title = nil
 	M.state.pr_author = nil
 	M.state.pr_head = nil
+	M.state.pr_head_sha = nil
 	M.state.pr_base = nil
 	M.state.tabpage = nil
 	M.state.file_list_winid = nil
@@ -2276,19 +2314,25 @@ end
 
 -- ── Review submission ──────────────────────────────────────────────────
 
----@return table[]|nil, string|nil
+--- Split pending drafts into the reviews-batch payload (line/range comments)
+--- and file-level comments.  File comments are returned separately because
+--- the reviews API rejects any comment without a line (→ 422); they're posted
+--- via the review-comments API with subject_type=file instead (#361).
+---@return table[]|nil  line/range comments for the reviews API
+---@return table[]  file-level comments ({ path, body })
+---@return string|nil  error message if any draft can't be resolved
 local function collect_api_comments()
 	local api = {}
+	local file_comments = {}
 	local unresolved = {}
 	for _, pc in ipairs(M.state.pending_comments) do
-		-- File-level comments (#361) carry no line; GitHub anchors them to
-		-- the whole file via subject_type = "file".
+		-- File-level comments (#361): posted separately, never in the
+		-- reviews batch payload.
 		if pc.file_level then
 			if pc.path and pc.path ~= "" then
-				api[#api + 1] = {
+				file_comments[#file_comments + 1] = {
 					path = pc.path,
 					body = pc.body,
-					subject_type = "file",
 				}
 			else
 				unresolved[#unresolved + 1] = tostring(pc.id or "?")
@@ -2338,13 +2382,13 @@ local function collect_api_comments()
 		::continue::
 	end
 	if #unresolved > 0 then
-		return nil, (
+		return nil, {}, (
 			"%d comment(s) don't map to a line in the PR diff (ids: %s). "
 			.. "This usually means the PR branch isn't checked out — run "
 			.. "`gh pr checkout <N>`, reopen the review, and re-add them."
 		):format(#unresolved, table.concat(unresolved, ", "))
 	end
-	return api, nil
+	return api, file_comments, nil
 end
 
 ---@param mode "approve"|"request_changes"|"comment"
@@ -2369,25 +2413,85 @@ local function submit_review_with_pending(mode, body, on_success_message)
 		return
 	end
 
-	local api_comments, collect_err = collect_api_comments()
+	local api_comments, file_comments, collect_err = collect_api_comments()
 	if collect_err then
 		notify_warn(collect_err)
 		return
 	end
 
-	gh_prs.submit_review(number, mode, body, api_comments, {}, function(err)
-		if err then
-			notify_error(err)
+	-- Step 2 (runs after any file comments are posted): submit the review,
+	-- batching line/range comments through the reviews API.
+	local function finish_review()
+		local total = #M.state.pending_comments
+		local trimmed_body = vim.trim(body or "")
+
+		local function on_done(err)
+			if err then
+				notify_error(err)
+				return
+			end
+			M.state.pending_comments = {}
+			cache.clear(number, M.state.repo_slug)
+			notify_info(
+				("Review submitted (%s) with %d comment(s)"):
+					format(mode, total))
+			M.refresh()
+		end
+
+		-- A COMMENT review with no body and no inline comments is rejected
+		-- by GitHub (422). If the only drafts were file-level (already
+		-- posted), don't submit an empty review — just clear and refresh.
+		if #api_comments == 0 and mode == "comment" and trimmed_body == "" then
+			M.state.pending_comments = {}
+			cache.clear(number, M.state.repo_slug)
+			notify_info(on_success_message)
+			M.refresh()
 			return
 		end
-		local count = #M.state.pending_comments
-		M.state.pending_comments = {}
-		cache.clear(number, M.state.repo_slug)
-		notify_info(
-			("Review submitted (%s) with %d comment(s)"):
-				format(mode, count))
-		M.refresh()
-	end)
+
+		if #api_comments == 0 then
+			gh_prs.review(number, mode, body, {}, on_done)
+		else
+			gh_prs.submit_review(number, mode, body, api_comments, {}, on_done)
+		end
+	end
+
+	-- Step 1: post file-level comments via the review-comments API (the
+	-- reviews batch API can't carry them → 422).
+	if #file_comments == 0 then
+		finish_review()
+		return
+	end
+
+	local commit_id = M.state.pr_head_sha
+	if not commit_id or commit_id == "" then
+		notify_error(
+			"Cannot post file-level comment: PR head commit is unknown. "
+			.. "Press r to refresh the review and try again."
+		)
+		return
+	end
+
+	local idx = 0
+	local function post_next()
+		idx = idx + 1
+		if idx > #file_comments then
+			finish_review()
+			return
+		end
+		local fc = file_comments[idx]
+		gh_prs.create_file_comment(
+			number, commit_id, fc.path, fc.body, {},
+			function(err)
+				if err then
+					notify_error("File comment failed: " .. err)
+					return
+				end
+				post_next()
+			end
+		)
+	end
+	post_next()
 end
 
 ---@param mode "approve"|"request_changes"|"comment"
