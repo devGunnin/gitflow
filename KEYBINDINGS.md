@@ -42,7 +42,6 @@ Normal-mode mappings available in any buffer. Configured via
 | `gN` | Open notification center | `notifications` |
 | `<leader>gG` | Toggle PR review mode (tabpage with file list + inline diff) | `pr_review` |
 
-
 ## Status Panel
 
 Buffer-local bindings active in the status panel (`:Gitflow status`).
