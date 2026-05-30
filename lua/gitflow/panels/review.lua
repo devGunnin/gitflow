@@ -1178,15 +1178,15 @@ function M.edit_draft_under_cursor()
 		return
 	end
 
-	-- On a file row, edit that file's file-level comment(s) (#358/#361).
-	-- File comments are created from the file row, so it's natural to edit
-	-- them from the same row rather than hunting in the Drafts section.
+	-- On a file row, edit any draft on that file — file-level OR line
+	-- comments (#358/#361). It's natural to edit a file's comments by
+	-- hovering its row rather than hunting through the Drafts section.
 	local file_idx = file_idx_under_cursor()
 	if file_idx then
 		local file = M.state.files[file_idx]
 		local matches = {}
 		for _, pc in ipairs(M.state.pending_comments) do
-			if pc.file_level and file and pc.path == file.path then
+			if file and pc.path == file.path then
 				matches[#matches + 1] = pc
 			end
 		end
@@ -1195,9 +1195,13 @@ function M.edit_draft_under_cursor()
 			return
 		elseif #matches > 1 then
 			vim.ui.select(matches, {
-				prompt = "Edit which file comment?",
+				prompt = "Edit which comment?",
 				format_item = function(pc)
-					return vim.trim((pc.body or ""):gsub("%s+", " ")):sub(1, 60)
+					local loc = pc.file_level and "(file)"
+						or ("L%d"):format(pc.new_line or pc.old_line or 0)
+					local preview =
+						vim.trim((pc.body or ""):gsub("%s+", " ")):sub(1, 50)
+					return ("%-7s %s"):format(loc, preview)
 				end,
 			}, function(choice)
 				if choice then
@@ -1206,6 +1210,8 @@ function M.edit_draft_under_cursor()
 			end)
 			return
 		end
+		notify_warn("No draft comment on this file")
+		return
 	end
 
 	notify_warn("No draft comment under the cursor")

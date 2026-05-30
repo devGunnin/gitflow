@@ -1144,9 +1144,11 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
+		-- A line comment (not file-level) — editing from the file row should
+		-- still work, picking the file's single draft.
 		review_panel.state.pending_comments = {
 			{ id = 1, path = "lua/gitflow/config.lua",
-				body = "file note v1", file_level = true },
+				body = "file note v1", new_line = 13 },
 		}
 		-- Repaint so the file tree + file_line_map exist.
 		review_panel.open_file("lua/gitflow/config.lua")
