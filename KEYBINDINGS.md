@@ -114,6 +114,7 @@ Buffer-local bindings active in the stash panel (`:Gitflow stash list`).
 | --- | --- |
 | `P` | Pop stash entry under cursor |
 | `D` | Drop stash entry under cursor |
+| `A` | Apply stash entry under cursor |
 | `S` | Stash with message prompt |
 | `r` | Refresh |
 | `q` | Close |
