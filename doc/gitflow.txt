@@ -91,14 +91,13 @@ Default keybindings:
     Action          Default             Plug Mapping ~
     help            <leader>gh          <Plug>(GitflowHelp)
     open            <leader>go          <Plug>(GitflowOpen)
-    refresh         gr                  <Plug>(GitflowRefresh)
     close           <leader>gq          <Plug>(GitflowClose)
     status          gs                  <Plug>(GitflowStatus)
     commit          gc                  <Plug>(GitflowCommit)
     push            <leader>gP          <Plug>(GitflowPush)
     pull            <leader>gp          <Plug>(GitflowPull)
     fetch           <leader>gf          <Plug>(GitflowFetch)
-    diff            gd                  <Plug>(GitflowDiff)
+    diff            gD                  <Plug>(GitflowDiff)
     log             gl                  <Plug>(GitflowLog)
     stash           gS                  <Plug>(GitflowStash)
     stash_push      gZ                  <Plug>(GitflowStashPush)
@@ -109,6 +108,10 @@ Default keybindings:
     label           <leader>gL          <Plug>(GitflowLabel)
     conflict        <leader>gm          <Plug>(GitflowConflicts)
     palette         gP                  <Plug>(GitflowPalette)
+    pr_review       <leader>gG          <Plug>(GitflowPrReview)
+    blame           gB                  <Plug>(GitflowBlame)
+    blame_inline    <leader>gB          <Plug>(GitflowBlameInline)
+    worktree        gW                  <Plug>(GitflowWorktree)
 
                                                           *gitflow-config-ui*
 ui ~
@@ -152,6 +155,22 @@ quick_actions ~
     quick_commit    list        {"commit"}          Steps for quick-commit
     quick_push      list        {"commit","push"}   Steps for quick-push
 
+                                               *gitflow-config-inline-blame*
+inline_blame ~
+
+    Current-line inline blame: shows "<author>, <date> * <summary>" as
+    virtual text at the end of the line under the cursor.  Toggle it per
+    buffer with `:Gitflow blame-inline` (default <leader>gB), or set
+    inline_blame.auto to show it in every file automatically.  (Distinct
+    from `:Gitflow blame` / gB, which opens the full blame panel.)
+
+    Option          Type        Default         Description ~
+    enable          boolean     true            Master switch; false disables
+                                                the feature entirely
+    auto            boolean     false           Auto-show in every file buffer
+    delay           number      200             Debounce (ms) before blaming
+    date_format     string      "%Y-%m-%d"      os.date() format for the date
+
 ==============================================================================
 6. COMMANDS                                                *gitflow-commands*
 
@@ -178,6 +197,11 @@ Git ~
     :Gitflow stash pop                  Pop latest stash entry
     :Gitflow stash drop                 Drop latest stash entry
     :Gitflow branch                     Open branch list panel
+    :Gitflow worktree [list|add|        Manage git worktrees
+                   remove|move|lock|
+                   unlock|prune]
+    :Gitflow blame                      Open the git blame panel
+    :Gitflow blame-inline               Toggle inline blame on current line
     :Gitflow merge <branch> [--abort]   Merge a branch
     :Gitflow rebase <branch>            Rebase onto a branch
                    [--abort|--continue]
@@ -280,19 +304,42 @@ PR list ~
     q       Close
 
 Review view ~
-    ]f      Jump to next file
-    [f      Jump to previous file
-    ]c      Jump to next hunk
-    [c      Jump to previous hunk
-    a       Approve review
-    x       Request changes
-    c       Inline comment (normal and visual mode)
+    The review opens in its own tabpage: a collapsible file tree on the
+    left, the real working-tree file (with inline PR diff annotations) on
+    the right.  Removed lines are shown as syntax-highlighted virt_lines;
+    comments render as rounded note boxes beneath the line they target.
+
+    Files that belong to the PR are decorated with the inline diff overlay
+    no matter how you open them inside the review tabpage — the file tree,
+    a fuzzy finder (e.g. Telescope find_files), :edit, or a quickfix jump.
+
+  File tree (left pane) ~
+    <CR>/o  Open file under cursor, or fold/unfold a folder row
+    <Tab>   Same as <CR>/o
+    za      Toggle the folder under the cursor
+    zR      Unfold all folders
+    zM      Fold all folders
+    ]f      Jump to / open next file
+    [f      Jump to / open previous file
     S       Submit pending review
-    R       Reply to comment thread
-    <leader>t   Toggle thread collapse/expand
-    <leader>b   Back to PR view
     r       Refresh
     q       Close
+
+  Diff pane (right) ~
+    <CR>    View the full discussion (all replies + drafts) for the
+            comment on the current line, in a floating window.  When the
+            line has no comment, behaves like the native <CR> motion.
+    ]c      Jump to next hunk
+    [c      Jump to previous hunk
+    c       Inline comment (normal and visual mode)
+    S       Submit pending review (Comment / Request changes / Approve)
+    R       Reply to comment thread on the current line
+    <leader>i   Toggle inline comment bodies (boxes) on/off
+    <leader>x   Delete draft/comment on the current line
+
+  Thread popup ~
+    R       Reply to the thread (remote threads only)
+    q/<Esc> Close the popup
 
 Conflict list ~
     <CR>    Open 3-way conflict view
@@ -315,6 +362,20 @@ Conflict list ~
 Label panel ~
     c       Create new label
     d       Delete label under cursor
+    r       Refresh
+    q       Close
+
+Worktree panel ~
+    a       Add a worktree. Prompts for a path, then opens a searchable
+            branch picker for the base ref, then asks for an optional new
+            branch name. Leave the branch name empty to check out the
+            picked ref directly. (In the picker: / filter, <CR> select.)
+    d       Remove worktree under cursor (refuses if locked)
+    D       Force-remove worktree under cursor (discards changes; locked too)
+    m       Move worktree under cursor to a new path
+    L       Lock / unlock worktree under cursor
+    p       Prune stale worktree entries
+    <CR>    Switch to worktree under cursor (changes cwd)
     r       Refresh
     q       Close
 
@@ -395,6 +456,9 @@ Link-based groups (track your colorscheme automatically):
     GitflowConflictResolved         DiffText
     GitflowBranchCurrent            Title
     GitflowBranchRemote             Comment
+    GitflowWorktreeCurrent          GitflowBranchCurrent
+    GitflowWorktreeLocked           WarningMsg
+    GitflowWorktreePrunable         Comment
     GitflowPROpen                   DiagnosticOk
     GitflowPRMerged                 Special
     GitflowPRClosed                 DiagnosticError
@@ -404,6 +468,7 @@ Link-based groups (track your colorscheme automatically):
     GitflowReviewApproved           DiagnosticOk
     GitflowReviewChangesRequested   WarningMsg
     GitflowReviewComment            Comment
+    GitflowBlameInline              Comment
     GitflowNormal                   NormalFloat
     GitflowPaletteSelection         PmenuSel
     GitflowPaletteHeader            Type

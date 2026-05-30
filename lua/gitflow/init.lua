@@ -4,6 +4,7 @@ local gh = require("gitflow.gh")
 local highlights = require("gitflow.highlights")
 local signs = require("gitflow.signs")
 local icons = require("gitflow.icons")
+local inline_blame = require("gitflow.inline_blame")
 local notifications = require("gitflow.notifications")
 
 local M = {}
@@ -45,6 +46,7 @@ function M.setup(opts)
 	commands.setup(cfg)
 	signs.setup(cfg)
 	icons.setup(cfg)
+	inline_blame.setup(cfg)
 	local statusline = load_statusline_module()
 	if statusline ~= nil and type(statusline.setup) == "function" then
 		statusline.setup()

@@ -67,6 +67,10 @@ local function build_default_groups(palette)
 		-- Branch
 		GitflowBranchCurrent = { link = "Title" },
 		GitflowBranchRemote = { link = "Comment" },
+		-- Worktree panel
+		GitflowWorktreeCurrent = { link = "GitflowBranchCurrent" },
+		GitflowWorktreeLocked = { link = "WarningMsg" },
+		GitflowWorktreePrunable = { link = "Comment" },
 		-- PR state
 		GitflowPROpen = { link = "DiagnosticOk" },
 		GitflowPRMerged = { link = "Special" },
@@ -80,9 +84,22 @@ local function build_default_groups(palette)
 		GitflowReviewChangesRequested = { link = "WarningMsg" },
 		GitflowReviewAuthor = { fg = palette.accent_secondary, bold = true },
 		GitflowReviewComment = { link = "Comment" },
+		-- Inline comment "note box" rendered below diff lines
+		GitflowReviewCommentBox = { fg = palette.separator_fg },
+		GitflowReviewCommentBody = { link = "Normal" },
+		GitflowReviewDraftBox = { fg = palette.accent_secondary },
+		GitflowReviewDraftOutOfScope = { link = "DiagnosticError" },
+		-- PR review file-tree chrome (folders / counts / decorations)
+		GitflowReviewTreeDir = { fg = palette.accent_primary, bold = true },
+		GitflowReviewTreeGuide = { fg = palette.separator_fg },
+		GitflowReviewCountAdd = { link = "GitflowAdded" },
+		GitflowReviewCountDel = { link = "GitflowRemoved" },
+		GitflowReviewHint = { link = "Comment" },
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },
 		GitflowStashRef = { fg = palette.stash_ref, bold = true },
+		-- Inline (current-line) blame virtual text
+		GitflowBlameInline = { link = "Comment" },
 		-- Window chrome — themed accent colors
 		GitflowBorder = { fg = palette.accent_primary },
 		GitflowTitle = { fg = palette.accent_primary, bold = true },
