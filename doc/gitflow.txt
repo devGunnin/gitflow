@@ -91,7 +91,6 @@ Default keybindings:
     Action          Default             Plug Mapping ~
     help            <leader>gh          <Plug>(GitflowHelp)
     open            <leader>go          <Plug>(GitflowOpen)
-    refresh         gr                  <Plug>(GitflowRefresh)
     close           <leader>gq          <Plug>(GitflowClose)
     status          gs                  <Plug>(GitflowStatus)
     commit          gc                  <Plug>(GitflowCommit)
@@ -110,6 +109,9 @@ Default keybindings:
     conflict        <leader>gm          <Plug>(GitflowConflicts)
     palette         gP                  <Plug>(GitflowPalette)
     pr_review       <leader>gG          <Plug>(GitflowPrReview)
+    blame           gB                  <Plug>(GitflowBlame)
+    blame_inline    <leader>gB          <Plug>(GitflowBlameInline)
+    worktree        gW                  <Plug>(GitflowWorktree)
 
                                                           *gitflow-config-ui*
 ui ~
@@ -153,6 +155,22 @@ quick_actions ~
     quick_commit    list        {"commit"}          Steps for quick-commit
     quick_push      list        {"commit","push"}   Steps for quick-push
 
+                                               *gitflow-config-inline-blame*
+inline_blame ~
+
+    Current-line inline blame: shows "<author>, <date> * <summary>" as
+    virtual text at the end of the line under the cursor.  Toggle it per
+    buffer with `:Gitflow blame-inline` (default <leader>gB), or set
+    inline_blame.auto to show it in every file automatically.  (Distinct
+    from `:Gitflow blame` / gB, which opens the full blame panel.)
+
+    Option          Type        Default         Description ~
+    enable          boolean     true            Master switch; false disables
+                                                the feature entirely
+    auto            boolean     false           Auto-show in every file buffer
+    delay           number      200             Debounce (ms) before blaming
+    date_format     string      "%Y-%m-%d"      os.date() format for the date
+
 ==============================================================================
 6. COMMANDS                                                *gitflow-commands*
 
@@ -179,6 +197,11 @@ Git ~
     :Gitflow stash pop                  Pop latest stash entry
     :Gitflow stash drop                 Drop latest stash entry
     :Gitflow branch                     Open branch list panel
+    :Gitflow worktree [list|add|        Manage git worktrees
+                   remove|move|lock|
+                   unlock|prune]
+    :Gitflow blame                      Open the git blame panel
+    :Gitflow blame-inline               Toggle inline blame on current line
     :Gitflow merge <branch> [--abort]   Merge a branch
     :Gitflow rebase <branch>            Rebase onto a branch
                    [--abort|--continue]
@@ -342,6 +365,20 @@ Label panel ~
     r       Refresh
     q       Close
 
+Worktree panel ~
+    a       Add a worktree. Prompts for a path, then opens a searchable
+            branch picker for the base ref, then asks for an optional new
+            branch name. Leave the branch name empty to check out the
+            picked ref directly. (In the picker: / filter, <CR> select.)
+    d       Remove worktree under cursor (refuses if locked)
+    D       Force-remove worktree under cursor (discards changes; locked too)
+    m       Move worktree under cursor to a new path
+    L       Lock / unlock worktree under cursor
+    p       Prune stale worktree entries
+    <CR>    Switch to worktree under cursor (changes cwd)
+    r       Refresh
+    q       Close
+
 Command palette ~
     <CR>            Select highlighted command
     <Esc>           Close palette
@@ -419,6 +456,9 @@ Link-based groups (track your colorscheme automatically):
     GitflowConflictResolved         DiffText
     GitflowBranchCurrent            Title
     GitflowBranchRemote             Comment
+    GitflowWorktreeCurrent          GitflowBranchCurrent
+    GitflowWorktreeLocked           WarningMsg
+    GitflowWorktreePrunable         Comment
     GitflowPROpen                   DiagnosticOk
     GitflowPRMerged                 Special
     GitflowPRClosed                 DiagnosticError
@@ -428,6 +468,7 @@ Link-based groups (track your colorscheme automatically):
     GitflowReviewApproved           DiagnosticOk
     GitflowReviewChangesRequested   WarningMsg
     GitflowReviewComment            Comment
+    GitflowBlameInline              Comment
     GitflowNormal                   NormalFloat
     GitflowPaletteSelection         PmenuSel
     GitflowPaletteHeader            Type

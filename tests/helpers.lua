@@ -397,6 +397,8 @@ local ALL_PANELS = {
 	"notifications",
 	"actions",
 	"reflog",
+	"blame",
+	"worktree",
 }
 
 --- Close all open panel windows and reset shared state.

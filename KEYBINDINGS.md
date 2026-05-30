@@ -24,6 +24,8 @@ Normal-mode mappings available in any buffer. Configured via
 | `gZ` | Stash push (with prompt) | `stash_push` |
 | `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
+| `gW` | Open worktree panel | `worktree` |
+| `<leader>gB` | Toggle inline blame on current line | `blame_inline` |
 | `<leader>gi` | Open issue list | `issue` |
 | `<leader>gr` | Open PR list | `pr` |
 | `<leader>gL` | Open label list | `label` |
@@ -279,6 +281,22 @@ Buffer-local bindings active in the tag panel (`:Gitflow tag list`).
 | `D` | Delete local tag |
 | `X` | Delete remote tag |
 | `P` | Push tag to remote |
+| `r` | Refresh |
+| `q` | Close |
+
+## Worktree Panel
+
+Buffer-local bindings active in the worktree panel (`:Gitflow worktree`).
+
+| Key | Action |
+| --- | --- |
+| `a` | Add a worktree: prompts for a path, then a **searchable branch picker** for the base ref, then an optional new branch name (empty = check out the picked ref) |
+| `d` | Remove worktree under cursor (refuses if locked — unlock or use `D`) |
+| `D` | Force-remove worktree under cursor (discards changes; also removes locked) |
+| `m` | Move worktree under cursor to a new path |
+| `L` | Lock / unlock worktree under cursor (locking prompts for an optional reason) |
+| `p` | Prune stale worktree entries |
+| `<CR>` | Switch to worktree under cursor (changes cwd) |
 | `r` | Refresh |
 | `q` | Close |
 

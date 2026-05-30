@@ -429,6 +429,76 @@ DIFF
     printf '0\n'
     ;;
 
+  # ── worktree ─────────────────────────────────────────────────────────
+  worktree)
+    if [ "$fail_cmd" = "worktree" ]; then
+      echo "fatal: worktree failed" >&2
+      exit 128
+    fi
+    wt_sub="${1:-list}"
+    shift 2>/dev/null || true
+    case "$wt_sub" in
+      list)
+        # --porcelain records separated by blank lines
+        printf 'worktree %s\n' "$(pwd)"
+        printf 'HEAD abc1234567890abcdef1234567890abcdef123456\n'
+        printf 'branch refs/heads/main\n'
+        printf '\n'
+        printf 'worktree /tmp/gitflow-feature\n'
+        printf 'HEAD def4567890abcdef1234567890abcdef12345678\n'
+        printf 'branch refs/heads/feature/test\n'
+        printf 'locked under review\n'
+        printf '\n'
+        printf 'worktree /tmp/gitflow-detached\n'
+        printf 'HEAD 9990000000abcdef1234567890abcdef12349990\n'
+        printf 'detached\n'
+        ;;
+      add)
+        printf 'Preparing worktree\n'
+        ;;
+      remove)
+        : # no stdout on success
+        ;;
+      move)
+        : # no stdout on success
+        ;;
+      lock)
+        : # no stdout on success
+        ;;
+      unlock)
+        : # no stdout on success
+        ;;
+      prune)
+        : # no stdout on success
+        ;;
+    esac
+    ;;
+
+  # ── blame ────────────────────────────────────────────────────────────
+  blame)
+    if [ "$fail_cmd" = "blame" ]; then
+      echo "fatal: blame failed" >&2
+      exit 128
+    fi
+    # Consume any --contents stdin so the writer does not get SIGPIPE.
+    case "$*" in
+      *--contents\ -*) cat >/dev/null 2>&1 || true ;;
+    esac
+    # Canned --line-porcelain record for a single committed line.
+    printf 'abc1234567890abcdef1234567890abcdef123456 1 1 1\n'
+    printf 'author Test Author\n'
+    printf 'author-mail <test@example.com>\n'
+    printf 'author-time 1700000000\n'
+    printf 'author-tz +0000\n'
+    printf 'committer Test Author\n'
+    printf 'committer-mail <test@example.com>\n'
+    printf 'committer-time 1700000000\n'
+    printf 'committer-tz +0000\n'
+    printf 'summary Initial commit\n'
+    printf 'filename tracked.txt\n'
+    printf '\talpha\n'
+    ;;
+
   # ── Unknown command ───────────────────────────────────────────────────
   *)
     echo "git stub: unknown command '$subcmd'" >&2

@@ -67,6 +67,10 @@ local function build_default_groups(palette)
 		-- Branch
 		GitflowBranchCurrent = { link = "Title" },
 		GitflowBranchRemote = { link = "Comment" },
+		-- Worktree panel
+		GitflowWorktreeCurrent = { link = "GitflowBranchCurrent" },
+		GitflowWorktreeLocked = { link = "WarningMsg" },
+		GitflowWorktreePrunable = { link = "Comment" },
 		-- PR state
 		GitflowPROpen = { link = "DiagnosticOk" },
 		GitflowPRMerged = { link = "Special" },
@@ -94,6 +98,8 @@ local function build_default_groups(palette)
 		-- Log / Stash entry accents
 		GitflowLogHash = { fg = palette.log_hash, bold = true },
 		GitflowStashRef = { fg = palette.stash_ref, bold = true },
+		-- Inline (current-line) blame virtual text
+		GitflowBlameInline = { link = "Comment" },
 		-- Window chrome — themed accent colors
 		GitflowBorder = { fg = palette.accent_primary },
 		GitflowTitle = { fg = palette.accent_primary, bold = true },
