@@ -362,16 +362,22 @@ local function clamp_anchor(bufnr, new_line)
 	return new_line
 end
 
+---@class GitflowReviewDeletedAnchor
+---@field buf_line integer  buffer line (1-based) the removed block is anchored at
+---@field old_line integer|nil  old-side (LEFT) line number of the removed line
+---@field text string  the removed line's text
+
 ---@class GitflowReviewAnnotateResult
 ---@field added_lines integer[]  buffer lines (1-based) highlighted as added
 ---@field hunk_anchors integer[] buffer lines (1-based) that start each hunk
+---@field deleted_lines GitflowReviewDeletedAnchor[]  removed lines + their anchor
 
 --- Apply diff annotations to a buffer that contains the real file.
 ---@param bufnr integer
 ---@param file_diff GitflowReviewFileDiff|nil
 ---@return GitflowReviewAnnotateResult
 function M.apply_annotations(bufnr, file_diff)
-	local result = { added_lines = {}, hunk_anchors = {} }
+	local result = { added_lines = {}, hunk_anchors = {}, deleted_lines = {} }
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return result
 	end
@@ -410,6 +416,14 @@ function M.apply_annotations(bufnr, file_diff)
 					chunks[#chunks + 1] = ch
 				end
 				virt_lines[#virt_lines + 1] = chunks
+				-- Record so callers can offer "comment on this deleted line":
+				-- the removed line has no real buffer row (it's a virt_line),
+				-- so we anchor it to the buffer line it renders next to.
+				result.deleted_lines[#result.deleted_lines + 1] = {
+					buf_line = anchor,
+					old_line = removed.old_line,
+					text = removed.text,
+				}
 			end
 			local opts = {
 				virt_lines = virt_lines,

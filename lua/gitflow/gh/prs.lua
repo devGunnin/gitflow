@@ -579,6 +579,38 @@ function M.list_files(number, opts, cb)
 	end)
 end
 
+--- List the commits that make up a PR (oldest → newest) via the GitHub
+--- API.  Each entry has `sha` and `commit.message`.  Used by review mode to
+--- scope the diff to a single commit or a range of commits (#363).
+---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, commits: table[]|nil, result: GitflowGitResult)
+function M.list_commits(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, {
+			code = 1, signal = 0, stdout = "",
+			stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/commits"):format(
+		normalize_number(number)
+	)
+	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
+	-- multi-page array responses.
+	gh.json({
+		"api", endpoint, "--paginate",
+	}, opts, function(err, data, result)
+		if err then
+			cb(err, nil, result)
+			return
+		end
+		cb(nil, data or {}, result)
+	end)
+end
+
 ---@param number integer|string
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, comments: table[]|nil, result: GitflowGitResult)

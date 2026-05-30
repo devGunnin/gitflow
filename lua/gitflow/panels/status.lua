@@ -52,6 +52,11 @@ M.state = {
 	opts = {},
 	line_entries = {},
 	active = false,
+	-- Cached commit-section data from the last full refresh, so staging /
+	-- unstaging (which never changes commits or upstream) can repaint from a
+	-- single `git status` call instead of re-running upstream + two git logs
+	-- on every keypress (#362).
+	last = nil,
 }
 
 ---@param title string
@@ -323,6 +328,15 @@ end
 ---@param upstream_name string|nil
 ---@param current_branch string
 local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
+	-- Remember the commit-section data so a files-only refresh can reuse it
+	-- without re-querying upstream + git log (#362).
+	M.state.last = {
+		outgoing = outgoing_entries,
+		incoming = incoming_entries,
+		upstream_name = upstream_name,
+		branch = current_branch,
+	}
+
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -440,7 +454,8 @@ local function run_status_operation(operation)
 			return
 		end
 		emit_post_operation()
-		M.refresh()
+		-- Staging doesn't change commits/upstream → cheap files-only repaint.
+		M.refresh({ files_only = true })
 	end)
 end
 
@@ -455,9 +470,26 @@ function M.open(cfg, opts)
 	M.refresh()
 end
 
-function M.refresh()
+---@param opts { files_only?: boolean }|nil
+function M.refresh(opts)
 	local cfg = M.state.cfg
 	if not cfg then
+		return
+	end
+
+	-- Fast path: staging/unstaging only moves files between sections; the
+	-- commit history and upstream are unchanged, so reuse the cached commit
+	-- data and just re-read `git status` (#362). One subprocess instead of
+	-- five (branch + status + upstream + two git logs).
+	if opts and opts.files_only and M.state.last then
+		local last = M.state.last
+		git_status.fetch({}, function(err, _, grouped)
+			if notify_if_error(err) then
+				return
+			end
+			render(grouped, last.outgoing or {}, last.incoming or {},
+				last.upstream_name, last.branch or "(unknown)")
+		end)
 		return
 	end
 
@@ -721,6 +753,7 @@ function M.close()
 	M.state.cfg = nil
 	M.state.line_entries = {}
 	M.state.active = false
+	M.state.last = nil
 end
 
 ---@return boolean

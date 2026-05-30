@@ -1007,6 +1007,277 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		T.cleanup_panels()
 	end,
+
+	-- ── #359: next/prev file keybinds in the diff pane ─────────────────
+
+	["diff pane has ]f/[f next/prev file keybinds"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- The diff-pane buffer should let you jump files without going back
+		-- to the file list (issue #359).
+		T.assert_keymaps(review_panel.state.active_bufnr, { "]f", "[f" })
+
+		cleanup_panels()
+	end,
+
+	-- ── #357: toggle the diff overlay on/off ───────────────────────────
+
+	["toggle_diff_view hides and restores diff annotations"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+		local bufnr = review_panel.state.active_bufnr
+
+		local function diff_mark_count()
+			return #vim.api.nvim_buf_get_extmarks(
+				bufnr, inline.DIFF_NS, 0, -1, {})
+		end
+
+		T.assert_true(diff_mark_count() > 0,
+			"diff annotations should be present initially")
+
+		review_panel.toggle_diff_view()
+		T.drain_jobs(1000)
+		T.assert_false(review_panel.state.show_diff,
+			"show_diff should be false after toggling off")
+		T.assert_equals(diff_mark_count(), 0,
+			"diff annotations should be cleared when the diff view is hidden")
+
+		review_panel.toggle_diff_view()
+		T.drain_jobs(1000)
+		T.assert_true(review_panel.state.show_diff,
+			"show_diff should be true after toggling back on")
+		T.assert_true(diff_mark_count() > 0,
+			"diff annotations should be restored when toggled back on")
+
+		cleanup_panels()
+	end,
+
+	-- ── #358: edit a draft comment ─────────────────────────────────────
+
+	["edit_draft updates the body and persists to cache"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.state.pending_comments = {
+			{ id = 1, path = "lua/gitflow/highlights.lua",
+				body = "original body", new_line = 13 },
+		}
+
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(opts, on_confirm)
+					-- The edit prompt should pre-fill the existing body.
+					T.assert_equals(opts.default, "original body",
+						"edit prompt should default to the current body")
+					on_confirm("corrected body")
+				end },
+		}, function()
+			review_panel.edit_draft(review_panel.state.pending_comments[1])
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(review_panel.state.pending_comments[1].body,
+			"corrected body", "edit_draft should update the draft body")
+
+		local cached = cache.load(review_panel.state.pr_number,
+			review_panel.state.repo_slug)
+		T.assert_true(cached and cached.comments
+			and cached.comments[1]
+			and cached.comments[1].body == "corrected body",
+			"edited body should be persisted to the cache")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	-- ── #361: file-level comments (incl. deleted files) ────────────────
+
+	["file_comment queues a file-level draft with no line"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(_, on_confirm)
+					on_confirm("comment about the whole file")
+				end },
+		}, function()
+			review_panel.file_comment("lua/gitflow/config.lua")
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"a file-level comment should be queued")
+		local pc = review_panel.state.pending_comments[1]
+		T.assert_true(pc.file_level == true,
+			"queued comment should be marked file_level")
+		T.assert_true(pc.new_line == nil and pc.old_line == nil,
+			"a file-level comment should carry no line anchor")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["file-level comment submits with subject_type=file"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.state.pending_comments = {
+			{ id = 1, path = "lua/gitflow/config.lua",
+				body = "whole-file note", file_level = true },
+		}
+
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{ table = input, key = "prompt",
+					value = function(_, on_confirm) on_confirm("LGTM") end },
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
+
+			local lines = T.read_file(log_path)
+			local payload = decode_logged_stdin_payload(lines)
+			T.assert_true(payload ~= nil and type(payload.comments) == "table"
+				and #payload.comments == 1,
+				"file-level comment should be batched via the reviews API")
+			T.assert_equals(payload.comments[1].subject_type, "file",
+				"file-level comment should set subject_type=file")
+			T.assert_true(payload.comments[1].line == nil,
+				"file-level comment should not carry a line")
+		end)
+
+		cleanup_panels()
+	end,
+
+	-- ── #355: comment on a deleted (LEFT-side) line ────────────────────
+
+	["comment on a deleted line anchors to old_line (LEFT side)"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- After opening, deleted lines are indexed by the buffer row they
+		-- render next to (#355).  Pick one and place the cursor there.
+		local anchor = next(review_panel.state.deleted_anchors)
+		T.assert_true(anchor ~= nil,
+			"the fixture diff should expose at least one deleted-line anchor")
+
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(_, on_confirm)
+					on_confirm("note on a removed line")
+				end },
+			{ table = vim.ui, key = "select",
+				value = function(items, _, on_choice)
+					-- Choose the deleted-line target when offered a choice.
+					for _, it in ipairs(items) do
+						if it.target and it.target.old_line
+							and not it.target.new_line then
+							on_choice(it)
+							return
+						end
+					end
+					on_choice(items[1])
+				end },
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(
+				review_panel.state.diff_winid, { anchor, 0 })
+			review_panel.inline_comment()
+			T.drain_jobs(1000)
+		end)
+
+		local found_del = false
+		for _, pc in ipairs(review_panel.state.pending_comments) do
+			if pc.old_line and not pc.new_line then
+				found_del = true
+			end
+		end
+		T.assert_true(found_del,
+			"commenting on a deleted line should queue an old_line/LEFT draft")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	-- ── #363: scope review to a commit range via a local git diff ───────
+
+	["apply_commit_scope builds files from a local git diff"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local git = require("gitflow.git")
+		local canned = table.concat({
+			"diff --git a/foo.lua b/foo.lua",
+			"index 1111111..2222222 100644",
+			"--- a/foo.lua",
+			"+++ b/foo.lua",
+			"@@ -1,3 +1,3 @@",
+			" local a = 1",
+			"-local b = 2",
+			"+local b = 3",
+			" local c = 4",
+		}, "\n")
+
+		with_temporary_patches({
+			{ table = git, key = "git",
+				value = function(args, _, cb)
+					cb({
+						code = 0, signal = 0,
+						stdout = canned, stderr = "",
+						cmd = args,
+					})
+				end },
+		}, function()
+			review_panel.apply_commit_scope("abc123^", "def456", "abc123..def456")
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_true(review_panel.state.commit_scope ~= nil
+			and review_panel.state.commit_scope.label == "abc123..def456",
+			"commit_scope should be recorded with its label")
+		T.assert_equals(#review_panel.state.files, 1,
+			"the scoped file list should come from the local git diff")
+		T.assert_equals(review_panel.state.files[1].path, "foo.lua",
+			"scoped file path should match the diff")
+		local fd = review_panel.state.file_diffs["foo.lua"]
+		T.assert_true(fd ~= nil and fd.hunks and #fd.hunks > 0,
+			"scoped file should have parsed hunks")
+
+		review_panel.state.commit_scope = nil
+		cleanup_panels()
+	end,
 })
 
 print("E2E PR review mode tests passed")

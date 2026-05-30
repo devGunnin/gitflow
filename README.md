@@ -224,6 +224,7 @@ All commands use the `:Gitflow` prefix.
 | `:Gitflow pr checkout <number>` | Check out a PR branch |
 | `:Gitflow pr close <number>` | Close a PR |
 | `:Gitflow pr review <number>` | Open review panel for a PR |
+| `:Gitflow pr review-commits <number>` | Open review panel scoped to a commit / commit range |
 | `:Gitflow pr submit-review <number>` | Submit pending review |
 | `:Gitflow pr respond <number>` | Respond to a review thread |
 | `:Gitflow pr edit <number> [opts]` | Edit PR (title=, body=, add=, remove=) |

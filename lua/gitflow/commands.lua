@@ -1530,6 +1530,21 @@ local function register_builtin_subcommands(cfg)
 				return ("Loading PR #%s..."):format(number)
 			end
 
+			if action == "review-commits" then
+				-- Scope review mode to a single commit or range (#363).
+				local number = first_positional_from(ctx.args, 3)
+				if review_panel.is_open() then
+					review_panel.scope_to_commits()
+					return "Choose commit(s) to scope the review..."
+				end
+				if not number then
+					return "Usage: :Gitflow pr review-commits <number>"
+				end
+				review_panel.open(cfg, number)
+				return ("Opening review for PR #%s — press C to scope to commits"):format(
+					number)
+			end
+
 			if action == "review" then
 				local number = first_positional_from(ctx.args, 3)
 				if not number then
@@ -2189,6 +2204,7 @@ local pr_actions = {
 	"list",
 	"view",
 	"review",
+	"review-commits",
 	"submit-review",
 	"respond",
 	"create",
