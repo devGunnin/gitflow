@@ -74,14 +74,13 @@ function M.defaults()
 			-- scripts/test_keybinding_docs.lua.
 			help = "<leader>gh",
 			open = "<leader>go",
-			refresh = "gr",
 			close = "<leader>gq",
 			status = "gs",
 			commit = "gc",
 			push = "<leader>gP",
 			pull = "<leader>gp",
 			fetch = "<leader>gf",
-			diff = "gd",
+			diff = "gD",
 			log = "gl",
 			stash = "gS",
 			stash_push = "gZ",
@@ -93,6 +92,7 @@ function M.defaults()
 			conflict = "<leader>gm",
 			palette = "gP",
 			reset = "<leader>gR",
+			pr_review = "<leader>gG",
 			-- Additional actions for panels that pre-date their own doc entries.
 			revert = "gV",
 			tag = "gT",
@@ -184,12 +184,8 @@ local function validate_ui(config)
 	end
 
 	if config.ui.separator_width ~= nil then
-		if type(config.ui.separator_width) ~= "number"
-			or config.ui.separator_width < 1 then
-			error(
-				"gitflow config error: ui.separator_width must be a positive number",
-				3
-			)
+		if type(config.ui.separator_width) ~= "number" or config.ui.separator_width < 1 then
+			error("gitflow config error: ui.separator_width must be a positive number", 3)
 		end
 	end
 
@@ -385,19 +381,10 @@ end
 ---@param config GitflowConfig
 local function validate_notifications(config)
 	if type(config.notifications) ~= "table" then
-		error(
-			"gitflow config error: notifications must be a table",
-			3
-		)
+		error("gitflow config error: notifications must be a table", 3)
 	end
-	if type(config.notifications.max_entries) ~= "number"
-		or config.notifications.max_entries < 1
-	then
-		error(
-			"gitflow config error: notifications.max_entries"
-				.. " must be a positive number",
-			3
-		)
+	if type(config.notifications.max_entries) ~= "number" or config.notifications.max_entries < 1 then
+		error("gitflow config error: notifications.max_entries" .. " must be a positive number", 3)
 	end
 end
 

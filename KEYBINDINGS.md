@@ -12,14 +12,13 @@ Normal-mode mappings available in any buffer. Configured via
 | --- | --- | --- |
 | `<leader>gh` | Show help / usage | `help` |
 | `<leader>go` | Open main panel | `open` |
-| `gr` | Refresh current panel | `refresh` |
 | `<leader>gq` | Close all Gitflow panels | `close` |
 | `gs` | Open status panel | `status` |
 | `gc` | Commit | `commit` |
 | `<leader>gP` | Push | `push` |
 | `<leader>gp` | Pull | `pull` |
 | `<leader>gf` | Fetch | `fetch` |
-| `gd` | Open diff view | `diff` |
+| `gD` | Open diff view | `diff` |
 | `gl` | Open log panel | `log` |
 | `gS` | Open stash list | `stash` |
 | `gZ` | Stash push (with prompt) | `stash_push` |
@@ -31,6 +30,16 @@ Normal-mode mappings available in any buffer. Configured via
 | `<leader>gR` | Open reset panel | `reset` |
 | `<leader>gm` | Open conflict panel | `conflict` |
 | `gP` | Open command palette | `palette` |
+| `gV` | Open revert panel | `revert` |
+| `gT` | Open tag list | `tag` |
+| `gB` | Toggle blame panel | `blame` |
+| `gF` | Open reflog panel | `reflog` |
+| `gC` | Open cherry-pick panel | `cherry_pick` |
+| `gI` | Open interactive rebase panel | `rebase_interactive` |
+| `gA` | Open GitHub Actions panel | `actions` |
+| `gN` | Open notification center | `notifications` |
+| `<leader>gG` | Toggle PR review mode (tabpage with file list + inline diff) | `pr_review` |
+
 
 ## Status Panel
 
@@ -106,6 +115,7 @@ Buffer-local bindings active in the stash panel (`:Gitflow stash list`).
 | --- | --- |
 | `P` | Pop stash entry under cursor |
 | `D` | Drop stash entry under cursor |
+| `A` | Apply stash entry under cursor |
 | `S` | Stash with message prompt |
 | `r` | Refresh |
 | `q` | Close |
@@ -170,26 +180,41 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `r` | Refresh |
 | `q` | Close |
 
-## Review View
+## PR Review Mode
 
-Buffer-local bindings active in the review panel (`:Gitflow pr review`).
+PR review mode opens a dedicated tabpage with a persistent file list on
+the left and a normal editing area on the right. Files opened from the
+list display the actual working-tree file with inline PR diff
+annotations (added lines highlighted, removed lines as virtual lines,
+hunk markers).
+
+Toggle with `<leader>gG` (or `:Gitflow pr-review`). Switch between the
+file list and the editing area with the standard `<C-w>w` motion.
+
+### File list pane
 
 | Key | Action |
 | --- | --- |
-| `]f` | Jump to next file |
-| `[f` | Jump to previous file |
-| `]c` | Jump to next hunk |
-| `[c` | Jump to previous hunk |
-| `a` | Approve review |
-| `x` | Request changes |
-| `c` | Inline comment on current line (normal and visual mode) |
-| `S` | Submit pending review |
-| `R` | Reply to comment thread |
-| `<leader>t` | Toggle thread collapse/expand |
-| `<leader>i` | Toggle inline comment bodies on diff lines |
-| `<leader>b` | Back to PR view |
-| `r` | Refresh |
-| `q` | Close (confirms if pending comments exist) |
+| `<CR>` / `o` | Open the file under cursor in the right pane |
+| `]f` / `[f` | Next / previous file |
+| `S` | Submit review — opens dropdown (comment / request changes / approve), then prompts for an optional body |
+| `r` | Refresh PR metadata, diff, and threads |
+| `q` | Close review mode (confirms if pending comments exist) |
+
+### Editing pane (per-file)
+
+| Key | Action |
+| --- | --- |
+| `c` | Inline comment on the current line (normal and visual mode) |
+| `S` | Submit review (same dropdown flow as the file list) |
+| `R` | Reply to the existing thread on the current line |
+| `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
+| `]c` / `[c` | Next / previous hunk |
+| `<leader>i` | Toggle inline comment body lines (collapsed vs. expanded) |
+
+Pending comments are persisted to
+`stdpath('data')/gitflow/review/<repo>/<pr>.json` and rehydrated when
+the same PR is reopened, so a crashed editor doesn't lose drafts.
 
 ## Conflict Resolution
 
@@ -230,6 +255,111 @@ Buffer-local bindings active in the label panel (`:Gitflow label list`).
 | --- | --- |
 | `c` | Create new label |
 | `d` | Delete label under cursor |
+| `r` | Refresh |
+| `q` | Close |
+
+## Revert Panel
+
+Buffer-local bindings active in the revert panel (`:Gitflow revert`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Revert commit under cursor |
+| `1-9` | Revert commit by position |
+| `r` | Refresh |
+| `q` | Close |
+
+## Tag Panel
+
+Buffer-local bindings active in the tag panel (`:Gitflow tag list`).
+
+| Key | Action |
+| --- | --- |
+| `c` | Create tag |
+| `D` | Delete local tag |
+| `X` | Delete remote tag |
+| `P` | Push tag to remote |
+| `r` | Refresh |
+| `q` | Close |
+
+## Blame Panel
+
+Buffer-local bindings active in the blame panel (`:Gitflow blame`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Open diff for commit under cursor |
+| `r` | Refresh |
+| `q` | Close |
+
+## Reflog Panel
+
+Buffer-local bindings active in the reflog panel (`:Gitflow reflog`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Checkout entry under cursor |
+| `1-9` | Select entry by position |
+| `R` | Reset to entry |
+| `r` | Refresh |
+| `q` | Close |
+
+## Cherry-Pick Panel
+
+Buffer-local bindings active in the cherry-pick panel (`:Gitflow cherry-pick-panel`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Cherry-pick commit under cursor |
+| `1-9` | Cherry-pick commit by position |
+| `b` | Pick source branch |
+| `B` | Cherry-pick into branch |
+| `r` | Refresh |
+| `q` | Close |
+
+## Interactive Rebase Panel
+
+Buffer-local bindings active in the interactive rebase panel (`:Gitflow rebase-interactive`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Cycle action for commit under cursor |
+| `p` | Set action to pick |
+| `r` | Set action to reword |
+| `e` | Set action to edit |
+| `s` | Set action to squash |
+| `f` | Set action to fixup |
+| `d` | Set action to drop |
+| `J` | Move commit down |
+| `K` | Move commit up |
+| `X` | Execute rebase |
+| `b` | Change base branch |
+| `q` | Close |
+
+## Actions Panel
+
+Buffer-local bindings active in the actions panel (`:Gitflow actions`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | View run detail |
+| `o` | Open in browser |
+| `<BS>` | Back to list |
+| `r` | Refresh |
+| `q` | Close |
+
+## Notifications Panel
+
+Buffer-local bindings active in the notifications panel (`:Gitflow notifications`).
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Open context |
+| `1` | Filter by error |
+| `2` | Filter by warning |
+| `3` | Filter by info |
+| `0` | Show all |
+| `c` | Clear all |
 | `r` | Refresh |
 | `q` | Close |
 

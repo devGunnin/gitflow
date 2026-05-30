@@ -79,12 +79,101 @@ function M.json(args, opts, cb)
 
 		local ok, decoded = pcall(vim.json.decode, text)
 		if not ok then
+			-- Defensive fallback: `gh api --paginate --jq <filter>` emits
+			-- concatenated JSON values (one per page) rather than a single
+			-- merged value.  If the first parse fails, try splitting the
+			-- payload at array/object boundaries and merging the pieces.
+			local merged = M._try_merge_concatenated_json(text)
+			if merged ~= nil then
+				cb(nil, merged, result)
+				return
+			end
 			cb(("Failed to parse gh JSON output for '%s': %s"):format(table.concat(args, " "), decoded), nil, result)
 			return
 		end
 
 		cb(nil, decoded, result)
 	end)
+end
+
+--- Attempt to recover a single JSON value from text that is actually
+--- multiple concatenated JSON values (e.g. `[…][…][…]` produced by
+--- `gh api --paginate --jq .`).  Returns the merged value on success,
+--- or nil if the recovery isn't safe.
+---@param text string
+---@return any|nil
+function M._try_merge_concatenated_json(text)
+	-- Cheap heuristic: only attempt if it looks like multiple top-level
+	-- arrays back-to-back (`][`) — that's the gh --paginate pattern.
+	if not text:find("%]%s*%[", 1) then
+		return nil
+	end
+
+	local merged = {}
+	local pos = 1
+	local len = #text
+	while pos <= len do
+		local first = text:sub(pos, pos)
+		if first == "" then
+			break
+		end
+		if first ~= "[" and first ~= "{" then
+			-- Skip whitespace between values.
+			pos = pos + 1
+		else
+			-- Walk forward, matching brackets while respecting strings,
+			-- to find the end of this top-level JSON value.
+			local depth = 0
+			local in_string = false
+			local escape = false
+			local end_pos = nil
+			for i = pos, len do
+				local ch = text:sub(i, i)
+				if in_string then
+					if escape then
+						escape = false
+					elseif ch == "\\" then
+						escape = true
+					elseif ch == '"' then
+						in_string = false
+					end
+				else
+					if ch == '"' then
+						in_string = true
+					elseif ch == "[" or ch == "{" then
+						depth = depth + 1
+					elseif ch == "]" or ch == "}" then
+						depth = depth - 1
+						if depth == 0 then
+							end_pos = i
+							break
+						end
+					end
+				end
+			end
+			if not end_pos then
+				return nil
+			end
+			local chunk = text:sub(pos, end_pos)
+			local ok, value = pcall(vim.json.decode, chunk)
+			if not ok then
+				return nil
+			end
+			if type(value) == "table" and value[1] ~= nil then
+				for _, item in ipairs(value) do
+					merged[#merged + 1] = item
+				end
+			else
+				merged[#merged + 1] = value
+			end
+			pos = end_pos + 1
+		end
+	end
+
+	if #merged == 0 then
+		return nil
+	end
+	return merged
 end
 
 ---@param args string[]

@@ -104,6 +104,25 @@ function M.pop(opts, cb)
 	end)
 end
 
+---@param opts table|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.apply(opts, cb)
+	local options = opts or {}
+	local args = { "stash", "apply" }
+	local ref = index_to_ref(options.index)
+	if ref then
+		args[#args + 1] = ref
+	end
+
+	git.git(args, options, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "stash apply"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
 ---@param index integer
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)

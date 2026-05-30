@@ -15,7 +15,7 @@ local ui_render = require("gitflow.ui.render")
 local M = {}
 local STASH_FLOAT_TITLE = "Gitflow Stash"
 local STASH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_stash_hl")
-local STASH_FLOAT_FOOTER = "P pop  D drop  S stash  r refresh  q close"
+local STASH_FLOAT_FOOTER = "A apply  P pop  D drop  S stash  r refresh  q close"
 
 ---@type GitflowStashPanelState
 M.state = {
@@ -84,6 +84,10 @@ local function ensure_window(cfg)
 		M.drop_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "A", function()
+		M.apply_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "S", function()
 		M.push_with_prompt()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -138,8 +142,11 @@ local function render(entries, current_branch)
 		local ref_start = line_text:find(entry.ref, 1, true)
 		if ref_start then
 			vim.api.nvim_buf_add_highlight(
-				bufnr, STASH_HIGHLIGHT_NS, "GitflowStashRef",
-				line_no - 1, ref_start - 1,
+				bufnr,
+				STASH_HIGHLIGHT_NS,
+				"GitflowStashRef",
+				line_no - 1,
+				ref_start - 1,
 				ref_start - 1 + #entry.ref
 			)
 		end
@@ -233,6 +240,24 @@ function M.pop_under_cursor()
 		end
 		utils.notify(output_or_default(result), vim.log.levels.INFO)
 		M.refresh()
+	end)
+end
+
+function M.apply_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
+		utils.notify("No stash entry selected", vim.log.levels.WARN)
+		return
+	end
+
+	git_stash.apply({ index = entry.index }, function(err, result)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(output_or_default(result), vim.log.levels.INFO)
+		-- no M.refresh() — stash entry is still there
+		refresh_status_panel_if_open()
 	end)
 end
 

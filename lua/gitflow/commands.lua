@@ -463,10 +463,7 @@ local function run_quick_action(cfg, action_name, on_done)
 		local step_name = sequence[index]
 		local runner = quick_action_runners[step_name]
 		if not runner then
-			show_error(
-				("Unknown quick action step '%s' in quick_actions.%s")
-					:format(tostring(step_name), action_name)
-			)
+			show_error(("Unknown quick action step '%s' in quick_actions.%s"):format(tostring(step_name), action_name))
 			if on_done then
 				on_done(false)
 			end
@@ -523,13 +520,9 @@ local function git_with_lock_retry(args, opts, cb, attempt)
 			return
 		end
 		local output = git.output(result)
-		if mentions_index_lock(output)
-			and current < LOCK_MAX_ATTEMPTS
-		then
+		if mentions_index_lock(output) and current < LOCK_MAX_ATTEMPTS then
 			vim.defer_fn(function()
-				git_with_lock_retry(
-					args, opts, cb, current + 1
-				)
+				git_with_lock_retry(args, opts, cb, current + 1)
 			end, LOCK_RETRY_DELAY_MS)
 			return
 		end
@@ -552,12 +545,7 @@ local function handle_conflict_failure(cfg, output, heading, hint)
 		end
 
 		show_error(
-			("%s\nConflicted files:\n%s%s\n\n%s"):format(
-				heading,
-				format_conflicted_paths(paths),
-				hint_text,
-				output
-			)
+			("%s\nConflicted files:\n%s%s\n\n%s"):format(heading, format_conflicted_paths(paths), hint_text, output)
 		)
 		refresh_status_panel_if_open()
 		conflict_panel.open(cfg)
@@ -630,13 +618,9 @@ local function run_rebase(args, cfg)
 	git.git(git_args, {}, function(result)
 		local action = table.concat(git_args, " ")
 		if result.code == 0 then
-			local output = result_message(
-				result, ("%s completed"):format(action)
-			)
+			local output = result_message(result, ("%s completed"):format(action))
 			show_info(output)
-			if action == "rebase --abort"
-				or action == "rebase --continue"
-			then
+			if action == "rebase --abort" or action == "rebase --continue" then
 				conflict_panel.close()
 			end
 			refresh_status_panel_if_open()
@@ -644,15 +628,12 @@ local function run_rebase(args, cfg)
 			return
 		end
 
-		local output = result_message(
-			result, ("%s failed"):format(action)
-		)
+		local output = result_message(result, ("%s failed"):format(action))
 		handle_conflict_failure(
 			cfg,
 			output,
 			"Rebase stopped with conflicts.",
-			"Use :Gitflow rebase --continue"
-				.. " or :Gitflow rebase --abort."
+			"Use :Gitflow rebase --continue" .. " or :Gitflow rebase --abort."
 		)
 	end)
 end
@@ -862,9 +843,7 @@ local function run_sync(cfg)
 			emit_post_operation()
 			git_branch.is_ahead_of_upstream({}, function(ahead_err, ahead, count)
 				if ahead_err then
-					show_error(
-						("Sync completed fetch/pull, but push check failed: %s"):format(ahead_err)
-					)
+					show_error(("Sync completed fetch/pull, but push check failed: %s"):format(ahead_err))
 					return
 				end
 
@@ -874,9 +853,7 @@ local function run_sync(cfg)
 					return
 				end
 
-				show_info(
-					("Sync step 3/3: git push (%d outgoing commit(s))"):format(count or 0)
-				)
+				show_info(("Sync step 3/3: git push (%d outgoing commit(s))"):format(count or 0))
 				run_push(function(ok)
 					if ok then
 						show_info("Sync complete: fetch, pull, and push succeeded")
@@ -1037,6 +1014,23 @@ local function register_builtin_subcommands(cfg)
 		end,
 	}
 
+	M.subcommands["pr-review"] = {
+		description = "Toggle PR review mode (tabpage with file list + inline diff)",
+		category = "GitHub",
+		run = function(ctx)
+			local positional = first_positional(ctx.args)
+			if positional then
+				review_panel.open(cfg, positional)
+				return ("Opening PR review mode for #%s..."):format(positional)
+			end
+			review_panel.toggle(cfg)
+			if review_panel.is_open() then
+				return "Closing PR review mode"
+			end
+			return "Opening PR picker for review mode"
+		end,
+	}
+
 	M.subcommands.status = {
 		description = "Open git status panel",
 		run = function()
@@ -1184,27 +1178,18 @@ local function register_builtin_subcommands(cfg)
 						message = nil
 					end
 				end
-				git_tag.create(
-					name,
-					{ message = message },
-					function(err)
-						if err then
-							show_error(err)
-							return
-						end
-						local label = message
-							and "annotated" or "lightweight"
-						show_info(
-							("Created %s tag '%s'"):format(
-								label, name
-							)
-						)
-						if tag_panel.is_open() then
-							tag_panel.refresh()
-						end
-						emit_post_operation()
+				git_tag.create(name, { message = message }, function(err)
+					if err then
+						show_error(err)
+						return
 					end
-				)
+					local label = message and "annotated" or "lightweight"
+					show_info(("Created %s tag '%s'"):format(label, name))
+					if tag_panel.is_open() then
+						tag_panel.refresh()
+					end
+					emit_post_operation()
+				end)
 				return ("Creating tag '%s'..."):format(name)
 			end
 
@@ -1218,9 +1203,7 @@ local function register_builtin_subcommands(cfg)
 						show_error(err)
 						return
 					end
-					show_info(
-						("Deleted tag '%s'"):format(name)
-					)
+					show_info(("Deleted tag '%s'"):format(name))
 					if tag_panel.is_open() then
 						tag_panel.refresh()
 					end
@@ -1235,20 +1218,13 @@ local function register_builtin_subcommands(cfg)
 					return "Usage: :Gitflow tag push <name> [remote]"
 				end
 				local remote = trimmed_or_nil(ctx.args[4])
-				git_tag.push(
-					name,
-					remote,
-					{},
-					function(err)
-						if err then
-							show_error(err)
-							return
-						end
-						show_info(
-							("Pushed tag '%s'"):format(name)
-						)
+				git_tag.push(name, remote, {}, function(err)
+					if err then
+						show_error(err)
+						return
 					end
-				)
+					show_info(("Pushed tag '%s'"):format(name))
+				end)
 				return ("Pushing tag '%s'..."):format(name)
 			end
 
@@ -1335,6 +1311,19 @@ local function register_builtin_subcommands(cfg)
 					emit_post_operation()
 				end)
 				return "Running git stash pop..."
+			end
+			if action == "apply" then
+				local index = tonumber(ctx.args[3])
+				git_stash.apply({ index = index }, function(err, result)
+					if err then
+						show_error(err)
+						return
+					end
+					show_info(result_message(result, "Applied stash entry (kept)"))
+					refresh_status_panel_if_open()
+					emit_post_operation()
+				end)
+				return "Running git stash apply..."
 			end
 
 			if action == "drop" then
@@ -1601,9 +1590,7 @@ local function register_builtin_subcommands(cfg)
 				if mode == "request-changes" then
 					mode = "request_changes"
 				end
-				if mode ~= "approve"
-					and mode ~= "request_changes"
-					and mode ~= "comment" then
+				if mode ~= "approve" and mode ~= "request_changes" and mode ~= "comment" then
 					return "Usage: :Gitflow pr submit-review"
 						.. " <number>"
 						.. " <approve|request_changes|comment>"
@@ -1618,40 +1605,22 @@ local function register_builtin_subcommands(cfg)
 				-- If review panel is open for this PR,
 				-- use submit_review_direct to batch
 				-- pending comments
-				if review_panel.is_open()
-					and tonumber(
-						review_panel.state.pr_number
-					) == tonumber(number) then
-					review_panel.submit_review_direct(
-						mode, message
-					)
-					return (
-						"Submitting %s review for"
-							.. " PR #%s..."
-					):format(mode, number)
+				if review_panel.is_open() and tonumber(review_panel.state.pr_number) == tonumber(number) then
+					review_panel.submit_review_direct(mode, message)
+					return ("Submitting %s review for" .. " PR #%s..."):format(mode, number)
 				end
 
-				gh_prs.review(
-					number, mode, message, {},
-					function(err)
-						if err then
-							show_error(err)
-							return
-						end
-						show_info(
-							(
-								"Submitted %s review"
-									.. " for PR #%s"
-							):format(mode, number)
-						)
-						if pr_panel.is_open() then
-							pr_panel.refresh()
-						end
+				gh_prs.review(number, mode, message, {}, function(err)
+					if err then
+						show_error(err)
+						return
 					end
-				)
-				return (
-					"Submitting %s review for PR #%s..."
-				):format(mode, number)
+					show_info(("Submitted %s review" .. " for PR #%s"):format(mode, number))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Submitting %s review for PR #%s..."):format(mode, number)
 			end
 
 			if action == "respond" then
@@ -2014,12 +1983,14 @@ end
 ---@return string[]
 local function list_branch_candidates()
 	local names = {}
-	for _, line in ipairs(system_lines({
-		"for-each-ref",
-		"--format=%(refname:short)",
-		"refs/heads",
-		"refs/remotes",
-	})) do
+	for _, line in
+		ipairs(system_lines({
+			"for-each-ref",
+			"--format=%(refname:short)",
+			"refs/heads",
+			"refs/remotes",
+		}))
+	do
 		local trimmed = vim.trim(line)
 		if trimmed ~= "" and not trimmed:match("/HEAD$") then
 			names[#names + 1] = trimmed
@@ -2056,8 +2027,17 @@ end
 
 local issue_actions = { "list", "view", "create", "comment", "close", "reopen", "edit" }
 local pr_actions = {
-	"list", "view", "review", "submit-review", "respond",
-	"create", "comment", "merge", "checkout", "close", "edit",
+	"list",
+	"view",
+	"review",
+	"submit-review",
+	"respond",
+	"create",
+	"comment",
+	"merge",
+	"checkout",
+	"close",
+	"edit",
 }
 local label_actions = { "list", "create", "delete" }
 local tag_actions = { "list", "create", "delete", "push" }
@@ -2073,11 +2053,7 @@ end
 ---@param arglead string
 ---@return string[]
 local function complete_issue(subaction, arglead)
-	if subaction == "view"
-		or subaction == "comment"
-		or subaction == "close"
-		or subaction == "reopen"
-	then
+	if subaction == "view" or subaction == "comment" or subaction == "close" or subaction == "reopen" then
 		return {}
 	end
 
@@ -2098,8 +2074,12 @@ local function complete_issue(subaction, arglead)
 
 	if subaction == "edit" then
 		return filter_candidates(arglead, {
-			"title=", "body=", "add=", "remove=",
-			"add_assignees=", "remove_assignees=",
+			"title=",
+			"body=",
+			"add=",
+			"remove=",
+			"add_assignees=",
+			"remove_assignees=",
 		})
 	end
 
@@ -2110,11 +2090,13 @@ end
 ---@param arglead string
 ---@return string[]
 local function complete_pr(subaction, arglead)
-	if subaction == "view"
+	if
+		subaction == "view"
 		or subaction == "comment"
 		or subaction == "checkout"
 		or subaction == "close"
-		or subaction == "respond" then
+		or subaction == "respond"
+	then
 		return {}
 	end
 
@@ -2135,22 +2117,25 @@ local function complete_pr(subaction, arglead)
 	end
 
 	if subaction == "merge" then
-		return filter_candidates(
-			arglead, { "merge", "squash", "rebase" }
-		)
+		return filter_candidates(arglead, { "merge", "squash", "rebase" })
 	end
 
 	if subaction == "edit" then
 		return filter_candidates(arglead, {
-			"add=", "remove=", "add_assignees=",
-			"remove_assignees=", "reviewers=",
+			"add=",
+			"remove=",
+			"add_assignees=",
+			"remove_assignees=",
+			"reviewers=",
 		})
 	end
 
 	if subaction == "review" or subaction == "submit-review" then
 		return filter_candidates(arglead, {
-			"approve", "request_changes",
-			"request-changes", "comment",
+			"approve",
+			"request_changes",
+			"request-changes",
+			"comment",
 		})
 	end
 
@@ -2279,12 +2264,8 @@ function M.complete(arglead, cmdline, _cursorpos)
 		if args[3] == "edit" and vim.startswith(arglead, "add_assignees=") then
 			return assignee_completion.complete_token(arglead, "add_assignees")
 		end
-		if args[3] == "edit"
-			and vim.startswith(arglead, "remove_assignees=")
-		then
-			return assignee_completion.complete_token(
-				arglead, "remove_assignees"
-			)
+		if args[3] == "edit" and vim.startswith(arglead, "remove_assignees=") then
+			return assignee_completion.complete_token(arglead, "remove_assignees")
 		end
 		return complete_issue(args[3], arglead)
 	end
@@ -2301,12 +2282,8 @@ function M.complete(arglead, cmdline, _cursorpos)
 		if args[3] == "edit" and vim.startswith(arglead, "add_assignees=") then
 			return assignee_completion.complete_token(arglead, "add_assignees")
 		end
-		if args[3] == "edit"
-			and vim.startswith(arglead, "remove_assignees=")
-		then
-			return assignee_completion.complete_token(
-				arglead, "remove_assignees"
-			)
+		if args[3] == "edit" and vim.startswith(arglead, "remove_assignees=") then
+			return assignee_completion.complete_token(arglead, "remove_assignees")
 		end
 		return complete_pr(args[3], arglead)
 	end
@@ -2365,29 +2342,15 @@ function M.setup(cfg)
 	vim.keymap.set("n", "<Plug>(GitflowReset)", "<Cmd>Gitflow reset<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowRevert)", "<Cmd>Gitflow revert<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowTag)", "<Cmd>Gitflow tag list<CR>", { silent = true })
-	vim.keymap.set(
-		"n",
-		"<Plug>(GitflowCherryPick)",
-		"<Cmd>Gitflow cherry-pick-panel<CR>",
-		{ silent = true }
-	)
-	vim.keymap.set(
-		"n",
-		"<Plug>(GitflowRebaseInteractive)",
-		"<Cmd>Gitflow rebase-interactive<CR>",
-		{ silent = true }
-	)
+	vim.keymap.set("n", "<Plug>(GitflowCherryPick)", "<Cmd>Gitflow cherry-pick-panel<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowRebaseInteractive)", "<Cmd>Gitflow rebase-interactive<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowActions)", "<Cmd>Gitflow actions<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowBlame)", "<Cmd>Gitflow blame<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowReflog)", "<Cmd>Gitflow reflog<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflict)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
 	vim.keymap.set("n", "<Plug>(GitflowConflicts)", "<Cmd>Gitflow conflicts<CR>", { silent = true })
-	vim.keymap.set(
-		"n",
-		"<Plug>(GitflowNotifications)",
-		"<Cmd>Gitflow notifications<CR>",
-		{ silent = true }
-	)
+	vim.keymap.set("n", "<Plug>(GitflowNotifications)", "<Cmd>Gitflow notifications<CR>", { silent = true })
+	vim.keymap.set("n", "<Plug>(GitflowPrReview)", "<Cmd>Gitflow pr-review<CR>", { silent = true })
 
 	local key_to_plug = {
 		help = "<Plug>(GitflowHelp)",
@@ -2419,6 +2382,7 @@ function M.setup(cfg)
 		palette = "<Plug>(GitflowPalette)",
 		conflict = "<Plug>(GitflowConflicts)",
 		notifications = "<Plug>(GitflowNotifications)",
+		pr_review = "<Plug>(GitflowPrReview)",
 	}
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]

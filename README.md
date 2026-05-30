@@ -61,7 +61,7 @@ require("gitflow").setup({
     push       = "<leader>gP",
     pull       = "<leader>gp",
     fetch      = "<leader>gf",
-    diff       = "gd",
+    diff       = "gD",
     log        = "gl",
     stash      = "gS",
     stash_push = "gZ",
@@ -180,6 +180,8 @@ All commands use the `:Gitflow` prefix.
 | `:Gitflow stash push [message]` | Stash changes with optional message |
 | `:Gitflow stash pop` | Pop latest stash entry |
 | `:Gitflow stash drop` | Drop latest stash entry |
+| `:Gitflow stash apply [index]` | Apply stash entry |
+
 | `:Gitflow branch` | Open branch list panel |
 | `:Gitflow merge <branch> [--abort]` | Merge a branch |
 | `:Gitflow rebase <branch> [--abort\|--continue]` | Rebase onto a branch |
@@ -244,6 +246,7 @@ instructions.
 | `<leader>gL` | Labels |
 | `<leader>gm` | Conflicts |
 | `gP` | Command palette |
+| `<leader>gG` | Toggle PR review mode |
 
 ## Statusline
 

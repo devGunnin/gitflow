@@ -541,6 +541,44 @@ function M.edit(number, input, opts, cb)
 	end)
 end
 
+--- List files changed in a PR via the GitHub API (paginated).  Each
+--- entry has filename / status / additions / deletions / patch.  The
+--- `patch` field is omitted by GitHub for files whose diff exceeds the
+--- service's per-file size cap (typical limit ≈ 3 MB / ~3000 lines).
+---
+--- This is preferred over `gh pr diff` because it streams pages and
+--- never tries to fit a multi-megabyte diff in a single response.
+---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, files: table[]|nil, result: GitflowGitResult)
+function M.list_files(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, {
+			code = 1, signal = 0, stdout = "",
+			stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/files"):format(
+		normalize_number(number)
+	)
+	-- IMPORTANT: do NOT pass `--jq` with `--paginate` for array endpoints.
+	-- gh applies the jq filter per-page, which produces concatenated
+	-- `[…][…]` output instead of a single merged array.  Without `--jq`,
+	-- gh combines all pages into one valid JSON array on its own.
+	gh.json({
+		"api", endpoint, "--paginate",
+	}, opts, function(err, data, result)
+		if err then
+			cb(err, nil, result)
+			return
+		end
+		cb(nil, data or {}, result)
+	end)
+end
+
 ---@param number integer|string
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, comments: table[]|nil, result: GitflowGitResult)
@@ -556,8 +594,10 @@ function M.review_comments(number, opts, cb)
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
 		normalize_number(number)
 	)
+	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
+	-- multi-page array responses.
 	gh.json({
-		"api", endpoint, "--paginate", "--jq", ".",
+		"api", endpoint, "--paginate",
 	}, opts, function(err, data, result)
 		if err then
 			cb(err, nil, result)
@@ -582,14 +622,55 @@ function M.list_reviews(number, opts, cb)
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/reviews"):format(
 		normalize_number(number)
 	)
+	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
+	-- multi-page array responses.
 	gh.json({
-		"api", endpoint, "--paginate", "--jq", ".",
+		"api", endpoint, "--paginate",
 	}, opts, function(err, data, result)
 		if err then
 			cb(err, nil, result)
 			return
 		end
 		cb(nil, data or {}, result)
+	end)
+end
+
+--- Delete a single review comment by its GitHub comment ID.
+---@param number integer|string  PR number (for symmetry / future scoping)
+---@param comment_id integer
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.delete_review_comment(number, comment_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, {
+			code = 1, signal = 0, stdout = "",
+			stderr = message or "", cmd = { "gh" },
+		})
+		return
+	end
+
+	local id = tonumber(comment_id)
+	if not id then
+		error(
+			"gitflow gh pr error: delete_review_comment requires comment_id",
+			2
+		)
+	end
+	id = math.floor(id)
+
+	-- The comment is scoped at the repo level on GitHub's API, not by PR,
+	-- but we accept the PR number for symmetry with the other helpers.
+	local _ = normalize_number(number)
+	local endpoint = ("repos/{owner}/{repo}/pulls/comments/%d"):format(id)
+	gh.run({
+		"api", endpoint, "--method", "DELETE",
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "delete_review_comment"), result)
+			return
+		end
+		cb(nil, result)
 	end)
 end
 
