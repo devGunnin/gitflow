@@ -10,6 +10,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local git = require("gitflow.git")
 local gh_prs = require("gitflow.gh.prs")
 local git_branch = require("gitflow.git.branch")
 local inline = require("gitflow.review.inline")
@@ -85,6 +86,7 @@ M.state = {
 	pr_title = nil,
 	pr_author = nil,
 	pr_head = nil,
+	pr_head_sha = nil,
 	pr_base = nil,
 	repo_slug = nil,
 	tabpage = nil,
@@ -101,8 +103,15 @@ M.state = {
 	active_file_idx = nil,
 	hunk_anchors = {},
 	show_inline_comments = true,
+	show_diff = true,
 	collapsed_dirs = {},
 	repo_toplevel = nil,
+	-- Deleted (LEFT-side) lines keyed by the buffer line they render next to,
+	-- so `c` can offer commenting on a removed line that has no real row.
+	deleted_anchors = {},
+	-- When set, the review is scoped to a git commit range instead of the
+	-- whole PR diff: { base = <rev>, head = <rev>, label = <string> }.
+	commit_scope = nil,
 	-- Legacy compat shape (kept so :Gitflow pr submit-review / external
 	-- callers that read state.* don't crash).
 	file_markers = {},
@@ -182,7 +191,15 @@ local function banner_text()
 		)
 	end
 	local author = M.state.pr_author and ("@" .. M.state.pr_author) or ""
-	return ("  PR REVIEW #%s  %s  %s%s "):format(n, title, author, pending_label)
+	local extra = ""
+	if M.state.commit_scope and M.state.commit_scope.label then
+		extra = extra .. (" • scope: %s"):format(M.state.commit_scope.label)
+	end
+	if not M.state.show_diff then
+		extra = extra .. " • diff hidden"
+	end
+	return ("  PR REVIEW #%s  %s  %s%s%s "):format(
+		n, title, author, pending_label, extra)
 end
 
 local function set_banner_winbar(winid)
@@ -581,6 +598,10 @@ end
 ---@param pc table
 ---@return boolean
 local function draft_in_scope(pc)
+	-- File-level comments (#361) have no line to resolve; always in scope.
+	if pc.file_level then
+		return true
+	end
 	if pc.new_line then
 		return diff_has_line(pc.path, pc.new_line, "RIGHT")
 	elseif pc.old_line then
@@ -608,6 +629,9 @@ local function render_file_list()
 		lines[#lines + 1] = ("  %s ← %s"):format(
 			M.state.pr_base, M.state.pr_head
 		)
+	end
+	if M.state.commit_scope and M.state.commit_scope.label then
+		lines[#lines + 1] = ("  ◆ scope: %s"):format(M.state.commit_scope.label)
 	end
 	lines[#lines + 1] = sep
 
@@ -671,10 +695,15 @@ local function render_file_list()
 		for idx, pc in ipairs(pending) do
 			local in_scope = draft_in_scope(pc)
 			local marker = in_scope and "●" or "✗"
-			local lno = pc.new_line or pc.old_line or 0
 			local name = vim.fn.fnamemodify(pc.path or "?", ":t")
 			local preview = vim.trim((pc.body or ""):gsub("%s+", " "))
-			local label = ("  %s %s:%d  %s"):format(marker, name, lno, preview)
+			local locator
+			if pc.file_level then
+				locator = name .. " (file)"
+			else
+				locator = ("%s:%d"):format(name, pc.new_line or pc.old_line or 0)
+			end
+			local label = ("  %s %s  %s"):format(marker, locator, preview)
 			label = vim.fn.strcharpart(label, 0, FILE_LIST_WIDTH - 1)
 			lines[#lines + 1] = label
 			draft_line_map[#lines] = idx
@@ -690,11 +719,14 @@ local function render_file_list()
 		" [n] threads  ●n drafts",
 		" <CR>/o open · <Tab> fold",
 		" zR/zM  unfold/fold all",
-		" c comment · S submit",
-		" R reply · <leader>x delete",
+		" c comment (file/line/del)",
+		" S submit · C scope commits",
+		" R reply · <leader>e edit",
+		" <leader>d toggle diff view",
+		" <leader>x delete comment",
 		" ]f/[f file · ]c/[c hunk",
 		" on draft: <CR> jump · dd del",
-		" X delete all off-diff drafts",
+		" e edit draft/file · X off-diff",
 		" r refresh · q close",
 	}
 	local hint_start = #lines + 1
@@ -856,8 +888,28 @@ local function apply_review_overlay(bufnr, path, winid, opts)
 	M.state.active_path = path
 	M.state.active_bufnr = bufnr
 
-	local result = inline.apply_annotations(bufnr, file_diff)
+	-- When the diff overlay is hidden (#357) we show the plain working-tree
+	-- file with no added/removed annotations; comments are still applied.
+	local result
+	if M.state.show_diff then
+		result = inline.apply_annotations(bufnr, file_diff)
+	else
+		inline.clear_annotations(bufnr)
+		result = { hunk_anchors = {}, deleted_lines = {} }
+	end
 	M.state.hunk_anchors = result.hunk_anchors or {}
+
+	-- Deleted lines have no real buffer row (they're virt_lines). Index them
+	-- by the buffer line they render next to so `c` can comment on them (#355).
+	M.state.deleted_anchors = {}
+	for _, d in ipairs(result.deleted_lines or {}) do
+		local bucket = M.state.deleted_anchors[d.buf_line]
+		if not bucket then
+			bucket = {}
+			M.state.deleted_anchors[d.buf_line] = bucket
+		end
+		bucket[#bucket + 1] = { old_line = d.old_line, text = d.text }
+	end
 	track_annotated(bufnr)
 
 	if file_diff and file_diff.truncated then
@@ -879,7 +931,11 @@ local function apply_review_overlay(bufnr, path, winid, opts)
 	vim.keymap.set("n", "<CR>", function() M.view_thread_at_cursor() end, kopts)
 	vim.keymap.set("n", "]c", function() M.next_hunk() end, kopts)
 	vim.keymap.set("n", "[c", function() M.prev_hunk() end, kopts)
+	vim.keymap.set("n", "]f", function() M.next_file() end, kopts)
+	vim.keymap.set("n", "[f", function() M.prev_file() end, kopts)
 	vim.keymap.set("n", "<leader>i", function() M.toggle_inline_comments() end, kopts)
+	vim.keymap.set("n", "<leader>d", function() M.toggle_diff_view() end, kopts)
+	vim.keymap.set("n", "<leader>e", function() M.edit_comment_at_cursor() end, kopts)
 	vim.keymap.set("n", "<leader>x", function() M.delete_comment_at_cursor() end, kopts)
 
 	-- Jump to first hunk so the change is immediately on screen.
@@ -1088,6 +1144,100 @@ function M.delete_draft_under_cursor()
 	refresh_comments_for_active()
 end
 
+--- Edit the body of a pending (unsubmitted) draft comment in place (#358).
+--- Pre-fills the prompt with the existing body so corrections / additions
+--- are quick.  Only drafts can be edited here; submitted remote comments
+--- are immutable through this path (reply with R instead).
+---@param pc table  a pending comment
+function M.edit_draft(pc)
+	if not pc then
+		return
+	end
+	input.prompt({
+		prompt = "Edit draft: ",
+		default = pc.body or "",
+	}, function(text)
+		local body = vim.trim(text or "")
+		if body == "" then
+			notify_warn("Comment cannot be empty (use dd to delete)")
+			return
+		end
+		pc.body = body
+		persist_pending()
+		notify_info("Draft comment updated")
+		render_file_list()
+		refresh_comments_for_active()
+	end)
+end
+
+--- Edit the draft comment under the cursor in the file-list "Drafts" section.
+function M.edit_draft_under_cursor()
+	local idx = draft_idx_under_cursor()
+	if idx then
+		M.edit_draft(M.state.pending_comments[idx])
+		return
+	end
+
+	-- On a file row, edit any draft on that file — file-level OR line
+	-- comments (#358/#361). It's natural to edit a file's comments by
+	-- hovering its row rather than hunting through the Drafts section.
+	local file_idx = file_idx_under_cursor()
+	if file_idx then
+		local file = M.state.files[file_idx]
+		local matches = {}
+		for _, pc in ipairs(M.state.pending_comments) do
+			if file and pc.path == file.path then
+				matches[#matches + 1] = pc
+			end
+		end
+		if #matches == 1 then
+			M.edit_draft(matches[1])
+			return
+		elseif #matches > 1 then
+			vim.ui.select(matches, {
+				prompt = "Edit which comment?",
+				format_item = function(pc)
+					local loc = pc.file_level and "(file)"
+						or ("L%d"):format(pc.new_line or pc.old_line or 0)
+					local preview =
+						vim.trim((pc.body or ""):gsub("%s+", " ")):sub(1, 50)
+					return ("%-7s %s"):format(loc, preview)
+				end,
+			}, function(choice)
+				if choice then
+					M.edit_draft(choice)
+				end
+			end)
+			return
+		end
+		notify_warn("No draft comment on this file")
+		return
+	end
+
+	notify_warn("No draft comment under the cursor")
+end
+
+--- Edit the draft anchored to the current diff-pane line.  Mirrors the draft
+--- lookup in delete_comment_at_cursor (matches new_line OR old_line so
+--- deleted-line drafts are editable too).
+function M.edit_comment_at_cursor()
+	if not M.state.active_path or not M.state.diff_winid
+		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		notify_warn("Open a file from the PR file list first")
+		return
+	end
+	local cur = vim.api.nvim_win_get_cursor(M.state.diff_winid)[1]
+	local path = M.state.active_path
+	for _, pc in ipairs(M.state.pending_comments) do
+		if pc.path == path
+			and (pc.new_line == cur or pc.old_line == cur) then
+			M.edit_draft(pc)
+			return
+		end
+	end
+	notify_warn("No draft comment under cursor")
+end
+
 --- Delete every draft whose line no longer maps to the PR diff (the ones
 --- that would be rejected on submit).
 function M.delete_off_diff_drafts()
@@ -1143,7 +1293,12 @@ local function set_up_file_list_keymaps(bufnr)
 	vim.keymap.set("n", "S", function() M.submit_pending_review() end, opts)
 	vim.keymap.set("n", "]f", function() M.next_file() end, opts)
 	vim.keymap.set("n", "[f", function() M.prev_file() end, opts)
+	-- File-level comment on the file row under the cursor (#361).
+	vim.keymap.set("n", "c", function() M.file_comment_under_cursor() end, opts)
+	-- Scope the review to a single commit or a range of commits (#363).
+	vim.keymap.set("n", "C", function() M.scope_to_commits() end, opts)
 	-- Draft management (acts on the "Drafts" section rows).
+	vim.keymap.set("n", "e", function() M.edit_draft_under_cursor() end, opts)
 	vim.keymap.set("n", "dd", function() M.delete_draft_under_cursor() end, opts)
 	vim.keymap.set("n", "x", function() M.delete_draft_under_cursor() end, opts)
 	vim.keymap.set("n", "X", function() M.delete_off_diff_drafts() end, opts)
@@ -1224,6 +1379,10 @@ local function pull_pr_metadata(view)
 	end
 	if view.headRefName and view.headRefName ~= vim.NIL then
 		M.state.pr_head = tostring(view.headRefName)
+	end
+	if view.headRefOid and view.headRefOid ~= vim.NIL then
+		-- Needed as commit_id when posting file-level comments (#361).
+		M.state.pr_head_sha = tostring(view.headRefOid)
 	end
 	if view.baseRefName and view.baseRefName ~= vim.NIL then
 		M.state.pr_base = tostring(view.baseRefName)
@@ -1369,6 +1528,60 @@ local function maybe_prompt_pr_checkout()
 	end)
 end
 
+--- Sum added / deleted lines across a hunk list (for file-list +/- counts).
+---@param hunks GitflowReviewHunk[]
+---@return integer, integer
+local function count_changes(hunks)
+	local add, del = 0, 0
+	for _, h in ipairs(hunks or {}) do
+		for _, l in ipairs(h.lines) do
+			if l.kind == "add" then
+				add = add + 1
+			elseif l.kind == "del" then
+				del = del + 1
+			end
+		end
+	end
+	return add, del
+end
+
+--- Build M.state.files / file_diffs from a local `git diff base head` instead
+--- of the GitHub PR files API.  Used by commit-scoped review (#363).
+---@param base string
+---@param head string
+---@param cb fun(err: string|nil)
+local function build_commit_scope_diffs(base, head, cb)
+	git.git(
+		{ "--no-pager", "diff", "--no-color", base, head },
+		{},
+		function(result)
+			if result.code ~= 0 then
+				cb(("Could not diff %s..%s: %s\n(Check out the PR branch so "
+					.. "the commits are available locally.)"):format(
+					base, head, git.output(result)))
+				return
+			end
+			local parsed = inline.parse_diff(result.stdout or "")
+			local files = {}
+			local file_diffs = {}
+			for path, fd in pairs(parsed) do
+				local add, del = count_changes(fd.hunks)
+				files[#files + 1] = {
+					path = path,
+					status = fd.status or "M",
+					additions = add,
+					deletions = del,
+				}
+				file_diffs[path] = fd
+			end
+			table.sort(files, function(a, b) return a.path < b.path end)
+			M.state.files = files
+			M.state.file_diffs = file_diffs
+			cb(nil)
+		end
+	)
+end
+
 function M.refresh()
 	if not M.state.cfg or not M.state.pr_number then
 		return
@@ -1378,12 +1591,51 @@ function M.refresh()
 	M.state.pr_title = M.state.pr_title or "(loading)"
 	render_file_list()
 
+	-- Load remote threads + cached drafts, then repaint. Shared by the
+	-- whole-PR and commit-scoped paths.
+	local function load_comments_and_finish()
+		gh_prs.review_comments(number, {}, function(rc_err, comments)
+			if not rc_err and comments then
+				M.state.comment_threads = build_comment_threads(comments)
+			end
+
+			-- Hydrate pending comments from cache (only if our in-memory
+			-- list is empty — never clobber user's current drafts).
+			if #M.state.pending_comments == 0 then
+				local cached = cache.load(number, M.state.repo_slug)
+				if cached and type(cached.comments) == "table" then
+					M.state.pending_comments = cached.comments
+				end
+			end
+
+			render_file_list()
+			set_banner_winbar(M.state.diff_winid)
+
+			if M.state.active_path then
+				M.open_file(M.state.active_path)
+			end
+		end)
+	end
+
 	gh_prs.view(number, {}, function(view_err, pr)
 		if view_err then
 			notify_error(view_err)
 		else
 			pull_pr_metadata(pr)
 			maybe_prompt_pr_checkout()
+		end
+
+		-- Commit-scoped review (#363): files come from a local git diff of
+		-- the chosen commit range, not the PR-wide files API.
+		if M.state.commit_scope then
+			local s = M.state.commit_scope
+			build_commit_scope_diffs(s.base, s.head, function(derr)
+				if derr then
+					notify_error(derr)
+				end
+				load_comments_and_finish()
+			end)
+			return
 		end
 
 		gh_prs.list_files(number, {}, function(files_err, files_data)
@@ -1396,30 +1648,134 @@ function M.refresh()
 			end
 
 			ingest_pr_files(files_data)
+			load_comments_and_finish()
+		end)
+	end)
+end
 
-			gh_prs.review_comments(number, {}, function(rc_err, comments)
-				if not rc_err and comments then
-					M.state.comment_threads = build_comment_threads(comments)
+--- Scope the review to a single commit or a range of commits (#363).  Lists
+--- the PR's commits oldest→newest and prompts for a start then an end commit;
+--- picking "Whole PR" resets the scope.
+function M.scope_to_commits()
+	local number = M.state.pr_number
+	if not number then
+		notify_warn("No pull request selected")
+		return
+	end
+	gh_prs.list_commits(number, {}, function(err, commits)
+		if err then
+			notify_error("Could not list PR commits: " .. err)
+			return
+		end
+		local list = {}
+		for _, c in ipairs(commits or {}) do
+			local sha = tostring(c.sha or "")
+			if sha ~= "" then
+				local msg = ""
+				if type(c.commit) == "table" then
+					msg = tostring(c.commit.message or "")
 				end
+				local subject = vim.split(msg, "\n", { plain = true })[1] or ""
+				list[#list + 1] = {
+					sha = sha, short = sha:sub(1, 7), subject = subject,
+				}
+			end
+		end
+		if #list == 0 then
+			notify_warn("This PR has no commits to scope to")
+			return
+		end
 
-				-- Hydrate pending comments from cache (only if our in-memory
-				-- list is empty — never clobber user's current drafts).
-				if #M.state.pending_comments == 0 then
-					local cached = cache.load(number, M.state.repo_slug)
-					if cached and type(cached.comments) == "table" then
-						M.state.pending_comments = cached.comments
-					end
+		local items = { { reset = true } }
+		for _, c in ipairs(list) do
+			items[#items + 1] = c
+		end
+		vim.ui.select(items, {
+			prompt = "Scope to commit (pick FIRST / oldest):",
+			format_item = function(it)
+				if it.reset then
+					return "★ Whole PR (reset scope)"
 				end
-
-				render_file_list()
-				set_banner_winbar(M.state.diff_winid)
-
-				if M.state.active_path then
-					M.open_file(M.state.active_path)
+				return ("%s  %s"):format(it.short, it.subject)
+			end,
+		}, function(choice)
+			if not choice then
+				return
+			end
+			if choice.reset then
+				M.clear_commit_scope()
+				return
+			end
+			local start_idx
+			for i, c in ipairs(list) do
+				if c.sha == choice.sha then
+					start_idx = i
+					break
 				end
+			end
+			if not start_idx then
+				return
+			end
+
+			local tail = {}
+			for i = start_idx, #list do
+				tail[#tail + 1] = list[i]
+			end
+			vim.ui.select(tail, {
+				prompt = "...to commit (pick LAST / newest; same = single):",
+				format_item = function(it)
+					return ("%s  %s"):format(it.short, it.subject)
+				end,
+			}, function(end_choice)
+				if not end_choice then
+					return
+				end
+				local first = list[start_idx]
+				local base = first.sha .. "^"
+				local head = end_choice.sha
+				local label = (first.sha == end_choice.sha)
+					and first.short
+					or ("%s..%s"):format(first.short, end_choice.short)
+				M.apply_commit_scope(base, head, label)
 			end)
 		end)
 	end)
+end
+
+--- Apply a commit-range scope and rebuild the file list from a local diff.
+---@param base string  parent of the oldest selected commit (e.g. "<sha>^")
+---@param head string  newest selected commit
+---@param label string  short human label for the banner
+function M.apply_commit_scope(base, head, label)
+	M.state.commit_scope = { base = base, head = head, label = label }
+	M.state.active_path = nil
+	M.state.active_bufnr = nil
+	M.state.active_file_idx = nil
+	build_commit_scope_diffs(base, head, function(err)
+		if err then
+			notify_error(err)
+			M.state.commit_scope = nil
+			M.refresh()
+			return
+		end
+		notify_info(("Review scoped to %s"):format(label))
+		render_file_list()
+		set_banner_winbar(M.state.diff_winid)
+	end)
+end
+
+--- Reset a commit scope back to the whole-PR diff (#363).
+function M.clear_commit_scope()
+	if not M.state.commit_scope then
+		notify_info("Already reviewing the whole PR")
+		return
+	end
+	M.state.commit_scope = nil
+	M.state.active_path = nil
+	M.state.active_bufnr = nil
+	M.state.active_file_idx = nil
+	notify_info("Review scope reset to the whole PR")
+	M.refresh()
 end
 
 ---@param cfg GitflowConfig|nil
@@ -1449,6 +1805,7 @@ function M.open(cfg, pr_number)
 	M.state.pr_title = nil
 	M.state.pr_author = nil
 	M.state.pr_head = nil
+	M.state.pr_head_sha = nil
 	M.state.pr_base = nil
 	M.state.files = {}
 	M.state.file_diffs = {}
@@ -1460,6 +1817,9 @@ function M.open(cfg, pr_number)
 	M.state.active_file_idx = nil
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
+	M.state.show_diff = true
+	M.state.deleted_anchors = {}
+	M.state.commit_scope = nil
 	M.state.collapsed_dirs = {}
 	M.state.repo_toplevel = nil
 	M.state._checkout_prompted = false
@@ -1529,6 +1889,7 @@ function M.close()
 	M.state.pr_title = nil
 	M.state.pr_author = nil
 	M.state.pr_head = nil
+	M.state.pr_head_sha = nil
 	M.state.pr_base = nil
 	M.state.tabpage = nil
 	M.state.file_list_winid = nil
@@ -1544,6 +1905,9 @@ function M.close()
 	M.state.active_file_idx = nil
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
+	M.state.show_diff = true
+	M.state.deleted_anchors = {}
+	M.state.commit_scope = nil
 	M.state.collapsed_dirs = {}
 	M.state.repo_toplevel = nil
 	M.state._checkout_prompted = false
@@ -1658,6 +2022,24 @@ local function find_hunk_line_for(path, line)
 	return nil, nil
 end
 
+---@param path string
+---@param old_line integer
+---@return GitflowReviewHunkLine|nil, string|nil
+local function find_hunk_del_line_for(path, old_line)
+	local fd = M.state.file_diffs[path]
+	if not fd then
+		return nil, nil
+	end
+	for _, h in ipairs(fd.hunks) do
+		for _, l in ipairs(h.lines) do
+			if l.kind == "del" and l.old_line == old_line then
+				return l, h.header
+			end
+		end
+	end
+	return nil, nil
+end
+
 local OFF_DIFF_HINT =
 	"You can only comment on lines that are part of the PR diff "
 	.. "(changed or context lines within a hunk). If line numbers look "
@@ -1692,20 +2074,10 @@ local function require_active_diff_line()
 	return { path = path, line = cur }
 end
 
-function M.inline_comment()
-	local ctx = require_active_diff_line()
-	if not ctx then
-		return
-	end
-
-	-- Validate up front: the line must be part of the PR diff or GitHub
-	-- will reject the review with "Line could not be resolved".
-	local hunk_line, hunk_header = find_hunk_line_for(ctx.path, ctx.line)
-	if not hunk_line then
-		notify_warn(OFF_DIFF_HINT)
-		return
-	end
-
+--- Prompt for a body and queue a draft against the chosen anchor target.
+---@param path string
+---@param target table  { hunk, new_line, old_line, desc }
+local function queue_target_comment(path, target)
 	input.prompt({ prompt = "Inline comment: " }, function(text)
 		local body = vim.trim(text or "")
 		if body == "" then
@@ -1714,22 +2086,137 @@ function M.inline_comment()
 		end
 		local pending = {
 			id = next_pending_id(),
-			path = ctx.path,
+			path = path,
 			body = body,
-			hunk = hunk_header,
+			hunk = target.hunk,
 			-- Anchor to the diff's own line numbers, not the raw cursor.
-			new_line = hunk_line.new_line,
-			old_line = hunk_line.old_line,
+			new_line = target.new_line,
+			old_line = target.old_line,
 			created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		}
 		M.state.pending_comments[#M.state.pending_comments + 1] = pending
 		persist_pending()
 		notify_info(
-			("Inline comment queued (#%d) — press S to submit"):
-				format(pending.id))
+			("Comment queued on %s (#%d) — press S to submit"):
+				format(target.desc, pending.id))
 		render_file_list()
 		refresh_comments_for_active()
 	end)
+end
+
+function M.inline_comment()
+	local ctx = require_active_diff_line()
+	if not ctx then
+		return
+	end
+
+	-- Collect every line the cursor row can anchor a comment to: the new-side
+	-- (RIGHT) line if it is part of the diff, plus any deleted (LEFT) lines
+	-- rendered next to this row.  Deleted lines have no real buffer row, so
+	-- this is the only way to comment on them (#355).
+	local targets = {}
+	local hunk_line, hunk_header = find_hunk_line_for(ctx.path, ctx.line)
+	if hunk_line then
+		targets[#targets + 1] = {
+			hunk = hunk_header,
+			new_line = hunk_line.new_line,
+			old_line = hunk_line.old_line,
+			desc = ("line %d"):format(hunk_line.new_line or ctx.line),
+		}
+	end
+	for _, d in ipairs(M.state.deleted_anchors[ctx.line] or {}) do
+		local _, del_header = find_hunk_del_line_for(ctx.path, d.old_line)
+		local preview = vim.trim((d.text or ""):gsub("%s+", " ")):sub(1, 40)
+		targets[#targets + 1] = {
+			hunk = del_header,
+			new_line = nil,
+			old_line = d.old_line,
+			desc = ("deleted line %d"):format(d.old_line or 0),
+			preview = preview,
+		}
+	end
+
+	if #targets == 0 then
+		notify_warn(OFF_DIFF_HINT)
+		return
+	end
+	if #targets == 1 then
+		queue_target_comment(ctx.path, targets[1])
+		return
+	end
+
+	-- An added/context line that also has deleted lines beside it: let the
+	-- user choose which one to comment on.
+	local items = {}
+	for _, t in ipairs(targets) do
+		if t.old_line and not t.new_line then
+			items[#items + 1] = {
+				target = t,
+				label = ("– %s: %s"):format(t.desc, t.preview or ""),
+			}
+		else
+			items[#items + 1] = {
+				target = t,
+				label = ("● %s (added/context)"):format(t.desc),
+			}
+		end
+	end
+	vim.ui.select(items, {
+		prompt = "Comment on which line?",
+		format_item = function(it) return it.label end,
+	}, function(choice)
+		if not choice then
+			return
+		end
+		queue_target_comment(ctx.path, choice.target)
+	end)
+end
+
+--- Queue a file-level comment (no line) for `path` (#361).  Works for any
+--- file in the PR including deleted files, which have no commentable lines.
+---@param path string
+function M.file_comment(path)
+	if not path or path == "" then
+		notify_warn("No file selected")
+		return
+	end
+	input.prompt({
+		prompt = ("File comment on %s: "):format(vim.fn.fnamemodify(path, ":t")),
+	}, function(text)
+		local body = vim.trim(text or "")
+		if body == "" then
+			notify_warn("Comment cannot be empty")
+			return
+		end
+		local pending = {
+			id = next_pending_id(),
+			path = path,
+			body = body,
+			file_level = true,
+			created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		}
+		M.state.pending_comments[#M.state.pending_comments + 1] = pending
+		persist_pending()
+		notify_info(
+			("File comment queued on %s (#%d) — press S to submit"):
+				format(vim.fn.fnamemodify(path, ":t"), pending.id))
+		render_file_list()
+		refresh_comments_for_active()
+	end)
+end
+
+--- Comment on the whole file on the file-list row under the cursor (#361).
+function M.file_comment_under_cursor()
+	local idx = file_idx_under_cursor()
+	if not idx then
+		notify_warn("Put the cursor on a file row to comment on the whole file")
+		return
+	end
+	local file = M.state.files[idx]
+	if not file then
+		return
+	end
+	M.file_comment(file.path)
 end
 
 function M.inline_comment_visual()
@@ -1804,6 +2291,28 @@ function M.toggle_inline_comments()
 	refresh_comments_for_active()
 end
 
+--- Toggle between the git-diff overlay (added/removed annotations) and a
+--- plain view of the file as it is in the branch (#357).  Some diffs are
+--- noisy; this lets the reviewer read the file normally and flip back.
+--- Comments stay visible in both modes.
+function M.toggle_diff_view()
+	M.state.show_diff = not M.state.show_diff
+	if M.state.active_bufnr
+		and vim.api.nvim_buf_is_valid(M.state.active_bufnr)
+		and M.state.active_path then
+		-- Re-apply the overlay on the active buffer to add/remove annotations.
+		apply_review_overlay(
+			M.state.active_bufnr, M.state.active_path,
+			M.state.diff_winid, { jump = false }
+		)
+	end
+	set_banner_winbar(M.state.diff_winid)
+	render_file_list()
+	notify_info(M.state.show_diff
+		and "Diff view: showing PR changes"
+		or "Diff view: showing file as in branch (diff hidden)")
+end
+
 function M.toggle_thread()
 	-- Comment threads aren't rendered as a separate list in this mode;
 	-- toggle is kept as a no-op so legacy keymaps don't error.
@@ -1811,11 +2320,32 @@ end
 
 -- ── Review submission ──────────────────────────────────────────────────
 
----@return table[]|nil, string|nil
+--- Split pending drafts into the reviews-batch payload (line/range comments)
+--- and file-level comments.  File comments are returned separately because
+--- the reviews API rejects any comment without a line (→ 422); they're posted
+--- via the review-comments API with subject_type=file instead (#361).
+---@return table[]|nil  line/range comments for the reviews API
+---@return table[]  file-level comments ({ path, body })
+---@return string|nil  error message if any draft can't be resolved
 local function collect_api_comments()
 	local api = {}
+	local file_comments = {}
 	local unresolved = {}
 	for _, pc in ipairs(M.state.pending_comments) do
+		-- File-level comments (#361): posted separately, never in the
+		-- reviews batch payload.
+		if pc.file_level then
+			if pc.path and pc.path ~= "" then
+				file_comments[#file_comments + 1] = {
+					path = pc.path,
+					body = pc.body,
+				}
+			else
+				unresolved[#unresolved + 1] = tostring(pc.id or "?")
+			end
+			goto continue
+		end
+
 		local entry = { path = pc.path, body = pc.body }
 		if pc.new_line then
 			entry.line = pc.new_line
@@ -1855,15 +2385,16 @@ local function collect_api_comments()
 		else
 			unresolved[#unresolved + 1] = tostring(pc.id or "?")
 		end
+		::continue::
 	end
 	if #unresolved > 0 then
-		return nil, (
+		return nil, {}, (
 			"%d comment(s) don't map to a line in the PR diff (ids: %s). "
 			.. "This usually means the PR branch isn't checked out — run "
 			.. "`gh pr checkout <N>`, reopen the review, and re-add them."
 		):format(#unresolved, table.concat(unresolved, ", "))
 	end
-	return api, nil
+	return api, file_comments, nil
 end
 
 ---@param mode "approve"|"request_changes"|"comment"
@@ -1888,25 +2419,85 @@ local function submit_review_with_pending(mode, body, on_success_message)
 		return
 	end
 
-	local api_comments, collect_err = collect_api_comments()
+	local api_comments, file_comments, collect_err = collect_api_comments()
 	if collect_err then
 		notify_warn(collect_err)
 		return
 	end
 
-	gh_prs.submit_review(number, mode, body, api_comments, {}, function(err)
-		if err then
-			notify_error(err)
+	-- Step 2 (runs after any file comments are posted): submit the review,
+	-- batching line/range comments through the reviews API.
+	local function finish_review()
+		local total = #M.state.pending_comments
+		local trimmed_body = vim.trim(body or "")
+
+		local function on_done(err)
+			if err then
+				notify_error(err)
+				return
+			end
+			M.state.pending_comments = {}
+			cache.clear(number, M.state.repo_slug)
+			notify_info(
+				("Review submitted (%s) with %d comment(s)"):
+					format(mode, total))
+			M.refresh()
+		end
+
+		-- A COMMENT review with no body and no inline comments is rejected
+		-- by GitHub (422). If the only drafts were file-level (already
+		-- posted), don't submit an empty review — just clear and refresh.
+		if #api_comments == 0 and mode == "comment" and trimmed_body == "" then
+			M.state.pending_comments = {}
+			cache.clear(number, M.state.repo_slug)
+			notify_info(on_success_message)
+			M.refresh()
 			return
 		end
-		local count = #M.state.pending_comments
-		M.state.pending_comments = {}
-		cache.clear(number, M.state.repo_slug)
-		notify_info(
-			("Review submitted (%s) with %d comment(s)"):
-				format(mode, count))
-		M.refresh()
-	end)
+
+		if #api_comments == 0 then
+			gh_prs.review(number, mode, body, {}, on_done)
+		else
+			gh_prs.submit_review(number, mode, body, api_comments, {}, on_done)
+		end
+	end
+
+	-- Step 1: post file-level comments via the review-comments API (the
+	-- reviews batch API can't carry them → 422).
+	if #file_comments == 0 then
+		finish_review()
+		return
+	end
+
+	local commit_id = M.state.pr_head_sha
+	if not commit_id or commit_id == "" then
+		notify_error(
+			"Cannot post file-level comment: PR head commit is unknown. "
+			.. "Press r to refresh the review and try again."
+		)
+		return
+	end
+
+	local idx = 0
+	local function post_next()
+		idx = idx + 1
+		if idx > #file_comments then
+			finish_review()
+			return
+		end
+		local fc = file_comments[idx]
+		gh_prs.create_file_comment(
+			number, commit_id, fc.path, fc.body, {},
+			function(err)
+				if err then
+					notify_error("File comment failed: " .. err)
+					return
+				end
+				post_next()
+			end
+		)
+	end
+	post_next()
 end
 
 ---@param mode "approve"|"request_changes"|"comment"

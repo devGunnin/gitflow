@@ -198,20 +198,30 @@ file list and the editing area with the standard `<C-w>w` motion.
 | --- | --- |
 | `<CR>` / `o` | Open the file under cursor in the right pane |
 | `]f` / `[f` | Next / previous file |
+| `c` | Comment on the whole file under the cursor (works for deleted files too) |
+| `C` | Scope the review to a single commit or a range of commits |
 | `S` | Submit review — opens dropdown (comment / request changes / approve), then prompts for an optional body |
 | `r` | Refresh PR metadata, diff, and threads |
 | `q` | Close review mode (confirms if pending comments exist) |
+
+On a draft row in the **Drafts** section: `<CR>` jumps to the comment,
+`e` edits the draft body, `dd` deletes it, `X` deletes all off-diff drafts.
+`e` on a **file row** edits any draft on that file (file-level or line
+comment); if the file has more than one draft you're asked which to edit.
 
 ### Editing pane (per-file)
 
 | Key | Action |
 | --- | --- |
-| `c` | Inline comment on the current line (normal and visual mode) |
+| `c` | Comment on the current line. If deleted lines are shown next to the cursor row, you'll be asked whether to comment on the added/context line or one of the deleted lines (normal and visual mode) |
 | `S` | Submit review (same dropdown flow as the file list) |
 | `R` | Reply to the existing thread on the current line |
-| `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
+| `]f` / `[f` | Next / previous file (without leaving the editing pane) |
 | `]c` / `[c` | Next / previous hunk |
+| `<leader>e` | Edit the draft comment on the current line |
+| `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
 | `<leader>i` | Toggle inline comment body lines (collapsed vs. expanded) |
+| `<leader>d` | Toggle the diff overlay: PR changes ↔ the file as it is in the branch |
 
 Pending comments are persisted to
 `stdpath('data')/gitflow/review/<repo>/<pr>.json` and rehydrated when
