@@ -1,11 +1,15 @@
---- Generic single/multi-select picker for branches, assignees, etc.
---- Reuses the fuzzy-filter pattern from label_picker but without color logic.
+--- Generic single/multi-select picker for branches, assignees, reviewers, etc.
+--- Live, incremental fuzzy filtering: press `/` to type and watch results
+--- narrow as you go; navigate with j/k, toggle with <Space>, apply with <CR>.
 
 local ui_window = require("gitflow.ui.window")
+local render = require("gitflow.ui.render")
+local icons = require("gitflow.icons")
 
 local M = {}
 
 local PICKER_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_list_picker_hl")
+local SEARCH_AUGROUP = "GitflowListPickerSearch"
 
 ---@class GitflowListPickerItem
 ---@field name string
@@ -18,20 +22,6 @@ local PICKER_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_list_picker_h
 ---@field multi_select? boolean  default true
 ---@field on_submit fun(selected: string[])
 ---@field on_cancel? fun()
-
----@class GitflowListPickerState
----@field bufnr integer|nil
----@field winid integer|nil
----@field items GitflowListPickerItem[]
----@field selected table<string, boolean>
----@field multi_select boolean
----@field query string
----@field filtered GitflowListPickerItem[]
----@field line_entries table<integer, GitflowListPickerItem>
----@field active_line integer|nil
----@field on_submit fun(selected: string[])
----@field on_cancel fun()|nil
----@field closed boolean
 
 ---@param text string|nil
 ---@return string
@@ -71,6 +61,29 @@ local function fuzzy_score(haystack, needle)
 	end
 
 	return score
+end
+
+---Greedy subsequence match positions (0-based byte indices into `text`).
+---@param text string
+---@param query string
+---@return integer[]
+local function match_positions(text, query)
+	local positions = {}
+	local q = normalize(query)
+	if q == "" then
+		return positions
+	end
+	local lower = text:lower()
+	local offset = 1
+	for i = 1, #q do
+		local found = lower:find(q:sub(i, i), offset, true)
+		if not found then
+			return {}
+		end
+		positions[#positions + 1] = found - 1
+		offset = found + 1
+	end
+	return positions
 end
 
 ---@param item GitflowListPickerItem
@@ -114,7 +127,7 @@ function M.filter_items(items, query)
 	return results
 end
 
----@param state GitflowListPickerState
+---@param state table
 local function collect_selected(state)
 	local selected = {}
 	for _, item in ipairs(state.items) do
@@ -126,13 +139,25 @@ local function collect_selected(state)
 	return selected
 end
 
----@param state GitflowListPickerState
+---@param state table
+local function selected_count(state)
+	local n = 0
+	for _, item in ipairs(state.items) do
+		if state.selected[vim.trim(tostring(item.name or ""))] then
+			n = n + 1
+		end
+	end
+	return n
+end
+
+---@param state table
 local function close_picker(state)
 	if state.closed then
 		return
 	end
 	state.closed = true
 
+	pcall(vim.api.nvim_del_augroup_by_name, SEARCH_AUGROUP)
 	if state.winid and vim.api.nvim_win_is_valid(state.winid) then
 		pcall(vim.api.nvim_win_close, state.winid, true)
 	end
@@ -144,37 +169,83 @@ local function close_picker(state)
 	state.bufnr = nil
 end
 
----@param state GitflowListPickerState
-local function apply_highlights(state)
-	local bufnr = state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+---Build the prompt line (line 1) chunks.
+---@param state table
+---@return table[]
+local function prompt_chunks(state)
+	local chunks = {
+		{ " " .. icons.get("ui", "search") .. " ", "GitflowPickerPromptIcon" },
+	}
+	if state.query ~= "" then
+		chunks[#chunks + 1] = { state.query, "GitflowPickerPrompt" }
+	else
+		chunks[#chunks + 1] = { "type to filter…", "GitflowFormPlaceholder" }
 	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, PICKER_HIGHLIGHT_NS, 0, -1)
-
-	vim.api.nvim_buf_add_highlight(
-		bufnr, PICKER_HIGHLIGHT_NS, "GitflowHeader", 0, 0, -1
-	)
-	vim.api.nvim_buf_add_highlight(
-		bufnr, PICKER_HIGHLIGHT_NS, "GitflowSeparator", 1, 0, -1
-	)
-
-	for line_no, _ in pairs(state.line_entries) do
-		if state.active_line == line_no then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				PICKER_HIGHLIGHT_NS,
-				"GitflowFormActiveField",
-				line_no - 1,
-				0,
-				-1
-			)
-		end
-	end
+	return chunks
 end
 
----@param state GitflowListPickerState
+---Build the count/separator line (line 2) chunks.
+---@param state table
+---@return table[]
+local function count_chunks(state)
+	local shown = #state.filtered
+	local total = #state.items
+	local label = state.multi_select
+		and ("%d/%d  ·  %d selected"):format(shown, total, selected_count(state))
+		or ("%d/%d"):format(shown, total)
+	local width = render.content_width({ winid = state.winid, bufnr = state.bufnr })
+	local left = "── "
+	local used = vim.fn.strdisplaywidth(left) + vim.fn.strdisplaywidth(label) + 1
+	local tail = string.rep("\u{2500}", math.max(0, width - used))
+	return {
+		{ left, "GitflowSeparator" },
+		{ label, "GitflowPickerCount" },
+		{ " ", "GitflowSeparator" },
+		{ tail, "GitflowSeparator" },
+	}
+end
+
+---Build the result-row chunks for a single item.
+---@param state table
+---@param item GitflowListPickerItem
+---@return table[]
+local function item_chunks(state, item)
+	local name = vim.trim(tostring(item.name or ""))
+	local desc = vim.trim(tostring(item.description or ""))
+	local chunks = { { " ", nil } }
+	if state.multi_select then
+		if state.selected[name] then
+			chunks[#chunks + 1] = { "[x]", "GitflowPickerCheck" }
+		else
+			chunks[#chunks + 1] = { "[ ]", "GitflowPickerCheckOff" }
+		end
+		chunks[#chunks + 1] = { " ", nil }
+	else
+		chunks[#chunks + 1] = { state.selected[name] and "> " or "  ", "GitflowPickerCheck" }
+	end
+	chunks[#chunks + 1] = { name, "GitflowChip" }
+	if desc ~= "" then
+		chunks[#chunks + 1] = { "  " .. desc, "GitflowMeta" }
+	end
+	return chunks
+end
+
+---@param state table
+local function build_hint(state)
+	if state.multi_select then
+		return render.hint_chunks({
+			{ "j/k", "move" }, { "<Spc>", "toggle" }, { "/", "filter" },
+			{ "<CR>", "apply" }, { "q", "close" },
+		}, { leading = " " })
+	end
+	return render.hint_chunks({
+		{ "j/k", "move" }, { "<CR>", "select" }, { "/", "filter" },
+		{ "q", "close" },
+	}, { leading = " " })
+end
+
+---Full render: prompt + count rule + results + hint.
+---@param state table
 local function render(state)
 	local bufnr = state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -183,70 +254,117 @@ local function render(state)
 
 	state.filtered = M.filter_items(state.items, state.query)
 
-	local lines = {
-		("Search: %s"):format(
-			state.query ~= "" and state.query or "(press / to filter)"
-		),
-		string.rep("\u{2500}", 40),
-	}
-	local line_entries = {}
+	local B = require("gitflow.ui.render").builder()
+	B:push(prompt_chunks(state))
+	B:push(count_chunks(state))
 
+	local line_entries = {}
 	if #state.filtered == 0 then
-		lines[#lines + 1] = "  (no matching items)"
+		B:raw("   (no matching items)", "GitflowMeta")
 	else
 		for _, item in ipairs(state.filtered) do
-			local name = vim.trim(tostring(item.name or ""))
-			local desc = vim.trim(tostring(item.description or ""))
-			local line
-			if state.multi_select then
-				local marker = state.selected[name] and "[x]" or "[ ]"
-				line = (" %s %s"):format(marker, name)
-			else
-				local marker = state.selected[name] and ">" or " "
-				line = (" %s %s"):format(marker, name)
+			local line_no = B:push(item_chunks(state, item))
+			line_entries[line_no] = item
+			-- fuzzy match highlight on the name
+			if state.query ~= "" then
+				local line_text = B.lines[line_no]
+				local name = vim.trim(tostring(item.name or ""))
+				local name_start = line_text:find(name, 1, true)
+				if name_start then
+					for _, pos in ipairs(match_positions(name, state.query)) do
+						B:hl(line_no, name_start - 1 + pos, name_start + pos, "GitflowPickerMatch")
+					end
+				end
 			end
-			if desc ~= "" then
-				line = ("%s - %s"):format(line, desc)
-			end
-			lines[#lines + 1] = line
-			line_entries[#lines] = item
 		end
 	end
 
-	lines[#lines + 1] = ""
-	if state.multi_select then
-		lines[#lines + 1] =
-			"j/k move  <Space> toggle  / filter  c clear"
-			.. "  <CR> apply  q cancel"
-	else
-		lines[#lines + 1] =
-			"j/k move  <CR> select  / filter  c clear  q cancel"
-	end
+	B:blank()
+	B:push(build_hint(state))
 
 	state.line_entries = line_entries
 
 	local fallback_line = #state.filtered > 0 and 3 or nil
-	if state.active_line == nil
-		or line_entries[state.active_line] == nil
-	then
+	if state.active_line == nil or line_entries[state.active_line] == nil then
 		state.active_line = fallback_line
 	end
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, B.lines)
+	if not state.searching then
+		vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+	end
 
-	apply_highlights(state)
+	B:apply(bufnr, PICKER_HIGHLIGHT_NS)
+	-- active-line accent (separate so it layers over chips)
+	if state.active_line then
+		pcall(
+			vim.api.nvim_buf_add_highlight, bufnr, PICKER_HIGHLIGHT_NS,
+			"GitflowFormActiveField", state.active_line - 1, 0, -1
+		)
+	end
 
-	if state.winid
-		and vim.api.nvim_win_is_valid(state.winid)
-		and state.active_line
-	then
-		vim.api.nvim_win_set_cursor(state.winid, { state.active_line, 0 })
+	if state.winid and vim.api.nvim_win_is_valid(state.winid) and state.active_line then
+		pcall(vim.api.nvim_win_set_cursor, state.winid, { state.active_line, 0 })
 	end
 end
 
----@param state GitflowListPickerState
+---Re-render results + count only (lines 2..end), preserving the live prompt
+---line being edited in search mode.
+---@param state table
+local function render_results_only(state)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	state.filtered = M.filter_items(state.items, state.query)
+
+	local B = require("gitflow.ui.render").builder()
+	-- index 1 placeholder for the (untouched) prompt line so highlight line
+	-- numbers line up; we won't write line 1 back.
+	B:raw("")
+	B:push(count_chunks(state))
+	local line_entries = {}
+	if #state.filtered == 0 then
+		B:raw("   (no matching items)", "GitflowMeta")
+	else
+		for _, item in ipairs(state.filtered) do
+			local line_no = B:push(item_chunks(state, item))
+			line_entries[line_no] = item
+			local line_text = B.lines[line_no]
+			local name = vim.trim(tostring(item.name or ""))
+			local name_start = line_text:find(name, 1, true)
+			if name_start and state.query ~= "" then
+				for _, pos in ipairs(match_positions(name, state.query)) do
+					B:hl(line_no, name_start - 1 + pos, name_start + pos, "GitflowPickerMatch")
+				end
+			end
+		end
+	end
+	B:blank()
+	B:push(build_hint(state))
+
+	state.line_entries = line_entries
+	state.active_line = (#state.filtered > 0) and 3 or nil
+
+	-- Replace from line 2 (index 1) to end; leave the prompt line intact.
+	vim.api.nvim_buf_set_lines(bufnr, 1, -1, false, vim.list_slice(B.lines, 2))
+
+	-- Re-apply highlights for the rewritten region.
+	vim.api.nvim_buf_clear_namespace(bufnr, PICKER_HIGHLIGHT_NS, 1, -1)
+	for line_no, list in pairs(B.spans) do
+		if line_no >= 2 then
+			for _, span in ipairs(list) do
+				pcall(
+					vim.api.nvim_buf_add_highlight, bufnr, PICKER_HIGHLIGHT_NS,
+					span[3], line_no - 1, span[1], span[2]
+				)
+			end
+		end
+	end
+end
+
+---@param state table
 ---@param delta integer
 local function move_selection(state, delta)
 	if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
@@ -274,11 +392,13 @@ local function move_selection(state, delta)
 	local next_index = ((index - 1 + delta) % #lines) + 1
 	state.active_line = lines[next_index]
 
-	vim.api.nvim_win_set_cursor(state.winid, { state.active_line, 0 })
-	apply_highlights(state)
+	pcall(vim.api.nvim_win_set_cursor, state.winid, { state.active_line, 0 })
+	-- refresh active-line accent
+	vim.api.nvim_buf_clear_namespace(state.bufnr, PICKER_HIGHLIGHT_NS, 0, -1)
+	render(state)
 end
 
----@param state GitflowListPickerState
+---@param state table
 local function toggle_current(state)
 	local line_no = state.active_line
 	if not line_no then
@@ -296,39 +416,76 @@ local function toggle_current(state)
 	end
 
 	if state.multi_select then
-		state.selected[name] = not state.selected[name]
+		state.selected[name] = not state.selected[name] or nil
 		render(state)
 	else
-		-- Single select: clear others, set this one
 		state.selected = { [name] = true }
-		-- Confirm immediately
 		local selections = collect_selected(state)
 		close_picker(state)
 		state.on_submit(selections)
 	end
 end
 
----@param state GitflowListPickerState
-local function set_query(state)
+---Enter live search: focus the prompt line and filter as the user types.
+---@param state table
+local function start_search(state)
 	if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
 		return
 	end
+	state.searching = true
+	vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
 
-	local current_win = vim.api.nvim_get_current_win()
-	vim.api.nvim_set_current_win(state.winid)
-	vim.fn.inputsave()
-	local query = vim.fn.input("Search: ", state.query)
-	vim.fn.inputrestore()
-	if vim.api.nvim_win_is_valid(current_win) then
-		vim.api.nvim_set_current_win(current_win)
+	local prompt = " " .. icons.get("ui", "search") .. " " .. state.query
+	vim.api.nvim_buf_set_lines(state.bufnr, 0, 1, false, { prompt })
+
+	local group = vim.api.nvim_create_augroup(SEARCH_AUGROUP, { clear = true })
+	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
+		group = group,
+		buffer = state.bufnr,
+		callback = function()
+			if not state.searching then
+				return
+			end
+			local line = vim.api.nvim_buf_get_lines(state.bufnr, 0, 1, false)[1] or ""
+			local prefix = " " .. icons.get("ui", "search") .. " "
+			local q
+			if vim.startswith(line, prefix) then
+				q = line:sub(#prefix + 1)
+			else
+				q = line:gsub("^%s+", "")
+			end
+			state.query = vim.trim(q)
+			render_results_only(state)
+		end,
+	})
+
+	local function leave(confirm)
+		state.searching = false
+		pcall(vim.api.nvim_del_augroup_by_name, SEARCH_AUGROUP)
+		vim.cmd("stopinsert")
+		render(state)
+		if confirm then
+			-- stay in normal-mode navigation on results
+		end
 	end
 
-	state.query = vim.trim(tostring(query or ""))
-	render(state)
+	vim.keymap.set("i", "<CR>", function()
+		leave(true)
+	end, { buffer = state.bufnr, silent = true })
+	vim.keymap.set("i", "<Esc>", function()
+		leave(false)
+	end, { buffer = state.bufnr, silent = true })
+	vim.keymap.set("i", "<C-c>", function()
+		leave(false)
+	end, { buffer = state.bufnr, silent = true })
+
+	vim.api.nvim_set_current_win(state.winid)
+	vim.api.nvim_win_set_cursor(state.winid, { 1, #prompt })
+	vim.cmd("startinsert!")
 end
 
 ---@param opts GitflowListPickerOpts
----@return GitflowListPickerState
+---@return table
 function M.open(opts)
 	local items = {}
 	for _, item in ipairs(opts.items or {}) do
@@ -377,6 +534,7 @@ function M.open(opts)
 		filtered = {},
 		line_entries = {},
 		active_line = nil,
+		searching = false,
 		on_submit = opts.on_submit,
 		on_cancel = opts.on_cancel,
 		closed = false,
@@ -391,6 +549,7 @@ function M.open(opts)
 		border = "rounded",
 		enter = true,
 	})
+	vim.api.nvim_set_option_value("cursorline", false, { win = state.winid })
 
 	render(state)
 
@@ -407,44 +566,30 @@ function M.open(opts)
 		end
 	end
 
-	vim.keymap.set("n", "j", function()
-		move_selection(state, 1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "k", function()
-		move_selection(state, -1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Down>", function()
-		move_selection(state, 1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Up>", function()
-		move_selection(state, -1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "/", function()
-		set_query(state)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "c", function()
+	local map = function(lhs, fn)
+		vim.keymap.set("n", lhs, fn, { buffer = bufnr, silent = true, nowait = true })
+	end
+
+	map("j", function() move_selection(state, 1) end)
+	map("k", function() move_selection(state, -1) end)
+	map("<Down>", function() move_selection(state, 1) end)
+	map("<Up>", function() move_selection(state, -1) end)
+	map("/", function() start_search(state) end)
+	map("i", function() start_search(state) end)
+	map("c", function()
 		state.query = ""
 		render(state)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "q", cancel, { buffer = bufnr, silent = true })
-	vim.keymap.set(
-		"n", "<Esc>", cancel, { buffer = bufnr, silent = true }
-	)
+	end)
+	map("q", cancel)
+	map("<Esc>", cancel)
 
 	if multi_select then
-		vim.keymap.set("n", "<Space>", function()
-			toggle_current(state)
-		end, { buffer = bufnr, silent = true })
-		vim.keymap.set(
-			"n", "<CR>", confirm, { buffer = bufnr, silent = true }
-		)
+		map("<Space>", function() toggle_current(state) end)
+		map("<Tab>", function() toggle_current(state) end)
+		map("<CR>", confirm)
 	else
-		vim.keymap.set("n", "<CR>", function()
-			toggle_current(state)
-		end, { buffer = bufnr, silent = true })
-		vim.keymap.set("n", "<Space>", function()
-			toggle_current(state)
-		end, { buffer = bufnr, silent = true })
+		map("<CR>", function() toggle_current(state) end)
+		map("<Space>", function() toggle_current(state) end)
 	end
 
 	return state

@@ -1,9 +1,16 @@
+--- Multi-select label picker with live fuzzy filtering and color previews.
+--- Press `/` to type and watch labels narrow as you go; <Space> toggles,
+--- <CR> applies.
+
 local ui_window = require("gitflow.ui.window")
 local highlights = require("gitflow.highlights")
+local render = require("gitflow.ui.render")
+local icons = require("gitflow.icons")
 
 local M = {}
 
 local PICKER_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_label_picker_hl")
+local SEARCH_AUGROUP = "GitflowLabelPickerSearch"
 
 ---@class GitflowLabelPickerLabel
 ---@field name string
@@ -16,19 +23,6 @@ local PICKER_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_label_picker_
 ---@field title? string
 ---@field on_submit fun(selected: string[])
 ---@field on_cancel? fun()
-
----@class GitflowLabelPickerState
----@field bufnr integer|nil
----@field winid integer|nil
----@field labels GitflowLabelPickerLabel[]
----@field selected table<string, boolean>
----@field query string
----@field filtered GitflowLabelPickerLabel[]
----@field line_entries table<integer, GitflowLabelPickerLabel>
----@field active_line integer|nil
----@field on_submit fun(selected: string[])
----@field on_cancel fun()|nil
----@field closed boolean
 
 ---@param text string|nil
 ---@return string
@@ -68,6 +62,28 @@ local function fuzzy_score(haystack, needle)
 	end
 
 	return score
+end
+
+---@param text string
+---@param query string
+---@return integer[]
+local function match_positions(text, query)
+	local positions = {}
+	local q = normalize(query)
+	if q == "" then
+		return positions
+	end
+	local lower = text:lower()
+	local offset = 1
+	for i = 1, #q do
+		local found = lower:find(q:sub(i, i), offset, true)
+		if not found then
+			return {}
+		end
+		positions[#positions + 1] = found - 1
+		offset = found + 1
+	end
+	return positions
 end
 
 ---@param label GitflowLabelPickerLabel
@@ -111,7 +127,7 @@ function M.filter_labels(labels, query)
 	return results
 end
 
----@param state GitflowLabelPickerState
+---@param state table
 local function collect_selected(state)
 	local selected = {}
 	for _, label in ipairs(state.labels) do
@@ -123,13 +139,25 @@ local function collect_selected(state)
 	return selected
 end
 
----@param state GitflowLabelPickerState
+---@param state table
+local function selected_count(state)
+	local n = 0
+	for _, label in ipairs(state.labels) do
+		if state.selected[vim.trim(tostring(label.name or ""))] then
+			n = n + 1
+		end
+	end
+	return n
+end
+
+---@param state table
 local function close_picker(state)
 	if state.closed then
 		return
 	end
 	state.closed = true
 
+	pcall(vim.api.nvim_del_augroup_by_name, SEARCH_AUGROUP)
 	if state.winid and vim.api.nvim_win_is_valid(state.winid) then
 		pcall(vim.api.nvim_win_close, state.winid, true)
 	end
@@ -141,50 +169,80 @@ local function close_picker(state)
 	state.bufnr = nil
 end
 
----@param state GitflowLabelPickerState
-local function apply_highlights(state)
-	local bufnr = state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+---@param state table
+---@return table[]
+local function prompt_chunks(state)
+	local chunks = {
+		{ " " .. icons.get("ui", "search") .. " ", "GitflowPickerPromptIcon" },
+	}
+	if state.query ~= "" then
+		chunks[#chunks + 1] = { state.query, "GitflowPickerPrompt" }
+	else
+		chunks[#chunks + 1] = { "filter labels…", "GitflowFormPlaceholder" }
 	end
+	return chunks
+end
 
-	vim.api.nvim_buf_clear_namespace(bufnr, PICKER_HIGHLIGHT_NS, 0, -1)
+---@param state table
+---@return table[]
+local function count_chunks(state)
+	local label = ("%d/%d  ·  %d selected"):format(
+		#state.filtered, #state.labels, selected_count(state)
+	)
+	local width = render.content_width({ winid = state.winid, bufnr = state.bufnr })
+	local left = "── "
+	local used = vim.fn.strdisplaywidth(left) + vim.fn.strdisplaywidth(label) + 1
+	local tail = string.rep("\u{2500}", math.max(0, width - used))
+	return {
+		{ left, "GitflowSeparator" },
+		{ label, "GitflowPickerCount" },
+		{ " ", "GitflowSeparator" },
+		{ tail, "GitflowSeparator" },
+	}
+end
 
-	vim.api.nvim_buf_add_highlight(bufnr, PICKER_HIGHLIGHT_NS, "GitflowHeader", 0, 0, -1)
-	vim.api.nvim_buf_add_highlight(bufnr, PICKER_HIGHLIGHT_NS, "GitflowSeparator", 1, 0, -1)
-
-	for line_no, label in pairs(state.line_entries) do
-		if state.active_line == line_no then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				PICKER_HIGHLIGHT_NS,
-				"GitflowFormActiveField",
-				line_no - 1,
-				0,
-				-1
-			)
-		end
-
-		local line = vim.api.nvim_buf_get_lines(bufnr, line_no - 1, line_no, false)[1] or ""
-		local label_name = vim.trim(tostring(label.name or ""))
-		if label_name ~= "" then
-			local start_col = line:find(label_name, 1, true)
-			if start_col then
-				local group = highlights.label_color_group(label.color or "")
-				vim.api.nvim_buf_add_highlight(
-					bufnr,
-					PICKER_HIGHLIGHT_NS,
-					group,
-					line_no - 1,
-					start_col - 1,
-					start_col - 1 + #label_name
-				)
+---@param B GitflowRenderBuilder
+---@param state table
+---@param label GitflowLabelPickerLabel
+---@return integer line_no
+local function push_label(B, state, label)
+	local name = vim.trim(tostring(label.name or ""))
+	local desc = vim.trim(tostring(label.description or ""))
+	local chunks = { { " ", nil } }
+	if state.selected[name] then
+		chunks[#chunks + 1] = { "[x]", "GitflowPickerCheck" }
+	else
+		chunks[#chunks + 1] = { "[ ]", "GitflowPickerCheckOff" }
+	end
+	chunks[#chunks + 1] = { " ", nil }
+	local color_group = highlights.label_color_group(label.color or "")
+	chunks[#chunks + 1] = { name, color_group }
+	if desc ~= "" then
+		chunks[#chunks + 1] = { "  " .. desc, "GitflowMeta" }
+	end
+	local line_no = B:push(chunks)
+	-- fuzzy match highlight on the name (layer over the chip color)
+	if state.query ~= "" then
+		local line_text = B.lines[line_no]
+		local name_start = line_text:find(name, 1, true)
+		if name_start then
+			for _, pos in ipairs(match_positions(name, state.query)) do
+				B:hl(line_no, name_start - 1 + pos, name_start + pos, "GitflowPickerMatch")
 			end
 		end
 	end
+	return line_no
 end
 
----@param state GitflowLabelPickerState
+---@param state table
+local function build_hint()
+	return render.hint_chunks({
+		{ "j/k", "move" }, { "<Spc>", "toggle" }, { "/", "filter" },
+		{ "<CR>", "apply" }, { "q", "close" },
+	}, { leading = " " })
+end
+
+---@param state table
 local function render(state)
 	local bufnr = state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -193,30 +251,22 @@ local function render(state)
 
 	state.filtered = M.filter_labels(state.labels, state.query)
 
-	local lines = {
-		("Search: %s"):format(state.query ~= "" and state.query or "(press / to filter)"),
-		string.rep("─", 40),
-	}
-	local line_entries = {}
+	local B = require("gitflow.ui.render").builder()
+	B:push(prompt_chunks(state))
+	B:push(count_chunks(state))
 
+	local line_entries = {}
 	if #state.filtered == 0 then
-		lines[#lines + 1] = "  (no matching labels)"
+		B:raw("   (no matching labels)", "GitflowMeta")
 	else
 		for _, label in ipairs(state.filtered) do
-			local name = vim.trim(tostring(label.name or ""))
-			local desc = vim.trim(tostring(label.description or ""))
-			local marker = state.selected[name] and "[x]" or "[ ]"
-			local line = (" %s %s"):format(marker, name)
-			if desc ~= "" then
-				line = ("%s - %s"):format(line, desc)
-			end
-			lines[#lines + 1] = line
-			line_entries[#lines] = label
+			local line_no = push_label(B, state, label)
+			line_entries[line_no] = label
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "j/k move  <Space> toggle  / filter  c clear  <CR> apply  q cancel"
+	B:blank()
+	B:push(build_hint())
 
 	state.line_entries = line_entries
 
@@ -226,17 +276,65 @@ local function render(state)
 	end
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, B.lines)
+	if not state.searching then
+		vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+	end
 
-	apply_highlights(state)
+	B:apply(bufnr, PICKER_HIGHLIGHT_NS)
+	if state.active_line then
+		pcall(
+			vim.api.nvim_buf_add_highlight, bufnr, PICKER_HIGHLIGHT_NS,
+			"GitflowFormActiveField", state.active_line - 1, 0, -1
+		)
+	end
 
 	if state.winid and vim.api.nvim_win_is_valid(state.winid) and state.active_line then
-		vim.api.nvim_win_set_cursor(state.winid, { state.active_line, 0 })
+		pcall(vim.api.nvim_win_set_cursor, state.winid, { state.active_line, 0 })
 	end
 end
 
----@param state GitflowLabelPickerState
+---@param state table
+local function render_results_only(state)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	state.filtered = M.filter_labels(state.labels, state.query)
+
+	local B = require("gitflow.ui.render").builder()
+	B:raw("") -- placeholder for the untouched prompt line
+	B:push(count_chunks(state))
+	local line_entries = {}
+	if #state.filtered == 0 then
+		B:raw("   (no matching labels)", "GitflowMeta")
+	else
+		for _, label in ipairs(state.filtered) do
+			local line_no = push_label(B, state, label)
+			line_entries[line_no] = label
+		end
+	end
+	B:blank()
+	B:push(build_hint())
+
+	state.line_entries = line_entries
+	state.active_line = (#state.filtered > 0) and 3 or nil
+
+	vim.api.nvim_buf_set_lines(bufnr, 1, -1, false, vim.list_slice(B.lines, 2))
+	vim.api.nvim_buf_clear_namespace(bufnr, PICKER_HIGHLIGHT_NS, 1, -1)
+	for line_no, list in pairs(B.spans) do
+		if line_no >= 2 then
+			for _, span in ipairs(list) do
+				pcall(
+					vim.api.nvim_buf_add_highlight, bufnr, PICKER_HIGHLIGHT_NS,
+					span[3], line_no - 1, span[1], span[2]
+				)
+			end
+		end
+	end
+end
+
+---@param state table
 ---@param delta integer
 local function move_selection(state, delta)
 	if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
@@ -264,11 +362,11 @@ local function move_selection(state, delta)
 	local next_index = ((index - 1 + delta) % #lines) + 1
 	state.active_line = lines[next_index]
 
-	vim.api.nvim_win_set_cursor(state.winid, { state.active_line, 0 })
-	apply_highlights(state)
+	pcall(vim.api.nvim_win_set_cursor, state.winid, { state.active_line, 0 })
+	render(state)
 end
 
----@param state GitflowLabelPickerState
+---@param state table
 local function toggle_current(state)
 	local line_no = state.active_line
 	if not line_no then
@@ -285,31 +383,60 @@ local function toggle_current(state)
 		return
 	end
 
-	state.selected[name] = not state.selected[name]
+	state.selected[name] = not state.selected[name] or nil
 	render(state)
 end
 
----@param state GitflowLabelPickerState
-local function set_query(state)
+---@param state table
+local function start_search(state)
 	if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
 		return
 	end
+	state.searching = true
+	vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
 
-	local current_win = vim.api.nvim_get_current_win()
-	vim.api.nvim_set_current_win(state.winid)
-	vim.fn.inputsave()
-	local query = vim.fn.input("Label search: ", state.query)
-	vim.fn.inputrestore()
-	if vim.api.nvim_win_is_valid(current_win) then
-		vim.api.nvim_set_current_win(current_win)
+	local prompt = " " .. icons.get("ui", "search") .. " " .. state.query
+	vim.api.nvim_buf_set_lines(state.bufnr, 0, 1, false, { prompt })
+
+	local group = vim.api.nvim_create_augroup(SEARCH_AUGROUP, { clear = true })
+	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
+		group = group,
+		buffer = state.bufnr,
+		callback = function()
+			if not state.searching then
+				return
+			end
+			local line = vim.api.nvim_buf_get_lines(state.bufnr, 0, 1, false)[1] or ""
+			local prefix = " " .. icons.get("ui", "search") .. " "
+			local q
+			if vim.startswith(line, prefix) then
+				q = line:sub(#prefix + 1)
+			else
+				q = line:gsub("^%s+", "")
+			end
+			state.query = vim.trim(q)
+			render_results_only(state)
+		end,
+	})
+
+	local function leave()
+		state.searching = false
+		pcall(vim.api.nvim_del_augroup_by_name, SEARCH_AUGROUP)
+		vim.cmd("stopinsert")
+		render(state)
 	end
 
-	state.query = vim.trim(tostring(query or ""))
-	render(state)
+	vim.keymap.set("i", "<CR>", leave, { buffer = state.bufnr, silent = true })
+	vim.keymap.set("i", "<Esc>", leave, { buffer = state.bufnr, silent = true })
+	vim.keymap.set("i", "<C-c>", leave, { buffer = state.bufnr, silent = true })
+
+	vim.api.nvim_set_current_win(state.winid)
+	vim.api.nvim_win_set_cursor(state.winid, { 1, #prompt })
+	vim.cmd("startinsert!")
 end
 
 ---@param opts GitflowLabelPickerOpts
----@return GitflowLabelPickerState
+---@return table
 function M.open(opts)
 	local labels = {}
 	for _, label in ipairs(opts.labels or {}) do
@@ -346,6 +473,7 @@ function M.open(opts)
 		filtered = {},
 		line_entries = {},
 		active_line = nil,
+		searching = false,
 		on_submit = opts.on_submit,
 		on_cancel = opts.on_cancel,
 		closed = false,
@@ -360,6 +488,7 @@ function M.open(opts)
 		border = "rounded",
 		enter = true,
 	})
+	vim.api.nvim_set_option_value("cursorline", false, { win = state.winid })
 
 	render(state)
 
@@ -376,31 +505,25 @@ function M.open(opts)
 		end
 	end
 
-	vim.keymap.set("n", "j", function()
-		move_selection(state, 1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "k", function()
-		move_selection(state, -1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Down>", function()
-		move_selection(state, 1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Up>", function()
-		move_selection(state, -1)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Space>", function()
-		toggle_current(state)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "/", function()
-		set_query(state)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "c", function()
+	local map = function(lhs, fn)
+		vim.keymap.set("n", lhs, fn, { buffer = bufnr, silent = true, nowait = true })
+	end
+
+	map("j", function() move_selection(state, 1) end)
+	map("k", function() move_selection(state, -1) end)
+	map("<Down>", function() move_selection(state, 1) end)
+	map("<Up>", function() move_selection(state, -1) end)
+	map("<Space>", function() toggle_current(state) end)
+	map("<Tab>", function() toggle_current(state) end)
+	map("/", function() start_search(state) end)
+	map("i", function() start_search(state) end)
+	map("c", function()
 		state.query = ""
 		render(state)
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<CR>", confirm, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "q", cancel, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Esc>", cancel, { buffer = bufnr, silent = true })
+	end)
+	map("<CR>", confirm)
+	map("q", cancel)
+	map("<Esc>", cancel)
 
 	return state
 end

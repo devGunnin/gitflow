@@ -23,10 +23,10 @@ local highlights = require("gitflow.highlights")
 
 local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
-local ISSUES_FLOAT_TITLE = "Gitflow Issues"
+local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  x close  L labels  A assign"
-	.. "  r refresh  b back  q close"
+	" <CR> view · c create · C comment · x close · L labels"
+	.. " · A assign · r refresh · b back · q close "
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -82,6 +82,12 @@ local function ensure_window(cfg)
 				M.state.winid = nil
 			end,
 		})
+	end
+
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_option_value(
+			"cursorline", true, { win = M.state.winid }
+		)
 	end
 
 	vim.keymap.set("n", "<CR>", function()
@@ -213,17 +219,74 @@ local function split_lines(text)
 	return vim.split(text, "\n", { plain = true, trimempty = false })
 end
 
+---Build colored chip chunks for an issue's labels.
+---@param issue table
+---@return table[]
+local function label_chunks(issue)
+	local labels = issue.labels or {}
+	if type(labels) ~= "table" or #labels == 0 then
+		return { { "\u{2014}", "GitflowMeta" } }
+	end
+	local chunks = {}
+	for _, label in ipairs(labels) do
+		local name = type(label) == "table" and label.name
+			or (type(label) == "string" and label or nil)
+		if name then
+			if #chunks > 0 then
+				chunks[#chunks + 1] = { " ", "GitflowMeta" }
+			end
+			local color = type(label) == "table" and label.color
+			local group = color and highlights.label_color_group(color)
+				or "GitflowChip"
+			chunks[#chunks + 1] = { name, group }
+		end
+	end
+	if #chunks == 0 then
+		return { { "\u{2014}", "GitflowMeta" } }
+	end
+	return chunks
+end
+
+---Push a section header line with a thin underline.
+---@param B GitflowRenderBuilder
+---@param icon string
+---@param title string
+local function section_header(B, icon, title)
+	B:push({
+		{ " ", nil },
+		{ icon .. "  ", "GitflowSectionIcon" },
+		{ title, "GitflowSectionTitle" },
+	})
+	B:raw(
+		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
+		"GitflowSeparator"
+	)
+end
+
+---@param B GitflowRenderBuilder
+---@param render_opts table
+local function push_header(B, title, render_opts)
+	for _, line in ipairs(ui_render.panel_header(title, render_opts)) do
+		B:raw(line, ui_render.is_separator(line) and "GitflowSeparator" or "GitflowTitle")
+	end
+end
+
 local function render_loading(message)
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Issues", render_opts)
-	lines[#lines + 1] = message
-	ui.buffer.update("issues", lines)
+	local B = ui_render.builder()
+	push_header(B, "Gitflow Issues", render_opts)
+	B:blank()
+	B:push({
+		{ "  ", nil },
+		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
+		{ message, "GitflowMeta" },
+	})
+	ui.buffer.update("issues", B.lines)
 	M.state.line_entries = {}
-
-	ui_render.apply_panel_highlights(M.state.bufnr, ISSUES_HIGHLIGHT_NS, lines, {})
+	B:apply(M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
 ---@param issues table[]
@@ -232,36 +295,91 @@ local function render_list(issues)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Issues", render_opts)
-	lines[#lines + 1] = ("Filters: state=%s label=%s assignee=%s"):
-		format(
-			maybe_text(M.state.filters.state),
-			maybe_text(M.state.filters.label),
-			maybe_text(M.state.filters.assignee)
-		)
-	lines[#lines + 1] = ("Issues (%d)"):format(#issues)
-	local line_entries = {}
+	local B = ui_render.builder()
+	push_header(B, "Gitflow Issues", render_opts)
 
+	-- Summary / filter bar
+	local summary = {
+		{ "  ", nil },
+		{ icons.get("github", "issue_open") .. "  ", "GitflowSectionIcon" },
+		{
+			("%d issue%s"):format(#issues, #issues == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     state ", "GitflowMetaKey" },
+		{ maybe_text(M.state.filters.state), "GitflowMeta" },
+	}
+	if M.state.filters.label then
+		summary[#summary + 1] = { "   label ", "GitflowMetaKey" }
+		summary[#summary + 1] = { maybe_text(M.state.filters.label), "GitflowMeta" }
+	end
+	if M.state.filters.assignee then
+		summary[#summary + 1] = { "   assignee ", "GitflowMetaKey" }
+		summary[#summary + 1] = { maybe_text(M.state.filters.assignee), "GitflowMeta" }
+	end
+	B:push(summary)
+	B:blank()
+
+	local line_entries = {}
 	if #issues == 0 then
-		lines[#lines + 1] = "  (none)"
+		B:push({
+			{ "   ", nil },
+			{ "No issues match these filters.", "GitflowMeta" },
+		})
 	else
+		local width = ui_render.content_width(render_opts)
 		for _, issue in ipairs(issues) do
 			local number = tostring(issue.number or "?")
 			local state = issue_state(issue)
-			local title = maybe_text(issue.title)
-			local labels = join_label_names(issue)
 			local state_icon = icons.get("github", "issue_" .. state)
-			local assignees = join_assignee_names(issue)
-			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
-			lines[#lines + 1] = ("      labels: %s  assignees: %s"):format(
-				labels, assignees
+			local title = maybe_text(issue.title)
+			local time = ui_render.relative_time(issue.updatedAt)
+			local left = (" %s  #%s  "):format(state_icon, number)
+			local left_w = vim.fn.strdisplaywidth(left)
+			local time_w = vim.fn.strdisplaywidth(time)
+			local title_max = math.max(8, width - left_w - time_w - 2)
+			title = ui_render.truncate(title, title_max)
+			local gap = math.max(
+				2, width - left_w - vim.fn.strdisplaywidth(title) - time_w
 			)
-			line_entries[#lines - 1] = issue
-			line_entries[#lines] = issue
+			local title_group = state == "closed"
+				and "GitflowCardTitleDim" or "GitflowCardTitle"
+			local title_line = B:push({
+				{ " ", nil },
+				{ state_icon .. "  ", issue_highlight_group(state) },
+				{ "#" .. number, "GitflowNumber" },
+				{ "  ", nil },
+				{ title, title_group },
+				{ string.rep(" ", gap), nil },
+				{ time, "GitflowRelTime" },
+			})
+
+			local meta = {
+				{ "     ", nil },
+				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
+				{
+					issue.author and maybe_text(issue.author.login) or "\u{2014}",
+					"GitflowAuthor",
+				},
+				{ "    labels: ", "GitflowMetaKey" },
+			}
+			for _, chunk in ipairs(label_chunks(issue)) do
+				meta[#meta + 1] = chunk
+			end
+			local assignees = join_assignee_names(issue)
+			if assignees ~= "-" then
+				meta[#meta + 1] = { "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
+				meta[#meta + 1] = { assignees, "GitflowChip" }
+			end
+			local meta_line = B:push(meta)
+
+			line_entries[title_line] = issue
+			line_entries[meta_line] = issue
+			B:blank()
 		end
 	end
 
-	ui.buffer.update("issues", lines)
+	ui.buffer.update("issues", B.lines)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
@@ -270,49 +388,37 @@ local function render_list(issues)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
+	B:apply(bufnr, ISSUES_HIGHLIGHT_NS)
 
-	local entry_highlights = {}
-
-	-- Mark section headers
-	for line_no, line in ipairs(lines) do
-		if vim.startswith(line, "Filters:")
-			or vim.startswith(line, "Issues (")
-		then
-			entry_highlights[line_no] = "GitflowHeader"
+	-- Place the cursor on the first card.
+	local first_line = nil
+	for line_no in pairs(line_entries) do
+		if not first_line or line_no < first_line then
+			first_line = line_no
 		end
 	end
-
-	for line_no, issue in pairs(line_entries) do
-		local group = issue_highlight_group(issue_state(issue))
-		entry_highlights[line_no] = group
-	end
-
-	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
-		entry_highlights = entry_highlights,
-	})
-
-	-- Apply colored label highlights on label lines
-	for line_no, issue in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		if line_text:find("labels:", 1, true) then
-			local issue_labels = issue.labels or {}
-			for _, label in ipairs(issue_labels) do
-				local label_name = type(label) == "table" and label.name
-					or type(label) == "string" and label
-				local label_color = type(label) == "table" and label.color
-				if label_name and label_color then
-					local group = highlights.label_color_group(label_color)
-					local s = line_text:find(label_name, 1, true)
-					if s then
-						vim.api.nvim_buf_add_highlight(
-							bufnr, ISSUES_HIGHLIGHT_NS, group,
-							line_no - 1, s - 1, s - 1 + #label_name
-						)
-					end
-				end
-			end
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_option_value(
+			"cursorline", true, { win = M.state.winid }
+		)
+		if first_line then
+			pcall(vim.api.nvim_win_set_cursor, M.state.winid, { first_line, 0 })
 		end
 	end
+end
+
+---@param B GitflowRenderBuilder
+---@param key string
+---@param value_chunks table[]
+local function meta_row(B, key, value_chunks)
+	local chunks = {
+		{ "  ", nil },
+		{ ui_render.pad_right(key, 11), "GitflowMetaKey" },
+	}
+	for _, chunk in ipairs(value_chunks) do
+		chunks[#chunks + 1] = chunk
+	end
+	return B:push(chunks)
 end
 
 ---@param issue table
@@ -323,99 +429,83 @@ local function render_view(issue)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		("Issue #%s: %s"):format(maybe_text(issue.number), maybe_text(issue.title)),
+	local B = ui_render.builder()
+	push_header(
+		B,
+		("Issue #%s: %s"):format(
+			maybe_text(issue.number), maybe_text(issue.title)
+		),
 		render_opts
 	)
-	local header_line_count = #lines
-	lines[#lines + 1] = ("Title: %s"):format(maybe_text(issue.title))
-	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
-	lines[#lines + 1] = ("Author: %s"):format(issue.author and maybe_text(issue.author.login) or "-")
-	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(issue))
-	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(issue))
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Body"
-	lines[#lines + 1] = "----"
+	B:blank()
 
+	meta_row(B, "Title:", { { maybe_text(issue.title), "GitflowCardTitle" } })
+	meta_row(B, "State:", {
+		{ view_icon .. " " .. view_state, issue_highlight_group(view_state) },
+	})
+	meta_row(B, "Author:", {
+		{ issue.author and maybe_text(issue.author.login) or "\u{2014}", "GitflowAuthor" },
+	})
+	meta_row(B, "Labels:", label_chunks(issue))
+	meta_row(B, "Assignees:", {
+		{ join_assignee_names(issue), "GitflowChip" },
+	})
+	B:blank()
+
+	section_header(B, icons.get("ui", "comment"), "Body")
 	local body_lines = split_lines(tostring(issue.body or ""))
 	if #body_lines == 0 then
-		lines[#lines + 1] = "(empty)"
+		B:raw("   (no description)", "GitflowMeta")
 	else
 		for _, body_line in ipairs(body_lines) do
-			lines[#lines + 1] = body_line
+			B:raw("   " .. body_line)
 		end
 	end
-
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Comments"
-	lines[#lines + 1] = "--------"
+	B:blank()
 
 	local comments = issue.comments or {}
-	if type(comments) ~= "table" or #comments == 0 then
-		lines[#lines + 1] = "(none)"
+	local count = type(comments) == "table" and #comments or 0
+	section_header(B, icons.get("ui", "comment"), ("Comments (%d)"):format(count))
+	if count == 0 then
+		B:raw("   (none)", "GitflowMeta")
 	else
 		for _, comment in ipairs(comments) do
-			local author = comment.author and maybe_text(comment.author.login) or "unknown"
-			lines[#lines + 1] = ("%s:"):format(author)
+			local author = comment.author
+				and maybe_text(comment.author.login) or "unknown"
+			B:push({
+				{ "   ", nil },
+				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
+				{ author .. ":", "GitflowAuthor" },
+			})
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
-				lines[#lines + 1] = "  (empty)"
+				B:raw("     (empty)", "GitflowMeta")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					lines[#lines + 1] = ("  %s"):format(comment_line)
+					B:raw("     " .. comment_line)
 				end
 			end
-			lines[#lines + 1] = ""
+			B:blank()
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  x: close  L: labels  A: assign  r: refresh"
-
-	ui.buffer.update("issues", lines)
+	ui.buffer.update("issues", B.lines)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
+
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_option_value(
+			"cursorline", false, { win = M.state.winid }
+		)
+		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { 1, 0 })
+	end
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	local entry_highlights = {}
-	entry_highlights[header_line_count + 2] = issue_highlight_group(issue_state(issue))
-
-	-- Mark section headers in detail view
-	for line_no, line in ipairs(lines) do
-		if line == "Body" or line == "Comments" then
-			entry_highlights[line_no] = "GitflowHeader"
-		end
-	end
-
-	ui_render.apply_panel_highlights(bufnr, ISSUES_HIGHLIGHT_NS, lines, {
-		entry_highlights = entry_highlights,
-	})
-
-	-- Colored labels in detail view
-	local labels_line_no = header_line_count + 4
-	local labels_line = lines[labels_line_no] or ""
-	if labels_line:find("Labels:", 1, true) then
-		local issue_labels = issue.labels or {}
-		for _, label in ipairs(issue_labels) do
-			local lname = type(label) == "table" and label.name
-				or type(label) == "string" and label
-			local lcolor = type(label) == "table" and label.color
-			if lname and lcolor then
-				local group = highlights.label_color_group(lcolor)
-				local s = labels_line:find(lname, 1, true)
-				if s then
-					vim.api.nvim_buf_add_highlight(
-						bufnr, ISSUES_HIGHLIGHT_NS, group,
-						labels_line_no - 1, s - 1, s - 1 + #lname
-					)
-				end
-			end
-		end
-	end
+	B:apply(bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
 ---@return table|nil
@@ -506,15 +596,52 @@ function M.create_interactive()
 		return
 	end
 
+	local function names_completer(names)
+		return function(lead)
+			local query = vim.trim(tostring(lead or "")):lower()
+			local out = {}
+			for _, name in ipairs(names) do
+				if query == "" or tostring(name):lower():find(query, 1, true) then
+					out[#out + 1] = name
+				end
+			end
+			return out
+		end
+	end
+
 	local function open_form(available_labels, assignee_items)
+		local label_names = {}
+		for _, label in ipairs(available_labels) do
+			if type(label) == "table" and label.name then
+				label_names[#label_names + 1] = label.name
+			end
+		end
+		local assignee_names = {}
+		for _, item in ipairs(assignee_items) do
+			if type(item) == "table" and item.name then
+				assignee_names[#assignee_names + 1] = item.name
+			end
+		end
+
 		form.open({
 			title = "Create Issue",
 			fields = {
-				{ name = "Title", key = "title", required = true },
-				{ name = "Body", key = "body", multiline = true },
+				{
+					name = "Title",
+					key = "title",
+					required = true,
+					placeholder = "Short, descriptive summary",
+				},
+				{
+					name = "Body",
+					key = "body",
+					multiline = true,
+					placeholder = "Describe the issue… (Markdown supported)",
+				},
 				{
 					name = "Labels",
 					key = "labels",
+					complete = names_completer(label_names),
 					picker = function(ctx)
 						label_picker.open({
 							title = "Issue Labels",
@@ -531,6 +658,7 @@ function M.create_interactive()
 				{
 					name = "Assignees",
 					key = "assignees",
+					complete = names_completer(assignee_names),
 					picker = function(ctx)
 						list_picker.open({
 							title = "Select Assignees",

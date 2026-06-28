@@ -26,10 +26,10 @@ local highlights = require("gitflow.highlights")
 
 local M = {}
 local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
-local PRS_FLOAT_TITLE = "Gitflow Pull Requests"
+local PRS_FLOAT_TITLE = "  Gitflow Pull Requests  "
 local PRS_FLOAT_FOOTER =
-	"<CR> view  c create  C comment  L labels  A assign  m merge"
-	.. "  o checkout  v review  r refresh  b back  q close"
+	" <CR> view · c create · m merge · o checkout · v review"
+	.. " · L labels · r refresh · q close "
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -98,6 +98,12 @@ local function ensure_window(cfg)
 				M.state.winid = nil
 			end,
 		})
+	end
+
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_option_value(
+			"cursorline", true, { win = M.state.winid }
+		)
 	end
 
 	vim.keymap.set("n", "<CR>", function()
@@ -263,22 +269,98 @@ local function join_label_names(pr)
 	return table.concat(names, ", ")
 end
 
+---@param pr table
+---@return table[]
+local function label_chunks(pr)
+	local labels = pr.labels or {}
+	if type(labels) ~= "table" or #labels == 0 then
+		return { { "\u{2014}", "GitflowMeta" } }
+	end
+	local chunks = {}
+	for _, label in ipairs(labels) do
+		local name = type(label) == "table" and label.name
+			or (type(label) == "string" and label or nil)
+		if name then
+			if #chunks > 0 then
+				chunks[#chunks + 1] = { " ", "GitflowMeta" }
+			end
+			local color = type(label) == "table" and label.color
+			local group = color and highlights.label_color_group(color)
+				or "GitflowChip"
+			chunks[#chunks + 1] = { name, group }
+		end
+	end
+	if #chunks == 0 then
+		return { { "\u{2014}", "GitflowMeta" } }
+	end
+	return chunks
+end
+
+---@param B GitflowRenderBuilder
+---@param icon string
+---@param title string
+local function section_header(B, icon, title)
+	B:push({
+		{ " ", nil },
+		{ icon .. "  ", "GitflowSectionIcon" },
+		{ title, "GitflowSectionTitle" },
+	})
+	B:raw(
+		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
+		"GitflowSeparator"
+	)
+end
+
+---@param B GitflowRenderBuilder
+---@param title string
+---@param render_opts table
+local function push_header(B, title, render_opts)
+	for _, line in ipairs(ui_render.panel_header(title, render_opts)) do
+		B:raw(line, ui_render.is_separator(line) and "GitflowSeparator" or "GitflowTitle")
+	end
+end
+
+---@param B GitflowRenderBuilder
+---@param key string
+---@param value_chunks table[]
+local function meta_row(B, key, value_chunks)
+	local chunks = {
+		{ "  ", nil },
+		{ ui_render.pad_right(key, 12), "GitflowMetaKey" },
+	}
+	for _, chunk in ipairs(value_chunks) do
+		chunks[#chunks + 1] = chunk
+	end
+	return B:push(chunks)
+end
+
+---@param pr table
+---@return string
+local function pr_state_icon(state)
+	return icons.get("github", "pr_" .. state)
+end
+
 local function render_loading(message)
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Pull Requests", render_opts)
-	lines[#lines + 1] = message
-	ui.buffer.update("prs", lines)
+	local B = ui_render.builder()
+	push_header(B, "Gitflow Pull Requests", render_opts)
+	B:blank()
+	B:push({
+		{ "  ", nil },
+		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
+		{ message, "GitflowMeta" },
+	})
+	ui.buffer.update("prs", B.lines)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {})
+	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 end
 
 ---@param prs table[]
@@ -287,39 +369,79 @@ local function render_list(prs)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Pull Requests", render_opts)
-	lines[#lines + 1] = ("Filters: state=%s base=%s head=%s"):
-		format(
-			maybe_text(M.state.filters.state),
-			maybe_text(M.state.filters.base),
-			maybe_text(M.state.filters.head)
-		)
-	lines[#lines + 1] = ("PRs (%d)"):format(#prs)
-	local line_entries = {}
+	local B = ui_render.builder()
+	push_header(B, "Gitflow Pull Requests", render_opts)
 
+	local summary = {
+		{ "  ", nil },
+		{ icons.get("github", "pr_open") .. "  ", "GitflowSectionIcon" },
+		{ ("PRs (%d)"):format(#prs), "GitflowSectionTitle" },
+		{ "     state ", "GitflowMetaKey" },
+		{ maybe_text(M.state.filters.state), "GitflowMeta" },
+	}
+	if M.state.filters.base then
+		summary[#summary + 1] = { "   base ", "GitflowMetaKey" }
+		summary[#summary + 1] = { maybe_text(M.state.filters.base), "GitflowMeta" }
+	end
+	B:push(summary)
+	B:blank()
+
+	local line_entries = {}
 	if #prs == 0 then
-		lines[#lines + 1] = "  (none)"
+		B:push({
+			{ "   ", nil },
+			{ "No pull requests match these filters.", "GitflowMeta" },
+		})
 	else
+		local width = ui_render.content_width(render_opts)
 		for _, pr in ipairs(prs) do
 			local number = tostring(pr.number or "?")
 			local state = pr_state(pr)
+			local state_icon = pr_state_icon(state)
 			local title = maybe_text(pr.title)
-			local refs = ("%s -> %s"):format(
-				maybe_text(pr.headRefName), maybe_text(pr.baseRefName)
+			local time = ui_render.relative_time(pr.updatedAt)
+			local left = (" %s  #%s  "):format(state_icon, number)
+			local left_w = vim.fn.strdisplaywidth(left)
+			local time_w = vim.fn.strdisplaywidth(time)
+			local title_max = math.max(8, width - left_w - time_w - 2)
+			title = ui_render.truncate(title, title_max)
+			local gap = math.max(
+				2, width - left_w - vim.fn.strdisplaywidth(title) - time_w
 			)
-			local assignees = join_assignee_names(pr)
-			local labels = join_label_names(pr)
-			local state_icon = icons.get("github", "pr_" .. state)
-			lines[#lines + 1] = ("  #%s %s %s"):format(number, state_icon, title)
-			lines[#lines + 1] = ("      refs: %s"):format(refs)
-			lines[#lines + 1] = ("      labels: %s  assignees: %s"):format(labels, assignees)
-			line_entries[#lines - 1] = pr
-			line_entries[#lines] = pr
-			line_entries[#lines - 2] = pr
+			local title_group = (state == "merged" or state == "closed")
+				and "GitflowCardTitleDim" or "GitflowCardTitle"
+			local title_line = B:push({
+				{ " ", nil },
+				{ state_icon .. "  ", pr_highlight_group(state) },
+				{ "#" .. number, "GitflowNumber" },
+				{ "  ", nil },
+				{ title, title_group },
+				{ string.rep(" ", gap), nil },
+				{ time, "GitflowRelTime" },
+			})
+
+			local meta = {
+				{ "     ", nil },
+				{ icons.get("ui", "ref") .. " ", "GitflowMeta" },
+				{ maybe_text(pr.headRefName), "GitflowChip" },
+				{ " \u{2192} ", "GitflowMeta" },
+				{ maybe_text(pr.baseRefName), "GitflowChip" },
+				{ "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" },
+				{ pr.author and maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
+				{ "    labels: ", "GitflowMetaKey" },
+			}
+			for _, chunk in ipairs(label_chunks(pr)) do
+				meta[#meta + 1] = chunk
+			end
+			local meta_line = B:push(meta)
+
+			line_entries[title_line] = pr
+			line_entries[meta_line] = pr
+			B:blank()
 		end
 	end
 
-	ui.buffer.update("prs", lines)
+	ui.buffer.update("prs", B.lines)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
@@ -328,50 +450,20 @@ local function render_list(prs)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
+	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 
-	local entry_highlights = {}
-
-	-- Mark section headers
-	for line_no, line in ipairs(lines) do
-		if vim.startswith(line, "Filters:")
-			or vim.startswith(line, "PRs (")
-		then
-			entry_highlights[line_no] = "GitflowHeader"
+	local first_line = nil
+	for line_no in pairs(line_entries) do
+		if not first_line or line_no < first_line then
+			first_line = line_no
 		end
 	end
-
-	for line_no, pr in pairs(line_entries) do
-		local group = pr_highlight_group(pr_state(pr))
-		entry_highlights[line_no] = group
-	end
-
-	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
-		entry_highlights = entry_highlights,
-	})
-
-	for line_no, pr in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		if line_text:find("labels:", 1, true) then
-			local pr_labels = pr.labels or {}
-			for _, label in ipairs(pr_labels) do
-				local label_name = type(label) == "table" and label.name
-					or type(label) == "string" and label
-				local label_color = type(label) == "table" and label.color
-				if label_name and label_color then
-					local group = highlights.label_color_group(label_color)
-					local start_col = line_text:find(label_name, 1, true)
-					if start_col then
-						vim.api.nvim_buf_add_highlight(
-							bufnr,
-							PRS_HIGHLIGHT_NS,
-							group,
-							line_no - 1,
-							start_col - 1,
-							start_col - 1 + #label_name
-						)
-					end
-				end
-			end
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_option_value(
+			"cursorline", true, { win = M.state.winid }
+		)
+		if first_line then
+			pcall(vim.api.nvim_win_set_cursor, M.state.winid, { first_line, 0 })
 		end
 	end
 end
@@ -380,50 +472,63 @@ end
 ---@param review_comments table[]|nil
 local function render_view(pr, review_comments)
 	local view_state = pr_state(pr)
-	local view_icon = icons.get("github", "pr_" .. view_state)
-	local review_author_lines = {}
-	local review_body_lines = {}
+	local view_icon = pr_state_icon(view_state)
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
+	local B = ui_render.builder()
+	push_header(
+		B,
 		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
 		render_opts
 	)
-	local header_line_count = #lines
-	lines[#lines + 1] = ("Title: %s"):format(maybe_text(pr.title))
-	lines[#lines + 1] = ("State: %s %s"):format(view_icon, view_state)
-	lines[#lines + 1] = ("Author: %s"):format(pr.author and maybe_text(pr.author.login) or "-")
-	lines[#lines + 1] = ("Refs: %s -> %s"):
-		format(maybe_text(pr.headRefName), maybe_text(pr.baseRefName))
-	lines[#lines + 1] = ("Labels: %s"):format(join_label_names(pr))
-	local labels_line_no = #lines
-	lines[#lines + 1] = ("Assignees: %s"):format(join_assignee_names(pr))
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Body"
-	lines[#lines + 1] = "----"
+	B:blank()
 
+	meta_row(B, "Title:", { { maybe_text(pr.title), "GitflowCardTitle" } })
+	meta_row(B, "State:", {
+		{ view_icon .. " " .. view_state, pr_highlight_group(view_state) },
+	})
+	meta_row(B, "Author:", {
+		{ pr.author and maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
+	})
+	meta_row(B, "Refs:", {
+		{ maybe_text(pr.headRefName), "GitflowChip" },
+		{ " \u{2192} ", "GitflowMeta" },
+		{ maybe_text(pr.baseRefName), "GitflowChip" },
+	})
+	meta_row(B, "Labels:", label_chunks(pr))
+	meta_row(B, "Assignees:", { { join_assignee_names(pr), "GitflowChip" } })
+	B:blank()
+
+	local n_reviews = type(pr.reviews) == "table" and #pr.reviews or 0
+	local n_files = type(pr.files) == "table" and #pr.files or 0
+	local n_reqs = type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0
+	B:push({
+		{ "  ", nil },
+		{ icons.get("ui", "check") .. " ", "GitflowCount" },
+		{ ("%d file%s changed"):format(n_files, n_files == 1 and "" or "s"), "GitflowMeta" },
+		{ "   \u{b7}   ", "GitflowHintSep" },
+		{ ("%d review%s"):format(n_reviews, n_reviews == 1 and "" or "s"), "GitflowMeta" },
+		{ "   \u{b7}   ", "GitflowHintSep" },
+		{ ("%d requested"):format(n_reqs), "GitflowMeta" },
+	})
+	B:blank()
+
+	section_header(B, icons.get("ui", "comment"), "Body")
 	local body_lines = split_lines(tostring(pr.body or ""))
 	if #body_lines == 0 then
-		lines[#lines + 1] = "(empty)"
+		B:raw("   (no description)", "GitflowMeta")
 	else
 		for _, body_line in ipairs(body_lines) do
-			lines[#lines + 1] = body_line
+			B:raw("   " .. body_line)
 		end
 	end
-
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = ("Review requests: %d"):
-		format(type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0)
-	lines[#lines + 1] = ("Reviews: %d"):format(type(pr.reviews) == "table" and #pr.reviews or 0)
-	lines[#lines + 1] = ("Changed files: %d"):format(type(pr.files) == "table" and #pr.files or 0)
+	B:blank()
 
 	local reviews = pr.reviews or {}
 	if type(reviews) == "table" and #reviews > 0 then
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = "Reviews"
-		lines[#lines + 1] = "-------"
+		section_header(B, icons.get("github", "review_approved"), "Reviews")
 		for _, review in ipairs(reviews) do
 			local author = review_author(review)
 			local state = maybe_text(review.state)
@@ -432,126 +537,81 @@ local function render_view(pr, review_comments)
 			if submitted_at ~= "-" then
 				header = ("%s (%s)"):format(header, submitted_at)
 			end
-			lines[#lines + 1] = ("%s:"):format(header)
-			review_author_lines[#review_author_lines + 1] = #lines
-
+			B:raw(("%s:"):format(header), "GitflowReviewAuthor")
 			local review_message_lines = split_lines(tostring(review.body or ""))
 			if #review_message_lines == 0 then
-				lines[#lines + 1] = "  >> (empty)"
-				review_body_lines[#review_body_lines + 1] = #lines
+				B:raw("  >> (empty)", "GitflowReviewComment")
 			else
 				for _, review_body_line in ipairs(review_message_lines) do
-					lines[#lines + 1] = ("  >> %s"):format(review_body_line)
-					review_body_lines[#review_body_lines + 1] = #lines
+					B:raw(("  >> %s"):format(review_body_line), "GitflowReviewComment")
 				end
 			end
-			lines[#lines + 1] = ""
+			B:blank()
 		end
 	end
 
-	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Comments"
-	lines[#lines + 1] = "--------"
-
 	local comments = pr.comments or {}
-	if type(comments) ~= "table" or #comments == 0 then
-		lines[#lines + 1] = "(none)"
+	local comment_count = type(comments) == "table" and #comments or 0
+	section_header(B, icons.get("ui", "comment"), ("Comments (%d)"):format(comment_count))
+	if comment_count == 0 then
+		B:raw("   (none)", "GitflowMeta")
 	else
 		for _, comment in ipairs(comments) do
 			local author = comment.author
 				and maybe_text(comment.author.login) or "unknown"
-			lines[#lines + 1] = ("%s:"):format(author)
+			B:push({
+				{ "   ", nil },
+				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
+				{ author .. ":", "GitflowAuthor" },
+			})
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
-				lines[#lines + 1] = "  (empty)"
+				B:raw("     (empty)", "GitflowMeta")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					lines[#lines + 1] = ("  %s"):format(comment_line)
+					B:raw("     " .. comment_line)
 				end
 			end
-			lines[#lines + 1] = ""
+			B:blank()
 		end
 	end
 
 	local rc = review_comments or {}
 	if type(rc) == "table" and #rc > 0 then
-		lines[#lines + 1] = ""
-		lines[#lines + 1] = "Review Comments"
-		lines[#lines + 1] = "---------------"
-
+		section_header(B, icons.get("ui", "comment"), "Review Comments")
 		for _, c in ipairs(rc) do
 			local author = review_author(c)
 			local path = maybe_text(c.path)
-			lines[#lines + 1] = ("@%s on %s:"):format(author, path)
-			review_author_lines[#review_author_lines + 1] = #lines
-			local body_lines = split_lines(tostring(c.body or ""))
-			if #body_lines == 0 then
-				lines[#lines + 1] = "  >> (empty)"
-				review_body_lines[#review_body_lines + 1] = #lines
+			B:raw(("@%s on %s:"):format(author, path), "GitflowReviewAuthor")
+			local cbody = split_lines(tostring(c.body or ""))
+			if #cbody == 0 then
+				B:raw("  >> (empty)", "GitflowReviewComment")
 			else
-				for _, bl in ipairs(body_lines) do
-					lines[#lines + 1] = ("  >> %s"):format(bl)
-					review_body_lines[#review_body_lines + 1] = #lines
+				for _, bl in ipairs(cbody) do
+					B:raw(("  >> %s"):format(bl), "GitflowReviewComment")
 				end
 			end
-			lines[#lines + 1] = ""
+			B:blank()
 		end
 	end
 
-	lines[#lines + 1] = "b: back to list  C: comment  L: labels  A: assign"
-		.. "  m: merge  o: checkout  v: review  r: refresh"
-
-	ui.buffer.update("prs", lines)
+	ui.buffer.update("prs", B.lines)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
+
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_option_value(
+			"cursorline", false, { win = M.state.winid }
+		)
+		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { 1, 0 })
+	end
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	local entry_highlights = {}
-	entry_highlights[header_line_count + 2] = pr_highlight_group(pr_state(pr))
-
-	-- Mark section headers in detail view
-	for line_no, line in ipairs(lines) do
-		if line == "Body" or line == "Comments"
-			or line == "Reviews" or line == "Review Comments" then
-			entry_highlights[line_no] = "GitflowHeader"
-		end
-	end
-	for _, line_no in ipairs(review_author_lines) do
-		entry_highlights[line_no] = "GitflowReviewAuthor"
-	end
-	for _, line_no in ipairs(review_body_lines) do
-		entry_highlights[line_no] = "GitflowReviewComment"
-	end
-
-	ui_render.apply_panel_highlights(bufnr, PRS_HIGHLIGHT_NS, lines, {
-		entry_highlights = entry_highlights,
-	})
-
-	-- Colored labels in detail view
-	local labels_line = lines[labels_line_no] or ""
-	if labels_line:find("Labels:", 1, true) then
-		local pr_labels = pr.labels or {}
-		for _, label in ipairs(pr_labels) do
-			local lname = type(label) == "table" and label.name
-				or type(label) == "string" and label
-			local lcolor = type(label) == "table" and label.color
-			if lname and lcolor then
-				local group = highlights.label_color_group(lcolor)
-				local s = labels_line:find(lname, 1, true)
-				if s then
-					vim.api.nvim_buf_add_highlight(
-						bufnr, PRS_HIGHLIGHT_NS, group,
-						labels_line_no - 1, s - 1, s - 1 + #lname
-					)
-				end
-			end
-		end
-	end
+	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 end
 
 ---@return table|nil
@@ -707,15 +767,58 @@ function M.create_interactive()
 		return
 	end
 
+	local function names_completer(names)
+		return function(lead)
+			local query = vim.trim(tostring(lead or "")):lower()
+			local out = {}
+			for _, name in ipairs(names) do
+				if query == "" or tostring(name):lower():find(query, 1, true) then
+					out[#out + 1] = name
+				end
+			end
+			return out
+		end
+	end
+
 	local function open_form(available_labels, branch_items, assignee_items)
+		local label_names = {}
+		for _, label in ipairs(available_labels) do
+			if type(label) == "table" and label.name then
+				label_names[#label_names + 1] = label.name
+			end
+		end
+		local branch_names = {}
+		for _, item in ipairs(branch_items) do
+			if type(item) == "table" and item.name then
+				branch_names[#branch_names + 1] = item.name
+			end
+		end
+		local reviewer_names = {}
+		for _, item in ipairs(assignee_items) do
+			if type(item) == "table" and item.name then
+				reviewer_names[#reviewer_names + 1] = item.name
+			end
+		end
+
 		form.open({
 			title = "Create Pull Request",
 			fields = {
-				{ name = "Title", key = "title", required = true },
-				{ name = "Body", key = "body", multiline = true },
+				{
+					name = "Title",
+					key = "title",
+					required = true,
+					placeholder = "Short, descriptive summary",
+				},
+				{
+					name = "Body",
+					key = "body",
+					multiline = true,
+					placeholder = "Describe the change… (Markdown supported)",
+				},
 				{
 					name = "Base branch",
 					key = "base",
+					complete = names_completer(branch_names),
 					picker = function(ctx)
 						list_picker.open({
 							title = "Select Base Branch",
@@ -734,6 +837,7 @@ function M.create_interactive()
 				{
 					name = "Reviewers (comma-separated)",
 					key = "reviewers",
+					complete = names_completer(reviewer_names),
 					picker = function(ctx)
 						list_picker.open({
 							title = "Select Reviewers",
@@ -751,6 +855,7 @@ function M.create_interactive()
 				{
 					name = "Labels",
 					key = "labels",
+					complete = names_completer(label_names),
 					picker = function(ctx)
 						label_picker.open({
 							title = "PR Labels",

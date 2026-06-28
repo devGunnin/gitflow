@@ -40,6 +40,16 @@ local NF = {
 	palette_git = "\u{f418}",      -- nf-oct-git_branch
 	palette_github = "\u{f408}",   -- nf-oct-mark_github
 	palette_ui = "\u{f013}",       -- nf-fa-gear
+	-- ui chrome (cards, pickers, forms)
+	author = "\u{f415}",           -- nf-oct-person
+	comment = "\u{f41f}",          -- nf-oct-comment
+	clock = "\u{f43a}",            -- nf-oct-clock
+	search = "\u{f422}",           -- nf-oct-search
+	check = "\u{f42e}",            -- nf-oct-check
+	ref = "\u{f418}",              -- nf-oct-git_branch
+	merge = "\u{f43f}",            -- nf-oct-git_merge
+	dot = "\u{f444}",              -- nf-oct-dot_fill
+	chevron = "\u{f432}",          -- nf-oct-chevron_right
 }
 
 ---@type table<string, table<string, {nerd: string, ascii: string}>>
@@ -112,6 +122,18 @@ local registry = {
 		notifications = { nerd = NF.conflict, ascii = "N" },
 		help = { nerd = NF.palette_ui, ascii = "?" },
 		open = { nerd = NF.palette_ui, ascii = ">" },
+	},
+	ui = {
+		author = { nerd = NF.author, ascii = "@" },
+		comment = { nerd = NF.comment, ascii = "" },
+		clock = { nerd = NF.clock, ascii = "" },
+		search = { nerd = NF.search, ascii = "" },
+		check = { nerd = NF.check, ascii = "x" },
+		tag = { nerd = NF.tag, ascii = "" },
+		ref = { nerd = NF.ref, ascii = "" },
+		merge = { nerd = NF.merge, ascii = "" },
+		dot = { nerd = NF.dot, ascii = "\u{b7}" },
+		chevron = { nerd = NF.chevron, ascii = ">" },
 	},
 }
 
