@@ -377,63 +377,15 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			"conflict view state should be active"
 		)
 
-		-- Verify 4 pane buffers exist
-		T.assert_true(
-			conflict_view.state.local_bufnr ~= nil
-				and vim.api.nvim_buf_is_valid(
-					conflict_view.state.local_bufnr
-				),
-			"local buffer should exist"
-		)
-		T.assert_true(
-			conflict_view.state.base_bufnr ~= nil
-				and vim.api.nvim_buf_is_valid(
-					conflict_view.state.base_bufnr
-				),
-			"base buffer should exist"
-		)
-		T.assert_true(
-			conflict_view.state.remote_bufnr ~= nil
-				and vim.api.nvim_buf_is_valid(
-					conflict_view.state.remote_bufnr
-				),
-			"remote buffer should exist"
-		)
+		-- Single focused conflict pane: one merged buffer + window.
 		T.assert_true(
 			conflict_view.state.merged_bufnr ~= nil
-				and vim.api.nvim_buf_is_valid(
-					conflict_view.state.merged_bufnr
-				),
+				and vim.api.nvim_buf_is_valid(conflict_view.state.merged_bufnr),
 			"merged buffer should exist"
-		)
-
-		-- Verify windows exist
-		T.assert_true(
-			conflict_view.state.local_winid ~= nil
-				and vim.api.nvim_win_is_valid(
-					conflict_view.state.local_winid
-				),
-			"local window should exist"
-		)
-		T.assert_true(
-			conflict_view.state.base_winid ~= nil
-				and vim.api.nvim_win_is_valid(
-					conflict_view.state.base_winid
-				),
-			"base window should exist"
-		)
-		T.assert_true(
-			conflict_view.state.remote_winid ~= nil
-				and vim.api.nvim_win_is_valid(
-					conflict_view.state.remote_winid
-				),
-			"remote window should exist"
 		)
 		T.assert_true(
 			conflict_view.state.merged_winid ~= nil
-				and vim.api.nvim_win_is_valid(
-					conflict_view.state.merged_winid
-				),
+				and vim.api.nvim_win_is_valid(conflict_view.state.merged_winid),
 			"merged window should exist"
 		)
 
@@ -486,7 +438,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 
 	-- ── Top buffers are read-only ────────────────────────────────────
 
-	["LOCAL/BASE/REMOTE buffers are read-only"] = function()
+	["merged buffer is modifiable in single-pane resolver"] = function()
 		local path = create_conflict_file()
 		with_temporary_patches({
 			{
@@ -507,19 +459,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			T.drain_jobs(3000)
 		end)
 
-		for _, key in ipairs({ "local_bufnr", "base_bufnr", "remote_bufnr" }) do
-			local bufnr = conflict_view.state[key]
-			T.assert_true(bufnr ~= nil, key .. " should exist")
-			local readonly = vim.api.nvim_get_option_value(
-				"readonly", { buf = bufnr }
-			)
-			T.assert_true(
-				readonly,
-				key .. " should be read-only"
-			)
-		end
-
-		-- Merged buffer should be modifiable
+		-- The single-pane resolver has just the editable merged buffer.
 		local merged = conflict_view.state.merged_bufnr
 		local modifiable = vim.api.nvim_get_option_value(
 			"modifiable", { buf = merged }
@@ -1066,7 +1006,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 
 	-- ── Top panes scrollbind ─────────────────────────────────────────
 
-	["LOCAL/BASE/REMOTE windows have scrollbind enabled"] = function()
+	["single-pane resolver opens in its own focused tab"] = function()
 		local path = create_conflict_file()
 		with_temporary_patches({
 			{
@@ -1081,24 +1021,16 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			T.drain_jobs(3000)
 		end)
 
-		for _, key in ipairs({ "local_winid", "base_winid", "remote_winid" }) do
-			local winid = conflict_view.state[key]
-			T.assert_true(
-				winid ~= nil and vim.api.nvim_win_is_valid(winid),
-				key .. " should be valid"
-			)
-			local scrollbind = vim.api.nvim_get_option_value(
-				"scrollbind", { win = winid }
-			)
-			T.assert_true(scrollbind, key .. " should have scrollbind")
-		end
-
-		-- Merged window should NOT have scrollbind
-		local merged_sb = vim.api.nvim_get_option_value(
-			"scrollbind",
-			{ win = conflict_view.state.merged_winid }
+		T.assert_true(
+			conflict_view.state.tabid ~= nil
+				and vim.api.nvim_tabpage_is_valid(conflict_view.state.tabid),
+			"conflict resolver should open in a dedicated tab"
 		)
-		T.assert_false(merged_sb, "merged window should not have scrollbind")
+		T.assert_equals(
+			#vim.api.nvim_tabpage_list_wins(conflict_view.state.tabid),
+			1,
+			"resolver tab should contain a single focused window"
+		)
 
 		pcall(vim.fn.delete, path)
 		T.cleanup_panels()

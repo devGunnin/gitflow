@@ -802,6 +802,7 @@ function M.create_interactive()
 
 		form.open({
 			title = "Create Pull Request",
+			draft_key = "pr:create",
 			fields = {
 				{
 					name = "Title",

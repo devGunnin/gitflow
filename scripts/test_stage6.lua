@@ -366,13 +366,13 @@ local function resolve_single_file(path, side, expected, opts)
 		local current_tab = vim.api.nvim_get_current_tabpage()
 		assert_equals(
 			#vim.api.nvim_tabpage_list_wins(current_tab),
-			4,
-			"3-way view should create three top panes and merged pane"
+			1,
+			"single-pane conflict resolver should use one focused window"
 		)
 
 		local merged_buf = conflict_view.state.merged_bufnr
 		assert_true(merged_buf ~= nil, "merged buffer should be created")
-		assert_keymaps(merged_buf, { "1", "2", "3", "a", "e", "]x", "[x", "q" })
+		assert_keymaps(merged_buf, { "1", "2", "3", "o", "t", "b", "a", "e", "]x", "[x", "q" })
 		asserted_view_shape = true
 	end
 

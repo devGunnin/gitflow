@@ -5,6 +5,7 @@ local git_reset = require("gitflow.git.reset")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local status_panel = require("gitflow.panels.status")
 
 ---@class GitflowResetPanelState
@@ -15,9 +16,9 @@ local status_panel = require("gitflow.panels.status")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local RESET_FLOAT_TITLE = "Gitflow Reset"
+local RESET_FLOAT_TITLE = "  Gitflow Reset  "
 local RESET_FLOAT_FOOTER =
-	"<CR> select  1-9 jump  S soft reset  H hard reset  r refresh  q close"
+	" <CR> select · 1-9 jump · S soft reset · H hard reset · r refresh · q close "
 local RESET_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_reset_hl")
 
 ---@type GitflowResetPanelState
@@ -121,49 +122,67 @@ local function render(entries, merge_base_sha, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Reset", render_opts)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Reset", render_opts)
+
+	-- Summary bar: reset context + current branch.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("palette", "reset") .. "  ", "GitflowSectionIcon" },
+		{ "Reset", "GitflowSectionTitle" },
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
 	local line_entries = {}
-	local entry_highlights = {}
 
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no commits found")
+		components.empty(B, "no commits found")
 	else
+		components.section(
+			B,
+			icons.get("git_state", "commit"),
+			("Commits (%d)"):format(#entries)
+		)
+
+		local commit_icon = icons.get("git_state", "commit")
 		for idx, entry in ipairs(entries) do
-			local commit_icon = icons.get("git_state", "commit")
+			-- HEAD (first row) has no position marker; subsequent rows show
+			-- the [N] jump target offset from HEAD.
 			local position_marker = ""
 			if idx >= 2 and idx <= 10 then
 				position_marker = ("[%d] "):format(idx - 1)
 			end
-			lines[#lines + 1] = ui_render.entry(
-				("%s%s %s %s"):format(
-					position_marker,
-					commit_icon,
-					entry.short_sha,
-					entry.summary
-				)
-			)
-			line_entries[#lines] = entry
 
-			if merge_base_sha
-				and entry.sha:sub(1, #merge_base_sha) == merge_base_sha
-			then
-				entry_highlights[#lines] = "GitflowResetMergeBase"
-			elseif merge_base_sha
-				and merge_base_sha:sub(1, #entry.sha) == entry.sha
-			then
-				entry_highlights[#lines] = "GitflowResetMergeBase"
+			local is_merge_base = merge_base_sha ~= nil
+				and (
+					entry.sha:sub(1, #merge_base_sha) == merge_base_sha
+					or merge_base_sha:sub(1, #entry.sha) == entry.sha
+				)
+
+			local summary = entry.summary or ""
+			if entry.short_sha ~= "" and vim.startswith(summary, entry.short_sha) then
+				summary = vim.trim(summary:sub(#entry.short_sha + 1))
+			end
+			local line_no = B:push({
+				{ " ", nil },
+				{ position_marker, "GitflowNumber" },
+				{ commit_icon .. "  ", "GitflowLogHash" },
+				{ entry.short_sha, "GitflowLogHash" },
+				{ summary ~= "" and ("  " .. summary) or "", "GitflowCardTitle" },
+			})
+			line_entries[line_no] = entry
+
+			-- The merge-base row gets a full-width accent so it stands out as
+			-- the point where the current branch diverges.
+			if is_merge_base then
+				B:hl(line_no, 0, -1, "GitflowResetMergeBase")
 			end
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("reset", lines)
+	ui.buffer.update("reset", B.lines)
 	M.state.line_entries = line_entries
 	M.state.merge_base_sha = merge_base_sha
 
@@ -172,10 +191,8 @@ local function render(entries, merge_base_sha, current_branch)
 		return
 	end
 
-	ui_render.apply_panel_highlights(bufnr, RESET_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-		entry_highlights = entry_highlights,
-	})
+	B:apply(bufnr, RESET_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowResetEntry|nil

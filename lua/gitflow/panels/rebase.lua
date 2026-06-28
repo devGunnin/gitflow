@@ -6,6 +6,7 @@ local git_branch = require("gitflow.git.branch")
 local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local list_picker = require("gitflow.ui.list_picker")
 local status_panel = require("gitflow.panels.status")
 
@@ -24,7 +25,8 @@ local status_panel = require("gitflow.panels.status")
 local M = {}
 local REBASE_FLOAT_TITLE = "Gitflow Interactive Rebase"
 local REBASE_FLOAT_FOOTER =
-	"<CR> cycle  p/r/e/s/f/d actions  J/K move  X execute  q close"
+	" <CR> cycle · p/r/e/s/f/d actions · J/K move · X execute"
+		.. " · b base · q close "
 local REBASE_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_rebase_hl")
 
@@ -217,81 +219,73 @@ local function render_todo()
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Interactive Rebase", render_opts
-	)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Interactive Rebase", render_opts)
+
+	local commit_icon = icons.get("git_state", "commit")
+	local branch_icon = icons.get("branch", "current")
+	local base_icon = icons.get("branch", "remote")
+	local count = #M.state.entries
+	local current_branch = (M.state.current_branch
+		and M.state.current_branch ~= "")
+		and M.state.current_branch or "(unknown)"
+
+	-- Summary bar: commit count + current branch context.
+	B:push({
+		{ "  ", nil },
+		{ commit_icon .. "  ", "GitflowSectionIcon" },
+		{
+			("%d commit%s"):format(count, count == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. branch_icon .. " ", "GitflowMetaKey" },
+		{ current_branch, "GitflowBranchCurrent" },
+	})
+
+	-- Base ref header. The literal "Base: <ref>" text is load-bearing
+	-- (asserted by tests), so keep the key and value adjacent.
+	B:push({
+		{ "  ", nil },
+		{ base_icon .. "  ", "GitflowSectionIcon" },
+		{ "Base: ", "GitflowMetaKey" },
+		{ M.state.base_ref or "(none)", "GitflowBranchCurrent" },
+	})
+	B:blank()
+
 	local line_entries = {}
-	local entry_highlights = {}
 
-	-- Base ref header
-	local base_header = ("Base: %s"):format(
-		M.state.base_ref or "(none)"
-	)
-	lines[#lines + 1] = ui_render.entry(base_header)
-	entry_highlights[#lines] = "GitflowBranchCurrent"
-	lines[#lines + 1] = ui_render.separator(render_opts)
-
-	if #M.state.entries == 0 then
-		lines[#lines + 1] = ui_render.empty(
-			"no commits found for rebase"
-		)
+	components.section(B, commit_icon, ("Commits (%d)"):format(count))
+	if count == 0 then
+		components.empty(B, "no commits found for rebase")
 	else
 		for _, entry in ipairs(M.state.entries) do
-			local commit_icon = icons.get("git_state", "commit")
-			local action_label = ("%-6s"):format(entry.action)
-			local line_text = ("%s %s %s"):format(
-				action_label, commit_icon, entry.short_sha
-			)
-			if entry.subject ~= "" then
-				line_text = ("%s %s"):format(
-					line_text, entry.subject
-				)
-			end
-			lines[#lines + 1] = ui_render.entry(line_text)
-			line_entries[#lines] = entry
-			entry_highlights[#lines] =
-				ACTION_HIGHLIGHTS[entry.action]
+			local action_group = ACTION_HIGHLIGHTS[entry.action]
 				or "GitflowRebasePick"
+			-- Action left-padded to 6 cols ("pick  ") + a separator
+			-- space, keeping the "pick" + subject pairing tests rely on.
+			local action_label = ("%-6s"):format(entry.action)
+			local subject = entry.subject ~= ""
+				and ("  " .. entry.subject) or ""
+			local line_no = B:push({
+				{ " ", nil },
+				{ action_label .. " ", action_group },
+				{ commit_icon .. " ", "GitflowRebaseHash" },
+				{ entry.short_sha, "GitflowRebaseHash" },
+				{ subject, "GitflowCardTitle" },
+			})
+			line_entries[line_no] = entry
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		M.state.current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("rebase", lines)
+	ui.buffer.update("rebase", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, REBASE_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-			entry_highlights = entry_highlights,
-		}
-	)
-
-	-- Apply hash highlights
-	for line_no, entry in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		local sha_start = line_text:find(entry.short_sha, 1, true)
-		if sha_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				REBASE_HIGHLIGHT_NS,
-				"GitflowRebaseHash",
-				line_no - 1,
-				sha_start - 1,
-				sha_start - 1 + #entry.short_sha
-			)
-		end
-	end
+	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---Find the index in M.state.entries for the entry under the cursor.

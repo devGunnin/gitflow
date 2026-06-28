@@ -625,6 +625,7 @@ function M.create_interactive()
 
 		form.open({
 			title = "Create Issue",
+			draft_key = "issue:create",
 			fields = {
 				{
 					name = "Title",

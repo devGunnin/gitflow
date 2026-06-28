@@ -4,6 +4,7 @@ local git_blame = require("gitflow.git.blame")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 
 ---@class GitflowBlamePanelState
 ---@field bufnr integer|nil
@@ -14,8 +15,8 @@ local ui_render = require("gitflow.ui.render")
 ---@field on_open_commit fun(sha: string)|nil
 
 local M = {}
-local BLAME_FLOAT_TITLE = "Gitflow Blame"
-local BLAME_FLOAT_FOOTER = "<CR> open commit  r refresh  q close"
+local BLAME_FLOAT_TITLE = "  Gitflow Blame  "
+local BLAME_FLOAT_FOOTER = " <CR> open commit · r refresh · q close "
 local BLAME_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_blame_hl")
 
 ---@type GitflowBlamePanelState
@@ -88,6 +89,17 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---@param str string|nil
+---@param width integer
+---@return string  padding spaces to reach the given display width
+local function pad_spaces(str, width)
+	local pad = width - vim.fn.strdisplaywidth(tostring(str or ""))
+	if pad > 0 then
+		return string.rep(" ", pad)
+	end
+	return ""
+end
+
 ---@param entries GitflowBlameEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
@@ -98,117 +110,74 @@ local function render(entries, current_branch)
 
 	local filepath = M.state.filepath or "(unknown file)"
 	local short_path = vim.fn.fnamemodify(filepath, ":~:.")
-	local title = ("Gitflow Blame: %s"):format(short_path)
-	local lines = ui_render.panel_header(title, render_opts)
+
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Blame", render_opts)
+
+	-- Summary bar: file + branch + line count.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("palette", "blame") .. "  ", "GitflowSectionIcon" },
+		{ short_path, "GitflowSectionTitle" },
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+		{
+			("     %d line%s"):format(#entries, #entries == 1 and "" or "s"),
+			"GitflowMeta",
+		},
+	})
+	B:blank()
+
 	local line_entries = {}
 
-	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no blame data")
-	else
-		-- Compute max widths for aligned columns
-		local max_sha = 0
-		local max_author = 0
-		local max_date = 0
-		for _, entry in ipairs(entries) do
-			if #entry.short_sha > max_sha then
-				max_sha = #entry.short_sha
-			end
-			if #entry.author > max_author then
-				max_author = #entry.author
-			end
-			if #entry.date > max_date then
-				max_date = #entry.date
-			end
-		end
-		-- Cap author width at 20 chars
-		if max_author > 20 then
-			max_author = 20
-		end
-
-		for _, entry in ipairs(entries) do
-			local author_display = entry.author
-			if #author_display > max_author then
-				author_display = author_display:sub(1, max_author - 1) .. "…"
-			end
-
-			local blame_icon = icons.get("git_state", "commit")
-			local line_text = ("%s %-" .. max_sha .. "s  %-"
-				.. max_author .. "s  %-"
-				.. max_date .. "s  %s"):format(
-				blame_icon,
-				entry.short_sha,
-				author_display,
-				entry.date,
-				entry.content
-			)
-			lines[#lines + 1] = ui_render.entry(line_text)
-			line_entries[#lines] = entry
-		end
-	end
-
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
+	components.section(
+		B, icons.get("git_state", "commit"), ("Blame (%d)"):format(#entries)
 	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
+
+	if #entries == 0 then
+		components.empty(B, "no blame data")
+	else
+		-- Compute max widths for aligned columns.
+		local max_sha, max_author, max_date = 0, 0, 0
+		for _, entry in ipairs(entries) do
+			max_sha = math.max(max_sha, vim.fn.strdisplaywidth(entry.short_sha))
+			max_author = math.max(max_author, vim.fn.strdisplaywidth(entry.author))
+			max_date = math.max(max_date, vim.fn.strdisplaywidth(entry.date))
+		end
+		-- Cap author width.
+		max_author = math.min(max_author, 20)
+
+		local commit_icon = icons.get("git_state", "commit")
+		for _, entry in ipairs(entries) do
+			local author_display = components.truncate(entry.author, max_author)
+
+			-- Columns: <icon> <short_sha> <author> <date> <content>, with each
+			-- field highlighted distinctly and padding kept un-highlighted so
+			-- the colored spans land exactly on their text.
+			local line_no = B:push({
+				{ " ", nil },
+				{ commit_icon ~= "" and (commit_icon .. " ") or "", "GitflowLogHash" },
+				{ entry.short_sha, "GitflowBlameHash" },
+				{ pad_spaces(entry.short_sha, max_sha) .. "  ", nil },
+				{ author_display, "GitflowBlameAuthor" },
+				{ pad_spaces(author_display, max_author) .. "  ", nil },
+				{ entry.date, "GitflowBlameDate" },
+				{ pad_spaces(entry.date, max_date) .. "  ", nil },
+				{ entry.content, "GitflowCardTitle" },
+			})
+			line_entries[line_no] = entry
+		end
 	end
 
-	ui.buffer.update("blame", lines)
+	ui.buffer.update("blame", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(bufnr, BLAME_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-	})
-
-	-- Apply blame-specific highlights to each entry line
-	for line_no, entry in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-
-		-- Highlight SHA
-		local sha_start = line_text:find(entry.short_sha, 1, true)
-		if sha_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr, BLAME_HIGHLIGHT_NS, "GitflowBlameHash",
-				line_no - 1, sha_start - 1,
-				sha_start - 1 + #entry.short_sha
-			)
-		end
-
-		-- Highlight author
-		if entry.author ~= "" then
-			local author_display = entry.author
-			if #author_display > 20 then
-				author_display = author_display:sub(1, 19) .. "…"
-			end
-			local author_start = line_text:find(
-				author_display, (sha_start or 0) + #entry.short_sha, true
-			)
-			if author_start then
-				vim.api.nvim_buf_add_highlight(
-					bufnr, BLAME_HIGHLIGHT_NS, "GitflowBlameAuthor",
-					line_no - 1, author_start - 1,
-					author_start - 1 + #author_display
-				)
-			end
-		end
-
-		-- Highlight date
-		if entry.date ~= "" then
-			local date_start = line_text:find(entry.date, 1, true)
-			if date_start then
-				vim.api.nvim_buf_add_highlight(
-					bufnr, BLAME_HIGHLIGHT_NS, "GitflowBlameDate",
-					line_no - 1, date_start - 1,
-					date_start - 1 + #entry.date
-				)
-			end
-		end
-	end
+	B:apply(bufnr, BLAME_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowBlameEntry|nil

@@ -4,6 +4,7 @@ local git_log = require("gitflow.git.log")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 
 ---@class GitflowLogPanelOpts
 ---@field on_open_commit fun(commit_sha: string)|nil
@@ -16,8 +17,8 @@ local ui_render = require("gitflow.ui.render")
 ---@field opts GitflowLogPanelOpts
 
 local M = {}
-local LOG_FLOAT_TITLE = "Gitflow Log"
-local LOG_FLOAT_FOOTER = "<CR> open commit diff  r refresh  q close"
+local LOG_FLOAT_TITLE = "  Gitflow Log  "
+local LOG_FLOAT_FOOTER = " <CR> review commit · V range select · r refresh · q close "
 local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
@@ -78,6 +79,18 @@ local function ensure_window(cfg)
 		M.open_commit_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
+	vim.keymap.set("n", "V", function()
+		M.mark_range_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "<Esc>", function()
+		if M.state.range_start then
+			M.state.range_start = nil
+			M.state.range_marks = {}
+			M.refresh()
+		end
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "r", function()
 		M.refresh()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -116,52 +129,48 @@ local function render(entries, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Log", render_opts)
-	local line_entries = {}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Log", render_opts)
 
+	B:push({
+		{ "  ", nil },
+		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
+		{ ("%d commit%s"):format(#entries, #entries == 1 and "" or "s"), "GitflowSectionTitle" },
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
+	local line_entries = {}
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no commits found")
+		components.empty(B, "no commits found")
 	else
+		local marks = M.state.range_marks or {}
 		for _, entry in ipairs(entries) do
-			local commit_icon = icons.get("git_state", "commit")
 			local summary = display_summary(entry)
-			local line_text = ("%s %s"):format(commit_icon, entry.short_sha)
-			if summary ~= "" then
-				line_text = ("%s %s"):format(line_text, summary)
-			end
-			lines[#lines + 1] = ui_render.entry(line_text)
-			line_entries[#lines] = entry
+			local marked = marks[entry.sha]
+			local line_no = B:push({
+				{ marked and " \u{2503} " or "   ", marked and "GitflowNumber" or nil },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ entry.short_sha, "GitflowLogHash" },
+				{ summary ~= "" and ("  " .. summary) or "", "GitflowCardTitle" },
+			})
+			line_entries[line_no] = entry
 		end
 	end
-	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
 
-	ui.buffer.update("log", lines)
+	B:blank()
+	components.branch_footer(B, current_branch)
+
+	ui.buffer.update("log", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(bufnr, LOG_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-	})
-
-	-- Apply GitflowLogHash to commit SHA portion of each entry
-	for line_no, entry in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		local sha_start = line_text:find(entry.short_sha, 1, true)
-		if sha_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr, LOG_HIGHLIGHT_NS, "GitflowLogHash",
-				line_no - 1, sha_start - 1,
-				sha_start - 1 + #entry.short_sha
-			)
-		end
-	end
+	B:apply(bufnr, LOG_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowLogEntry|nil
@@ -203,10 +212,42 @@ function M.refresh()
 	end)
 end
 
+--- Mark the commit under the cursor as the start of a range. Press <CR> on a
+--- later commit to review everything between them (issue #369).
+function M.mark_range_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
+		utils.notify("No commit selected", vim.log.levels.WARN)
+		return
+	end
+	if M.state.range_start == entry.sha then
+		M.state.range_start = nil
+		M.state.range_marks = {}
+	else
+		M.state.range_start = entry.sha
+		M.state.range_marks = { [entry.sha] = true }
+		utils.notify(
+			"Range start set — <CR> on another commit to review the range (<Esc> cancels)",
+			vim.log.levels.INFO
+		)
+	end
+	M.refresh()
+end
+
 function M.open_commit_under_cursor()
 	local entry = entry_under_cursor()
 	if not entry then
 		utils.notify("No commit selected", vim.log.levels.WARN)
+		return
+	end
+
+	local diffview = require("gitflow.panels.diffview")
+	if M.state.range_start and M.state.range_start ~= entry.sha then
+		-- Review the combined diff of the marked range (oldest..newest).
+		diffview.open_range(M.state.cfg, M.state.range_start, entry.sha)
+		M.state.range_start = nil
+		M.state.range_marks = {}
+		M.refresh()
 		return
 	end
 
@@ -215,7 +256,7 @@ function M.open_commit_under_cursor()
 		return
 	end
 
-	utils.notify("Commit open handler is not configured", vim.log.levels.WARN)
+	diffview.open_commit(M.state.cfg, entry.sha)
 end
 
 function M.close()

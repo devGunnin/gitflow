@@ -4,6 +4,7 @@ local git_worktree = require("gitflow.git.worktree")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local list_picker = require("gitflow.ui.list_picker")
 
 ---@class GitflowWorktreePanelState
@@ -13,10 +14,10 @@ local list_picker = require("gitflow.ui.list_picker")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local WORKTREE_FLOAT_TITLE = "Gitflow Worktrees"
+local WORKTREE_FLOAT_TITLE = "  Gitflow Worktrees  "
 local WORKTREE_FLOAT_FOOTER =
-	"a add  d/D remove  m move  L lock  p prune"
-	.. "  <CR> switch  r refresh  q close"
+	" a add · d/D remove · m move · L lock · p prune"
+	.. " · <CR> switch · r refresh · q close "
 local WORKTREE_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_worktree_hl")
 local WORKTREE_AUGROUP =
@@ -137,39 +138,21 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---Resolve the display ref for a worktree entry (branch / detached / bare).
+---The detached form keeps the literal "detached" substring tests rely on.
 ---@param entry GitflowWorktreeEntry
----@param is_current boolean
 ---@return string
-local function format_entry(entry, is_current)
-	local icon = icons.get(
-		"branch", is_current and "current" or "local_branch"
-	)
-	local ref
+local function entry_ref(entry)
 	if entry.is_bare then
-		ref = "(bare)"
+		return "(bare)"
 	elseif entry.is_detached then
-		ref = ("(detached %s)"):format(entry.sha:sub(1, 8))
+		return ("detached %s"):format(
+			entry.sha and entry.sha:sub(1, 8) or "?"
+		)
 	elseif entry.branch then
-		ref = entry.branch
-	else
-		ref = "(unknown)"
+		return entry.branch
 	end
-
-	local display_path = vim.fn.fnamemodify(entry.path, ":~")
-	local markers = {}
-	if is_current then
-		markers[#markers + 1] = "[current]"
-	end
-	if entry.is_locked then
-		markers[#markers + 1] = "[locked]"
-	end
-	if entry.is_prunable then
-		markers[#markers + 1] = "[prunable]"
-	end
-	local marker_part = #markers > 0
-		and ("  " .. table.concat(markers, " ")) or ""
-
-	return ("%s %s  ->  %s%s"):format(icon, ref, display_path, marker_part)
+	return "(unknown)"
 end
 
 ---@param entries GitflowWorktreeEntry[]
@@ -178,55 +161,95 @@ local function render(entries)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Worktrees", render_opts
-	)
-	local line_entries = {}
-	local entry_highlights = {}
 	local cwd = cwd_abs()
 
-	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no worktrees found")
-	else
-		for _, entry in ipairs(entries) do
-			local is_current = normalize(entry.path) == cwd
-			lines[#lines + 1] = ui_render.entry(
-				format_entry(entry, is_current)
-			)
-			line_entries[#lines] = entry
-
-			if is_current then
-				entry_highlights[#lines] = "GitflowWorktreeCurrent"
-			elseif entry.is_prunable then
-				entry_highlights[#lines] = "GitflowWorktreePrunable"
-			elseif entry.is_locked then
-				entry_highlights[#lines] = "GitflowWorktreeLocked"
-			end
+	-- Resolve the ref of the worktree we are currently sitting in for the
+	-- summary bar context.
+	local current_ref
+	for _, entry in ipairs(entries) do
+		if normalize(entry.path) == cwd then
+			current_ref = entry_ref(entry)
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		nil,
-		nil,
-		render_opts
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Worktrees", render_opts)
+
+	-- Count + current-context summary bar.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
+		{
+			("%d worktree%s"):format(#entries, #entries == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_ref or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
+	components.section(
+		B,
+		icons.get("branch", "local_branch"),
+		("Worktrees (%d)"):format(#entries)
 	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
+
+	local line_entries = {}
+	if #entries == 0 then
+		components.empty(B, "no worktrees found")
+	else
+		for _, entry in ipairs(entries) do
+			local is_current = normalize(entry.path) == cwd
+			local ref = entry_ref(entry)
+			local display_path = vim.fn.fnamemodify(entry.path, ":~")
+
+			-- Dominant state group drives the row accent + bracket markers,
+			-- so GitflowWorktreeCurrent/Locked/Prunable land on every row that
+			-- carries that state.
+			local icon_name = is_current and "current" or "local_branch"
+			local ref_group = "GitflowChip"
+			if is_current then
+				ref_group = "GitflowWorktreeCurrent"
+			elseif entry.is_prunable then
+				ref_group = "GitflowWorktreePrunable"
+			elseif entry.is_locked then
+				ref_group = "GitflowWorktreeLocked"
+			end
+
+			local chunks = {
+				{ " ", nil },
+				{ icons.get("branch", icon_name) .. "  ", ref_group },
+				{ ref, ref_group },
+				{ "  ->  ", "GitflowMeta" },
+				{ display_path, "GitflowMeta" },
+			}
+			if is_current then
+				chunks[#chunks + 1] = { "  ", nil }
+				chunks[#chunks + 1] = { "[current]", "GitflowWorktreeCurrent" }
+			end
+			if entry.is_locked then
+				chunks[#chunks + 1] = { "  ", nil }
+				chunks[#chunks + 1] = { "[locked]", "GitflowWorktreeLocked" }
+			end
+			if entry.is_prunable then
+				chunks[#chunks + 1] = { "  ", nil }
+				chunks[#chunks + 1] = { "[prunable]", "GitflowWorktreePrunable" }
+			end
+
+			local line_no = B:push(chunks)
+			line_entries[line_no] = entry
+		end
 	end
 
-	ui.buffer.update("worktree", lines)
+	ui.buffer.update("worktree", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, WORKTREE_HIGHLIGHT_NS, lines, {
-			entry_highlights = entry_highlights,
-		}
-	)
+	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowWorktreeEntry|nil

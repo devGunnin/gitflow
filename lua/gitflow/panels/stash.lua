@@ -5,6 +5,8 @@ local git_stash = require("gitflow.git.stash")
 local git_branch = require("gitflow.git.branch")
 local status_panel = require("gitflow.panels.status")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
+local icons = require("gitflow.icons")
 
 ---@class GitflowStashPanelState
 ---@field bufnr integer|nil
@@ -15,7 +17,7 @@ local ui_render = require("gitflow.ui.render")
 local M = {}
 local STASH_FLOAT_TITLE = "Gitflow Stash"
 local STASH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_stash_hl")
-local STASH_FLOAT_FOOTER = "A apply  P pop  D drop  S stash  r refresh  q close"
+local STASH_FLOAT_FOOTER = " A apply · P pop · D drop · S stash · r refresh · q close "
 
 ---@type GitflowStashPanelState
 M.state = {
@@ -108,49 +110,53 @@ local function render(entries, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Stash", render_opts)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Stash", render_opts)
+
+	local stash_icon = icons.get("git_state", "staged")
+
+	-- Stash count + current-branch summary bar.
+	B:push({
+		{ "  ", nil },
+		{ stash_icon .. "  ", "GitflowSectionIcon" },
+		{ ("%d stash entr%s"):format(#entries, #entries == 1 and "y" or "ies"), "GitflowSectionTitle" },
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
 	local line_entries = {}
 
+	components.section(B, stash_icon, ("Stash Entries (%d)"):format(#entries))
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no stash entries")
+		components.empty(B, "no stash entries")
 	else
 		for _, entry in ipairs(entries) do
-			lines[#lines + 1] = ui_render.entry(("%s %s"):format(entry.ref, entry.description))
-			line_entries[#lines] = entry
+			-- The ref chunk ("stash@{0}") carries GitflowStashRef so the span
+			-- lands exactly on the ref portion; the description follows it dim.
+			local line_no = B:push({
+				{ " ", nil },
+				{ stash_icon .. "  ", "GitflowSectionIcon" },
+				{ entry.ref, "GitflowStashRef" },
+				{ "  ", nil },
+				{ components.maybe_text(entry.description), "GitflowCardTitle" },
+			})
+			line_entries[line_no] = entry
 		end
 	end
-	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
 
-	ui.buffer.update("stash", lines)
+	B:blank()
+	components.branch_footer(B, current_branch)
+
+	ui.buffer.update("stash", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(bufnr, STASH_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-	})
-
-	-- Apply GitflowStashRef to stash ref portion of each entry
-	for line_no, entry in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		local ref_start = line_text:find(entry.ref, 1, true)
-		if ref_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				STASH_HIGHLIGHT_NS,
-				"GitflowStashRef",
-				line_no - 1,
-				ref_start - 1,
-				ref_start - 1 + #entry.ref
-			)
-		end
-	end
+	B:apply(bufnr, STASH_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowStashEntry|nil

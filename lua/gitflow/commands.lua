@@ -11,6 +11,7 @@ local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
 local status_panel = require("gitflow.panels.status")
 local diff_panel = require("gitflow.panels.diff")
+local diffview_panel = require("gitflow.panels.diffview")
 local log_panel = require("gitflow.panels.log")
 local stash_panel = require("gitflow.panels.stash")
 local branch_panel = require("gitflow.panels.branch")
@@ -1043,7 +1044,15 @@ local function register_builtin_subcommands(cfg)
 					open_commit_prompt(false)
 				end,
 				on_open_diff = function(request)
-					diff_panel.open(cfg, request)
+					-- Route status diffs through the PR-review-style viewer.
+					if request and request.commit then
+						diffview_panel.open_commit(cfg, request.commit)
+					else
+						diffview_panel.open_working(cfg, {
+							staged = request and request.staged,
+							path = request and request.path,
+						})
+					end
 				end,
 			})
 			return "Git status panel opened"
@@ -1136,9 +1145,10 @@ local function register_builtin_subcommands(cfg)
 	M.subcommands.log = {
 		description = "Open commit log panel",
 		run = function()
+			-- <CR> reviews a commit (and V marks a range) in the review viewer.
 			log_panel.open(cfg, {
 				on_open_commit = function(sha)
-					diff_panel.open(cfg, { commit = sha })
+					diffview_panel.open_commit(cfg, sha)
 				end,
 			})
 			return "Log view opened"
@@ -1262,7 +1272,7 @@ local function register_builtin_subcommands(cfg)
 			end
 			blame_panel.open(cfg, {
 				on_open_commit = function(sha)
-					diff_panel.open(cfg, { commit = sha })
+					diffview_panel.open_commit(cfg, sha)
 				end,
 			})
 			return "Blame panel opened"

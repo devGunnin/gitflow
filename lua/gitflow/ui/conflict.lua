@@ -1,3 +1,11 @@
+--- Single-pane inline merge-conflict resolver (issue #370).
+---
+--- Replaces the old four-board layout with ONE focused editor showing the
+--- conflicted file. Each conflict is colour-coded — OURS (current) vs THEIRS
+--- (incoming) — with inline labels and a winbar listing every bind:
+---   o take ours · t take theirs · b keep both · 2 base · e edit · a all
+---   ]x/[x jump between conflicts · r refresh · q save & close
+
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
@@ -10,13 +18,7 @@ local git_conflict = require("gitflow.git.conflict")
 ---@field prev_winid integer|nil
 ---@field prev_tabid integer|nil
 ---@field tabid integer|nil
----@field local_bufnr integer|nil
----@field base_bufnr integer|nil
----@field remote_bufnr integer|nil
 ---@field merged_bufnr integer|nil
----@field local_winid integer|nil
----@field base_winid integer|nil
----@field remote_winid integer|nil
 ---@field merged_winid integer|nil
 ---@field hunks GitflowConflictHunk[]
 ---@field prompt_shown boolean
@@ -26,6 +28,7 @@ local git_conflict = require("gitflow.git.conflict")
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("gitflow_conflict_view")
+local label_ns = vim.api.nvim_create_namespace("gitflow_conflict_labels")
 
 ---@type GitflowConflictViewState
 M.state = {
@@ -35,13 +38,14 @@ M.state = {
 	prev_winid = nil,
 	prev_tabid = nil,
 	tabid = nil,
+	-- Kept for backwards compatibility; always nil in the single-pane view.
 	local_bufnr = nil,
 	base_bufnr = nil,
 	remote_bufnr = nil,
-	merged_bufnr = nil,
 	local_winid = nil,
 	base_winid = nil,
 	remote_winid = nil,
+	merged_bufnr = nil,
 	merged_winid = nil,
 	hunks = {},
 	prompt_shown = false,
@@ -70,7 +74,6 @@ local function read_path(path)
 	if not ok or type(lines) ~= "table" then
 		return ("Could not read '%s'"):format(path), nil
 	end
-
 	for _, line in ipairs(lines) do
 		if line:find("\0", 1, true) then
 			return ("File '%s' appears to be binary and cannot be resolved in UI"):format(path), nil
@@ -88,22 +91,6 @@ local function write_path(path, lines)
 		return ("Could not write '%s': %s"):format(path, tostring(err))
 	end
 	return nil
-end
-
----@param value string
----@return string
-local function sanitize(value)
-	return value:gsub("[^%w_]", "_")
-end
-
----@param lines string[]
----@param fallback string
----@return string[]
-local function with_fallback(lines, fallback)
-	if #lines > 0 then
-		return lines
-	end
-	return { fallback }
 end
 
 ---@param hunk GitflowConflictHunk
@@ -124,31 +111,82 @@ local function hunk_index_for_line(line)
 	return nil
 end
 
----@param bufnr integer|nil
----@param group string
-local function highlight_hunks(bufnr, group)
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+-- ── styling ────────────────────────────────────────────────────────────
+---@param winid integer|nil
+local function set_winbar(winid)
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return
 	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-	local line_count = vim.api.nvim_buf_line_count(bufnr)
-	for _, hunk in ipairs(M.state.hunks) do
-		local start_line = math.max(1, math.min(hunk.start_line, line_count))
-		local end_line = math.max(start_line, math.min(hunk.end_line, line_count))
-		for line = start_line, end_line do
-			vim.api.nvim_buf_add_highlight(bufnr, ns, group, line - 1, 0, -1)
-		end
-	end
+	local short = vim.fn.fnamemodify(M.state.path or "", ":t")
+	local left = #M.state.hunks
+	local status = left == 0 and "all resolved \u{f42e}"
+		or ("%d conflict%s left"):format(left, left == 1 and "" or "s")
+	local bar = table.concat({
+		"%#GitflowConflictMarker#  \u{f071} ",
+		"%#GitflowTitle#" .. short,
+		"%#GitflowConflictMarker#  ·  ",
+		"%#GitflowHintText#" .. status,
+		"%#GitflowConflictMarker#  ·  ",
+		"%#GitflowHintKey#o%#GitflowHintText# ours  ",
+		"%#GitflowHintKey#t%#GitflowHintText# theirs  ",
+		"%#GitflowHintKey#b%#GitflowHintText# both  ",
+		"%#GitflowHintKey#e%#GitflowHintText# edit  ",
+		"%#GitflowHintKey#]x/[x%#GitflowHintText# jump  ",
+		"%#GitflowHintKey#q%#GitflowHintText# save&close ",
+	})
+	pcall(vim.api.nvim_set_option_value, "winbar", bar, { win = winid })
 end
 
 local function apply_highlights()
-	highlight_hunks(M.state.local_bufnr, "GitflowConflictLocal")
-	highlight_hunks(M.state.base_bufnr, "GitflowConflictBase")
-	highlight_hunks(M.state.remote_bufnr, "GitflowConflictRemote")
-	highlight_hunks(M.state.merged_bufnr, "GitflowConflictResolved")
+	local bufnr = M.state.merged_bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(bufnr, label_ns, 0, -1)
+
+	local line_count = vim.api.nvim_buf_line_count(bufnr)
+	local function hl(line, group)
+		if line >= 1 and line <= line_count then
+			pcall(vim.api.nvim_buf_add_highlight, bufnr, ns, group, line - 1, 0, -1)
+		end
+	end
+	local function label(line, text, group)
+		if line >= 1 and line <= line_count then
+			pcall(vim.api.nvim_buf_set_extmark, bufnr, label_ns, line - 1, 0, {
+				virt_text = { { text, group } },
+				virt_text_pos = "right_align",
+			})
+		end
+	end
+
+	for index, hunk in ipairs(M.state.hunks) do
+		local ours_end = hunk.start_line + #(hunk.local_lines or {})
+		-- marker + region lines
+		hl(hunk.start_line, "GitflowConflictMarker")
+		for line = hunk.start_line + 1, ours_end do
+			hl(line, "GitflowConflictOurs")
+		end
+		-- base section (between ours and the ======= marker) stays dim
+		for line = ours_end + 1, hunk.middle_line - 1 do
+			hl(line, "GitflowConflictBase")
+		end
+		hl(hunk.middle_line, "GitflowConflictMarker")
+		for line = hunk.middle_line + 1, hunk.end_line - 1 do
+			hl(line, "GitflowConflictTheirs")
+		end
+		hl(hunk.end_line, "GitflowConflictMarker")
+
+		label(hunk.start_line,
+			("\u{25c0} OURS · conflict %d/%d "):format(index, #M.state.hunks),
+			"GitflowConflictOursLabel")
+		label(hunk.middle_line, " THEIRS \u{25b6} ", "GitflowConflictTheirsLabel")
+	end
+
+	set_winbar(M.state.merged_winid)
 end
 
+-- ── disk sync ──────────────────────────────────────────────────────────
 ---@return string|nil
 local function flush_merged_to_disk()
 	local bufnr = M.state.merged_bufnr
@@ -156,7 +194,6 @@ local function flush_merged_to_disk()
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) or not path then
 		return nil
 	end
-
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return write_path(path, lines)
 end
@@ -168,12 +205,10 @@ local function reload_merged_from_disk()
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) or not path then
 		return nil
 	end
-
 	local err, lines = read_path(path)
 	if err then
 		return err
 	end
-
 	ui.buffer.update(bufnr, lines or {})
 	M.state.hunks = git_conflict.parse_markers(lines or {})
 	apply_highlights()
@@ -186,13 +221,11 @@ local function current_hunk_index()
 	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return nil
 	end
-
 	local line = vim.api.nvim_win_get_cursor(winid)[1]
 	local direct = hunk_index_for_line(line)
 	if direct then
 		return direct
 	end
-
 	for index, hunk in ipairs(M.state.hunks) do
 		if line < hunk.start_line then
 			return index
@@ -214,7 +247,6 @@ local function jump_hunk(direction)
 		utils.notify("No unresolved conflict hunks", vim.log.levels.INFO)
 		return
 	end
-
 	local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
 	if direction > 0 then
 		for _, hunk in ipairs(M.state.hunks) do
@@ -226,7 +258,6 @@ local function jump_hunk(direction)
 		vim.api.nvim_win_set_cursor(winid, { M.state.hunks[1].start_line, 0 })
 		return
 	end
-
 	for index = #M.state.hunks, 1, -1 do
 		local hunk = M.state.hunks[index]
 		if hunk.start_line < cursor_line then
@@ -245,7 +276,6 @@ local function maybe_mark_resolved()
 	if #M.state.hunks ~= 0 or M.state.prompt_shown then
 		return
 	end
-
 	M.state.prompt_shown = true
 	local confirmed = ui.input.confirm(
 		("All conflicts in '%s' are resolved. Mark file as resolved?"):format(path),
@@ -254,50 +284,54 @@ local function maybe_mark_resolved()
 	if not confirmed then
 		return
 	end
-
 	local on_resolved = M.state.on_resolved
 	git_conflict.mark_resolved(path, {}, function(err, result)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		local message = result_message(result, ("Marked '%s' as resolved"):format(path))
-		utils.notify(message, vim.log.levels.INFO)
+		utils.notify(
+			result_message(result, ("Marked '%s' as resolved"):format(path)),
+			vim.log.levels.INFO
+		)
 		if on_resolved then
 			on_resolved(path)
 		end
 	end)
 end
 
----@param choice "local"|"base"|"remote"
+---@param choice "local"|"base"|"remote"|"both"
 local function apply_resolution(choice)
 	local path = M.state.path
 	if not path then
 		return
 	end
-
 	local flush_err = flush_merged_to_disk()
 	if flush_err then
 		utils.notify(flush_err, vim.log.levels.ERROR)
 		return
 	end
-
 	local index = current_hunk_index()
 	if not index then
 		utils.notify("No conflict hunk selected", vim.log.levels.WARN)
 		return
 	end
-
+	local cursor_line = M.state.hunks[index] and M.state.hunks[index].start_line
 	git_conflict.resolve_hunk(path, index, choice, nil, {}, function(err)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-
 		local reload_err = reload_merged_from_disk()
 		if reload_err then
 			utils.notify(reload_err, vim.log.levels.ERROR)
 			return
+		end
+		-- Keep the cursor near where the resolved conflict was.
+		local winid = M.state.merged_winid
+		if winid and vim.api.nvim_win_is_valid(winid) and cursor_line then
+			local total = vim.api.nvim_buf_line_count(M.state.merged_bufnr)
+			pcall(vim.api.nvim_win_set_cursor, winid, { math.min(cursor_line, total), 0 })
 		end
 		maybe_mark_resolved()
 	end)
@@ -308,34 +342,30 @@ local function accept_all_from_side()
 	if not path then
 		return
 	end
-
 	if #M.state.hunks == 0 then
 		utils.notify("No unresolved conflict hunks", vim.log.levels.INFO)
 		return
 	end
-
 	local selection = vim.fn.confirm(
-		"Accept all unresolved hunks from which side?",
-		"&Local\n&Base\n&Remote\n&Cancel",
+		"Accept all unresolved conflicts using which side?",
+		"&Ours\n&Theirs\n&Both\n&Cancel",
 		1
 	)
-	local choice = nil
+	local choice
 	if selection == 1 then
 		choice = "local"
 	elseif selection == 2 then
-		choice = "base"
-	elseif selection == 3 then
 		choice = "remote"
+	elseif selection == 3 then
+		choice = "both"
 	else
 		return
 	end
-
 	local flush_err = flush_merged_to_disk()
 	if flush_err then
 		utils.notify(flush_err, vim.log.levels.ERROR)
 		return
 	end
-
 	for index = #M.state.hunks, 1, -1 do
 		local resolve_err = nil
 		git_conflict.resolve_hunk(path, index, choice, nil, {}, function(err)
@@ -346,7 +376,6 @@ local function accept_all_from_side()
 			return
 		end
 	end
-
 	local reload_err = reload_merged_from_disk()
 	if reload_err then
 		utils.notify(reload_err, vim.log.levels.ERROR)
@@ -360,13 +389,11 @@ local function enter_manual_edit()
 	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return
 	end
-
 	local index = current_hunk_index()
 	if not index then
 		utils.notify("No conflict hunk selected", vim.log.levels.WARN)
 		return
 	end
-
 	local hunk = M.state.hunks[index]
 	vim.api.nvim_set_current_win(winid)
 	vim.api.nvim_win_set_cursor(winid, { hunk.start_line, 0 })
@@ -384,21 +411,6 @@ local function refresh_hunks_from_buffer()
 	apply_highlights()
 end
 
-local function teardown_buffers()
-	if M.state.local_bufnr then
-		ui.buffer.teardown(M.state.local_bufnr)
-	end
-	if M.state.base_bufnr then
-		ui.buffer.teardown(M.state.base_bufnr)
-	end
-	if M.state.remote_bufnr then
-		ui.buffer.teardown(M.state.remote_bufnr)
-	end
-	if M.state.merged_bufnr then
-		ui.buffer.teardown(M.state.merged_bufnr)
-	end
-end
-
 local function reset_state()
 	M.state.active = false
 	M.state.path = nil
@@ -406,13 +418,7 @@ local function reset_state()
 	M.state.prev_winid = nil
 	M.state.prev_tabid = nil
 	M.state.tabid = nil
-	M.state.local_bufnr = nil
-	M.state.base_bufnr = nil
-	M.state.remote_bufnr = nil
 	M.state.merged_bufnr = nil
-	M.state.local_winid = nil
-	M.state.base_winid = nil
-	M.state.remote_winid = nil
 	M.state.merged_winid = nil
 	M.state.hunks = {}
 	M.state.prompt_shown = false
@@ -424,26 +430,25 @@ function M.close()
 	if not M.state.active then
 		return
 	end
-
 	local path = M.state.path
 	local flush_err = flush_merged_to_disk()
 	if flush_err then
 		utils.notify(flush_err, vim.log.levels.ERROR)
 	end
-
 	refresh_hunks_from_buffer()
 	maybe_mark_resolved()
 
+	local merged_bufnr = M.state.merged_bufnr
 	if M.state.tabid and vim.api.nvim_tabpage_is_valid(M.state.tabid) then
 		pcall(vim.api.nvim_set_current_tabpage, M.state.tabid)
 		pcall(vim.cmd, "tabclose")
 	end
-
-	teardown_buffers()
+	if merged_bufnr then
+		ui.buffer.teardown(merged_bufnr)
+	end
 
 	local on_closed = M.state.on_closed
 	reset_state()
-
 	if path and on_closed then
 		on_closed(path)
 	end
@@ -469,9 +474,18 @@ function M.refresh()
 	maybe_mark_resolved()
 end
 
----@param side "local"|"base"|"remote"
+---@param side "local"|"base"|"remote"|"both"|"ours"|"theirs"
 function M.resolve_current(side)
+	if side == "ours" then
+		side = "local"
+	elseif side == "theirs" then
+		side = "remote"
+	end
 	apply_resolution(side)
+end
+
+function M.resolve_both()
+	apply_resolution("both")
 end
 
 function M.resolve_all_from_prompt()
@@ -482,202 +496,50 @@ function M.edit_current_hunk()
 	enter_manual_edit()
 end
 
----@param path string
----@param cb fun(err: string|nil, context: table|nil)
-local function load_context(path, cb)
-	git_conflict.get_version(path, "local", {}, function(local_err, local_lines)
-		if local_err then
-			cb(local_err, nil)
-			return
-		end
-
-		git_conflict.get_version(path, "base", {}, function(base_err, base_lines)
-			if base_err then
-				cb(base_err, nil)
-				return
-			end
-
-			git_conflict.get_version(path, "remote", {}, function(remote_err, remote_lines)
-				if remote_err then
-					cb(remote_err, nil)
-					return
-				end
-
-				local read_err, merged_lines = read_path(path)
-				if read_err then
-					cb(read_err, nil)
-					return
-				end
-
-				cb(nil, {
-					local_lines = local_lines or {},
-					base_lines = base_lines or {},
-					remote_lines = remote_lines or {},
-					merged_lines = merged_lines or {},
-				})
-			end)
-		end)
-	end)
-end
-
----@param opts table
-local function configure_windows(opts)
-	local top_wins = { opts.local_winid, opts.base_winid, opts.remote_winid }
-	for _, winid in ipairs(top_wins) do
-		if winid and vim.api.nvim_win_is_valid(winid) then
-			vim.api.nvim_set_option_value("scrollbind", true, { win = winid })
-			vim.api.nvim_set_option_value("cursorbind", true, { win = winid })
-			vim.api.nvim_set_option_value("wrap", false, { win = winid })
-		end
+---@param bufnr integer
+local function set_keymaps(bufnr)
+	local function map(lhs, fn)
+		vim.keymap.set("n", lhs, fn, { buffer = bufnr, silent = true, nowait = true })
 	end
-
-	if opts.merged_winid and vim.api.nvim_win_is_valid(opts.merged_winid) then
-		vim.api.nvim_set_option_value("scrollbind", false, { win = opts.merged_winid })
-		vim.api.nvim_set_option_value("cursorbind", false, { win = opts.merged_winid })
-		vim.api.nvim_set_option_value("wrap", false, { win = opts.merged_winid })
-
-		local height = math.max(8, math.floor((vim.o.lines - vim.o.cmdheight) * 0.33))
-		vim.api.nvim_win_set_height(opts.merged_winid, height)
-	end
-end
-
----@param bufnr integer
-local function set_buffer_defaults(bufnr)
-	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
-	vim.api.nvim_set_option_value("swapfile", false, { buf = bufnr })
-end
-
----@param bufnr integer
----@param handler fun()
-local function map_close(bufnr, handler)
-	vim.keymap.set("n", "q", handler, { buffer = bufnr, silent = true, nowait = true })
-end
-
----@param bufnr integer
-local function set_top_buffer_options(bufnr)
-	vim.api.nvim_set_option_value(
-		"syntax", "diff", { buf = bufnr }
-	)
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-	vim.api.nvim_set_option_value(
-		"readonly", true, { buf = bufnr }
-	)
+	map("o", function() M.resolve_current("local") end)
+	map("1", function() M.resolve_current("local") end)
+	map("t", function() M.resolve_current("remote") end)
+	map("3", function() M.resolve_current("remote") end)
+	map("2", function() M.resolve_current("base") end)
+	map("b", function() M.resolve_both() end)
+	map("a", function() M.resolve_all_from_prompt() end)
+	map("e", function() M.edit_current_hunk() end)
+	map("]x", function() M.jump(1) end)
+	map("[x", function() M.jump(-1) end)
+	map("r", function() M.refresh() end)
+	map("q", function() M.close() end)
 end
 
 ---@param path string
----@param ctx table
+---@param lines string[]
 ---@param callbacks table
-local function open_layout(path, ctx, callbacks)
-	local name_key = sanitize(path)
-	local local_bufnr = ui.buffer.create(
-		("conflict-local-%s"):format(name_key),
-		{
-			filetype = "gitflow-diff",
-			lines = with_fallback(
-				ctx.local_lines,
-				"(local version unavailable)"
-			),
-		}
+local function open_single_pane(path, lines, callbacks)
+	local merged_bufnr = ui.buffer.create(
+		("conflict-merged-%s"):format(path:gsub("[^%w_]", "_")),
+		{ filetype = "gitflowconflictmerge", lines = lines }
 	)
-	local base_bufnr = ui.buffer.create(
-		("conflict-base-%s"):format(name_key),
-		{
-			filetype = "gitflow-diff",
-			lines = with_fallback(
-				ctx.base_lines,
-				"(base version unavailable)"
-			),
-		}
-	)
-	local remote_bufnr = ui.buffer.create(
-		("conflict-remote-%s"):format(name_key),
-		{
-			filetype = "gitflow-diff",
-			lines = with_fallback(
-				ctx.remote_lines,
-				"(remote version unavailable)"
-			),
-		}
-	)
-	local merged_bufnr = ui.buffer.create(("conflict-merged-%s"):format(name_key), {
-		filetype = "gitflowconflictmerge",
-		lines = ctx.merged_lines,
-	})
-
-	set_buffer_defaults(local_bufnr)
-	set_buffer_defaults(base_bufnr)
-	set_buffer_defaults(remote_bufnr)
-	set_buffer_defaults(merged_bufnr)
-
-	set_top_buffer_options(local_bufnr)
-	set_top_buffer_options(base_bufnr)
-	set_top_buffer_options(remote_bufnr)
-
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = merged_bufnr })
+	vim.api.nvim_set_option_value("swapfile", false, { buf = merged_bufnr })
 	vim.api.nvim_set_option_value("modifiable", true, { buf = merged_bufnr })
 	vim.api.nvim_set_option_value("readonly", false, { buf = merged_bufnr })
 
 	local prev_winid = vim.api.nvim_get_current_win()
 	local prev_tabid = vim.api.nvim_get_current_tabpage()
 
+	-- A single full-screen tab so the user can focus on the file.
 	vim.cmd("tabnew")
-
 	local tabid = vim.api.nvim_get_current_tabpage()
-	local local_winid = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(local_winid, local_bufnr)
-
-	vim.cmd("vsplit")
-	local base_winid = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(base_winid, base_bufnr)
-
-	vim.cmd("vsplit")
-	local remote_winid = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(remote_winid, remote_bufnr)
-
-	vim.cmd("split")
 	local merged_winid = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(merged_winid, merged_bufnr)
-	vim.cmd("wincmd J")
-	merged_winid = vim.api.nvim_get_current_win()
+	pcall(vim.api.nvim_set_option_value, "wrap", false, { win = merged_winid })
+	pcall(vim.api.nvim_set_option_value, "cursorline", true, { win = merged_winid })
 
-	vim.cmd("wincmd =")
-	configure_windows({
-		local_winid = local_winid,
-		base_winid = base_winid,
-		remote_winid = remote_winid,
-		merged_winid = merged_winid,
-	})
-
-	map_close(local_bufnr, M.close)
-	map_close(base_bufnr, M.close)
-	map_close(remote_bufnr, M.close)
-	map_close(merged_bufnr, M.close)
-
-	vim.keymap.set("n", "1", function()
-		M.resolve_current("local")
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "2", function()
-		M.resolve_current("base")
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "3", function()
-		M.resolve_current("remote")
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "a", function()
-		M.resolve_all_from_prompt()
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "e", function()
-		M.edit_current_hunk()
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "]x", function()
-		M.jump(1)
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "[x", function()
-		M.jump(-1)
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = merged_bufnr, silent = true, nowait = true })
+	set_keymaps(merged_bufnr)
 
 	M.state.active = true
 	M.state.path = path
@@ -685,25 +547,22 @@ local function open_layout(path, ctx, callbacks)
 	M.state.prev_winid = prev_winid
 	M.state.prev_tabid = prev_tabid
 	M.state.tabid = tabid
-	M.state.local_bufnr = local_bufnr
-	M.state.base_bufnr = base_bufnr
-	M.state.remote_bufnr = remote_bufnr
 	M.state.merged_bufnr = merged_bufnr
-	M.state.local_winid = local_winid
-	M.state.base_winid = base_winid
-	M.state.remote_winid = remote_winid
 	M.state.merged_winid = merged_winid
-	M.state.hunks = git_conflict.parse_markers(ctx.merged_lines)
+	M.state.hunks = git_conflict.parse_markers(lines)
 	M.state.prompt_shown = false
 	M.state.on_resolved = callbacks.on_resolved
 	M.state.on_closed = callbacks.on_closed
 
 	apply_highlights()
 	vim.api.nvim_set_current_win(merged_winid)
+	if #M.state.hunks > 0 then
+		pcall(vim.api.nvim_win_set_cursor, merged_winid, { M.state.hunks[1].start_line, 0 })
+	end
 end
 
 ---@param path string
----@param opts table|nil
+---@param opts table|nil  { cfg, on_resolved, on_closed }
 function M.open(path, opts)
 	local callbacks = opts or {}
 	local normalized = vim.trim(path or "")
@@ -711,25 +570,21 @@ function M.open(path, opts)
 		utils.notify("Conflict file path is required", vim.log.levels.ERROR)
 		return
 	end
-
 	if M.state.active then
 		M.close()
 	end
 
-	load_context(normalized, function(err, ctx)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		open_layout(normalized, ctx or {}, callbacks)
-	end)
+	local err, lines = read_path(normalized)
+	if err then
+		utils.notify(err, vim.log.levels.ERROR)
+		return
+	end
+	open_single_pane(normalized, lines or {}, callbacks)
 end
 
 ---@return boolean
 function M.is_open()
 	return M.state.active
-		and M.state.tabid ~= nil
-		and vim.api.nvim_tabpage_is_valid(M.state.tabid)
 		and M.state.merged_bufnr ~= nil
 		and vim.api.nvim_buf_is_valid(M.state.merged_bufnr)
 end

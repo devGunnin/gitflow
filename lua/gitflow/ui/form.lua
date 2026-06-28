@@ -12,6 +12,54 @@ local FORM_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_form_hl")
 local FORM_MARKER_NS = vim.api.nvim_create_namespace("gitflow_form_markers")
 local FORM_PLACEHOLDER_NS = vim.api.nvim_create_namespace("gitflow_form_placeholder")
 
+-- In-memory draft store, keyed by `opts.draft_key`. A form cancelled with
+-- q/<Esc> stashes its field values here so reopening the same form restores
+-- them. Drafts live for the Neovim session (gone on next launch); <C-d> clears
+-- the active one. Cleared automatically on successful submit.
+M._drafts = {}
+
+---@param key string|nil
+---@return table<string, string>|nil
+local function load_draft(key)
+	if not key then
+		return nil
+	end
+	local draft = M._drafts[key]
+	if type(draft) ~= "table" then
+		return nil
+	end
+	for _, value in pairs(draft) do
+		if vim.trim(tostring(value or "")) ~= "" then
+			return draft
+		end
+	end
+	return nil
+end
+
+---@param key string|nil
+---@param values table<string, string>|nil
+local function save_draft(key, values)
+	if not key then
+		return false
+	end
+	local has_content = false
+	for _, value in pairs(values or {}) do
+		if vim.trim(tostring(value or "")) ~= "" then
+			has_content = true
+			break
+		end
+	end
+	M._drafts[key] = has_content and values or nil
+	return has_content
+end
+
+---@param key string|nil
+local function clear_draft(key)
+	if key then
+		M._drafts[key] = nil
+	end
+end
+
 -- A field accent bar drawn before each label.
 local LABEL_BAR = "\u{2590}" -- ▐
 
@@ -50,6 +98,7 @@ end
 ---@field on_cancel? fun()            optional cancel callback
 ---@field width? number               float width (fraction or absolute)
 ---@field height? number              float height (fraction or absolute)
+---@field draft_key? string           when set, cancel stashes a resumable draft
 
 ---@class GitflowFormState
 ---@field bufnr integer|nil
@@ -122,6 +171,9 @@ local function render_form(state, values)
 	local hints = "<Tab> next  <S-Tab> prev  <CR> submit"
 	if has_picker_field(state) then
 		hints = hints .. "  <C-l> picker  <C-Space> suggest"
+	end
+	if state.draft_key then
+		hints = hints .. "  <C-d> clear"
 	end
 	hints = hints .. "  q/Esc cancel"
 	lines[#lines + 1] = hints
@@ -517,6 +569,7 @@ function M.open(opts)
 		on_submit = opts.on_submit,
 		on_cancel = opts.on_cancel,
 		active_field = 1,
+		draft_key = opts.draft_key,
 	}
 
 	-- Create buffer
@@ -527,8 +580,9 @@ function M.open(opts)
 	vim.api.nvim_set_option_value("filetype", "gitflow-form", { buf = bufnr })
 	state.bufnr = bufnr
 
-	-- Render initial content
-	local lines = render_form(state, nil)
+	-- Render initial content (restoring a saved draft when present)
+	local restored_draft = load_draft(opts.draft_key)
+	local lines = render_form(state, restored_draft)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	initialize_markers(state, lines)
 	sync_field_lines(state)
@@ -605,6 +659,7 @@ function M.open(opts)
 			end
 		end
 
+		clear_draft(state.draft_key)
 		close_form(state)
 		state.on_submit(values)
 	end, { buffer = bufnr, silent = true })
@@ -614,9 +669,29 @@ function M.open(opts)
 		trigger_field_picker(state)
 	end, { buffer = bufnr, silent = true })
 
-	-- q / <Esc>: cancel
+	-- <C-d>: discard any saved draft and reset all fields to empty
+	vim.keymap.set("n", "<C-d>", function()
+		clear_draft(state.draft_key)
+		local empty_lines = render_form(state, {})
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, empty_lines)
+		initialize_markers(state, empty_lines)
+		sync_field_lines(state)
+		apply_form_highlights(state, empty_lines)
+		refresh_placeholders(state)
+		jump_to_field(state, 1)
+		utils.notify("Draft cleared", vim.log.levels.INFO)
+	end, { buffer = bufnr, silent = true })
+
+	-- q / <Esc>: cancel — stash a draft so the form can be resumed later
 	local function cancel()
+		local saved = save_draft(state.draft_key, collect_values(state))
 		close_form(state)
+		if saved then
+			utils.notify(
+				"Draft saved — reopen to resume, <C-d> to discard",
+				vim.log.levels.INFO
+			)
+		end
 		if state.on_cancel then
 			state.on_cancel()
 		end
@@ -658,6 +733,15 @@ function M.open(opts)
 			refresh_placeholders(state)
 		end,
 	})
+
+	if restored_draft then
+		vim.schedule(function()
+			utils.notify(
+				"Draft restored — <C-d> to start fresh",
+				vim.log.levels.INFO
+			)
+		end)
+	end
 
 	return state
 end

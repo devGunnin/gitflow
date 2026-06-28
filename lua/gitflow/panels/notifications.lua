@@ -1,6 +1,8 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
+local icons = require("gitflow.icons")
 local notifications = require("gitflow.notifications")
 
 ---@class GitflowNotificationsPanelState
@@ -13,7 +15,7 @@ local notifications = require("gitflow.notifications")
 local M = {}
 local NOTIF_FLOAT_TITLE = "Gitflow Notifications"
 local NOTIF_FLOAT_FOOTER =
-	"<CR> open  r refresh  c clear  1 error  2 warn  3 info  0 all  q close"
+	" <CR> open · r refresh · c clear · 1 error · 2 warn · 3 info · 0 all · q close "
 local NOTIF_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_notifications_hl")
 
@@ -41,6 +43,17 @@ local level_hl = {
 	[vim.log.levels.WARN] = "GitflowNotificationWarn",
 	[vim.log.levels.INFO] = "GitflowNotificationInfo",
 }
+
+---@param level integer
+---@return string
+local function level_icon(level)
+	if level == vim.log.levels.ERROR then
+		return icons.get("git_state", "conflict")
+	elseif level == vim.log.levels.WARN then
+		return icons.get("git_state", "modified")
+	end
+	return icons.get("ui", "dot")
+end
 
 ---@param ts integer
 ---@return string
@@ -170,21 +183,12 @@ local function render(entries)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Notifications", render_opts
-	)
-	local entry_highlights = {}
-	local line_context = {}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Notifications", render_opts)
 
 	local filter = M.state.filter_level
-	if filter then
-		local label = level_label[filter] or "?"
-		lines[#lines + 1] = ui_render.entry(
-			("Filter: %s"):format(label)
-		)
-		lines[#lines + 1] = ""
-	end
 
+	-- Newest-first, honouring the active severity filter.
 	local filtered = {}
 	for i = #entries, 1, -1 do
 		local e = entries[i]
@@ -193,67 +197,88 @@ local function render(entries)
 		end
 	end
 
+	-- Summary bar: icon + count + filter context. When a filter is active the
+	-- bar carries the literal "Filter: <LEVEL>" marker.
+	local filter_extra
+	if filter then
+		filter_extra = { key = "Filter:", value = level_label[filter] or "?" }
+	else
+		filter_extra = { key = "Showing", value = "all levels" }
+	end
+	components.summary(
+		B,
+		icons.get("palette", "notifications"),
+		("%d notification%s"):format(#filtered, #filtered == 1 and "" or "s"),
+		{ filter_extra }
+	)
+	B:blank()
+
+	local line_context = {}
+
+	components.section(
+		B,
+		icons.get("ui", "clock"),
+		("Recent (%d)"):format(#filtered)
+	)
+
 	if #filtered == 0 then
-		lines[#lines + 1] = ui_render.empty(
-			"no notifications"
-		)
+		components.empty(B, "no notifications")
 	else
 		for _, entry in ipairs(filtered) do
-			local severity = level_label[entry.level]
-				or "INFO"
+			local severity = level_label[entry.level] or "INFO"
+			local hl = level_hl[entry.level] or "GitflowMeta"
 			local ts = format_time(entry.timestamp)
 			local message_lines = split_message_lines(entry.message)
-			local context_hint = ""
+
+			local chunks = {
+				{ " ", nil },
+				{ level_icon(entry.level) .. "  ", hl },
+				{ ts .. "  ", "GitflowRelTime" },
+				{ ("[%s]"):format(severity), hl },
+				{ "  ", nil },
+				{ message_lines[1] or "", "GitflowCardTitle" },
+			}
 			if has_linked_context(entry.context) then
-				context_hint = (" [<CR> %s]"):format(
-					context_label(entry.context)
-				)
+				chunks[#chunks + 1] = { "    ", nil }
+				chunks[#chunks + 1] = {
+					icons.get("ui", "chevron") .. " ", "GitflowHintKey",
+				}
+				chunks[#chunks + 1] = {
+					context_label(entry.context), "GitflowMeta",
+				}
 			end
-			lines[#lines + 1] = ui_render.entry(
-				("%s [%s] %s"):format(
-					ts, severity,
-					(message_lines[1] or "") .. context_hint
-				)
-			)
+			local line_no = B:push(chunks)
 			if has_linked_context(entry.context) then
-				line_context[#lines] = entry.context
+				line_context[line_no] = entry.context
 			end
-			local hl = level_hl[entry.level]
-			if hl then
-				entry_highlights[#lines] = hl
-			end
+
+			-- Continuation lines are indented with four spaces.
 			for idx = 2, #message_lines do
-				lines[#lines + 1] = ui_render.entry(
-					("    %s"):format(message_lines[idx])
-				)
-				if hl then
-					entry_highlights[#lines] = hl
-				end
+				B:push({
+					{ "    ", nil },
+					{ message_lines[idx], hl },
+				})
 			end
 		end
 	end
 
-	local count_text = ("%d entries"):format(#filtered)
-	local footer_lines = ui_render.panel_footer(
-		nil, count_text, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
+	-- In-buffer footer: entry count only — never a branch label.
+	B:blank()
+	B:raw(ui_render.separator(render_opts), "GitflowSeparator")
+	B:push({
+		{ "  ", nil },
+		{ ("%d entries"):format(#filtered), "GitflowFooter" },
+	})
 
-	ui.buffer.update("notifications", lines)
+	ui.buffer.update("notifications", B.lines)
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
 
-	ui_render.apply_panel_highlights(
-		bufnr, NOTIF_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-			entry_highlights = entry_highlights,
-		}
-	)
+	B:apply(bufnr, NOTIF_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 	M.state.line_context = line_context
 end
 

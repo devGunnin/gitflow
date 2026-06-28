@@ -64,6 +64,12 @@ local function build_default_groups(palette)
 		GitflowConflictBase = { link = "DiffChange" },
 		GitflowConflictRemote = { link = "DiffDelete" },
 		GitflowConflictResolved = { link = "DiffText" },
+		-- Single-pane inline conflict resolver
+		GitflowConflictOurs = { link = "DiffAdd" },
+		GitflowConflictTheirs = { link = "DiffText" },
+		GitflowConflictMarker = { fg = palette.separator_fg, bold = true, italic = true },
+		GitflowConflictOursLabel = { fg = palette.accent_primary, bold = true },
+		GitflowConflictTheirsLabel = { fg = palette.stash_ref, bold = true },
 		-- Branch
 		GitflowBranchCurrent = { link = "Title" },
 		GitflowBranchRemote = { link = "Comment" },

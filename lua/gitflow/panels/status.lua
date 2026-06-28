@@ -1,5 +1,7 @@
 local ui = require("gitflow.ui")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
+local devicons = require("gitflow.ui.devicons")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_log = require("gitflow.git.log")
@@ -39,10 +41,10 @@ local icons = require("gitflow.icons")
 
 local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
-local STATUS_FLOAT_TITLE = "Gitflow Status"
+local STATUS_FLOAT_TITLE = "  Gitflow Status  "
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
-local STATUS_FLOAT_FOOTER = "s stage  u unstage  a stage all  A unstage all  cc commit  dd diff"
-	.. "  cx conflicts  p push  X revert  r refresh  q close"
+local STATUS_FLOAT_FOOTER = " s/u stage · V then s/u batch · a/A all · cc commit"
+	.. " · dd diff · cx conflict · p push · r refresh · q close "
 
 ---@type GitflowStatusPanelState
 M.state = {
@@ -59,52 +61,81 @@ M.state = {
 	last = nil,
 }
 
+-- Porcelain codes that indicate an unmerged (conflicted) path.
+local UNMERGED_STATUS = {
+	DD = true, AU = true, UD = true, UA = true,
+	DU = true, AA = true, UU = true,
+}
+
+---@param B GitflowRenderBuilder
 ---@param title string
 ---@param entries GitflowStatusEntry[]
----@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param diff_staged boolean
----@param render_opts table
-local function append_file_section(title, entries, lines, line_entries, diff_staged, render_opts)
-	local section_title, section_separator = ui_render.section(title, nil, render_opts)
-	lines[#lines + 1] = section_title
-	lines[#lines + 1] = section_separator
+local function append_file_section(B, title, entries, line_entries, diff_staged)
+	components.section(B, icons.get("git_state", diff_staged and "staged" or "unstaged"), title)
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty()
-		lines[#lines + 1] = ""
+		components.empty(B, "(none)")
+		B:blank()
 		return
 	end
 
 	for _, entry in ipairs(entries) do
 		local status = entry.index_status .. entry.worktree_status
-		local icon = icons.get("git_state", diff_staged and "staged" or "unstaged")
-		if entry.untracked then
-			icon = icons.get("git_state", "untracked")
+		local is_conflict = UNMERGED_STATUS[status]
+			or entry.index_status == "U"
+			or entry.worktree_status == "U"
+
+		local state_hl
+		if is_conflict then
+			state_hl = "GitflowRemoved"
+		elseif entry.untracked then
+			state_hl = "GitflowUntracked"
+		elseif diff_staged then
+			state_hl = "GitflowStaged"
+		else
+			state_hl = "GitflowModified"
 		end
-		local line = ui_render.entry(("%s %s  %s"):format(icon, status, entry.path))
-		lines[#lines + 1] = line
-		line_entries[#lines] = {
+
+		local glyph, glyph_hl = devicons.get(entry.path)
+		local dir, name = entry.path:match("^(.*/)([^/]+)$")
+		dir = dir or ""
+		name = name or entry.path
+
+		-- ●  <ft-icon>  [CODE  ]<dir><name>
+		local chunks = {
+			{ "   ", nil },
+			{ "\u{25cf}  ", state_hl },
+			{ glyph .. "  ", glyph_hl },
+		}
+		-- Conflicted files keep the raw porcelain code (e.g. "UU  path") so it
+		-- stays discoverable and obviously unresolved.
+		if is_conflict then
+			chunks[#chunks + 1] = { status .. "  ", "GitflowRemoved" }
+		end
+		chunks[#chunks + 1] = { dir, "GitflowMeta" }
+		chunks[#chunks + 1] = { name, "GitflowCardTitle" }
+
+		local line_no = B:push(chunks)
+		line_entries[line_no] = {
 			kind = "file",
 			entry = entry,
 			diff_staged = diff_staged,
 		}
 	end
-	lines[#lines + 1] = ""
+	B:blank()
 end
 
+---@param B GitflowRenderBuilder
 ---@param title string
 ---@param entries GitflowLogEntry[]
----@param lines string[]
 ---@param line_entries table<integer, GitflowStatusLineEntry>
 ---@param pushable boolean|table<string, boolean>
----@param render_opts table
-local function append_commit_section(title, entries, lines, line_entries, pushable, render_opts)
-	local section_title, section_separator = ui_render.section(title, nil, render_opts)
-	lines[#lines + 1] = section_title
-	lines[#lines + 1] = section_separator
+local function append_commit_section(B, title, entries, line_entries, pushable)
+	components.section(B, icons.get("git_state", "commit"), title)
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty()
-		lines[#lines + 1] = ""
+		components.empty(B, "(none)")
+		B:blank()
 		return
 	end
 
@@ -116,14 +147,25 @@ local function append_commit_section(title, entries, lines, line_entries, pushab
 			entry_pushable = pushable[entry.sha] == true
 		end
 
-		lines[#lines + 1] = ui_render.entry(entry.summary)
-		line_entries[#lines] = {
+		local sha = entry.short_sha or (entry.sha and tostring(entry.sha):sub(1, 7)) or ""
+		local summary = entry.summary or ""
+		-- Strip a leading SHA already embedded in the summary, if present.
+		if sha ~= "" then
+			summary = summary:gsub("^" .. vim.pesc(sha) .. "%s*", "")
+		end
+		local line_no = B:push({
+			{ " ", nil },
+			{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+			{ sha ~= "" and (sha .. "  ") or "", "GitflowLogHash" },
+			{ summary, "GitflowCardTitle" },
+		})
+		line_entries[line_no] = {
 			kind = "commit",
 			entry = entry,
 			pushable = entry_pushable,
 		}
 	end
-	lines[#lines + 1] = ""
+	B:blank()
 end
 
 ---@param result GitflowGitResult
@@ -254,6 +296,14 @@ local function ensure_window(cfg)
 		M.unstage_all()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	-- Visual-line batch staging: press V to select rows, then s / u.
+	vim.keymap.set("x", "s", function()
+		M.stage_visual()
+	end, { buffer = bufnr, silent = true })
+	vim.keymap.set("x", "u", function()
+		M.unstage_visual()
+	end, { buffer = bufnr, silent = true })
+
 	vim.keymap.set("n", "cc", function()
 		if M.state.opts.on_commit then
 			M.state.opts.on_commit()
@@ -341,97 +391,60 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Status", render_opts)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Status", render_opts)
+
+	-- Branch + change-count summary bar.
+	local total_changes = #grouped.staged + #grouped.unstaged + #grouped.untracked
+	B:push({
+		{ "  ", nil },
+		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
+		{ current_branch ~= "" and current_branch or "(detached)", "GitflowSectionTitle" },
+		{ upstream_name and ("   \u{2192} " .. upstream_name) or "", "GitflowMeta" },
+		{
+			total_changes == 0 and "     working tree clean"
+				or ("     %d change%s"):format(total_changes, total_changes == 1 and "" or "s"),
+			total_changes == 0 and "GitflowReviewApproved" or "GitflowMeta",
+		},
+	})
+	B:blank()
+
 	local line_entries = {}
 
-	append_file_section(("Staged (%d)"):format(#grouped.staged), grouped.staged, lines, line_entries, true, render_opts)
-	append_file_section(
-		("Unstaged (%d)"):format(#grouped.unstaged),
-		grouped.unstaged,
-		lines,
-		line_entries,
-		false,
-		render_opts
-	)
-	append_file_section(
-		("Untracked (%d)"):format(#grouped.untracked),
-		grouped.untracked,
-		lines,
-		line_entries,
-		false,
-		render_opts
-	)
+	append_file_section(B, ("Staged (%d)"):format(#grouped.staged), grouped.staged, line_entries, true)
+	append_file_section(B, ("Unstaged (%d)"):format(#grouped.unstaged), grouped.unstaged, line_entries, false)
+	append_file_section(B, ("Untracked (%d)"):format(#grouped.untracked), grouped.untracked, line_entries, false)
 
 	if upstream_name then
 		if #outgoing_entries > 0 then
-			append_commit_section(
-				"Commit History (oldest -> newest)",
-				outgoing_entries,
-				lines,
-				line_entries,
-				true,
-				render_opts
-			)
+			append_commit_section(B, "Commit History (oldest -> newest)", outgoing_entries, line_entries, true)
 		end
-		local outgoing_title = ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name)
-		append_commit_section(outgoing_title, outgoing_entries, lines, line_entries, true, render_opts)
-		local incoming_title = ("Incoming (oldest -> newest, only on %s)"):format(upstream_name)
-		append_commit_section(incoming_title, incoming_entries, lines, line_entries, false, render_opts)
+		append_commit_section(
+			B, ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name),
+			outgoing_entries, line_entries, true
+		)
+		append_commit_section(
+			B, ("Incoming (oldest -> newest, only on %s)"):format(upstream_name),
+			incoming_entries, line_entries, false
+		)
 	else
-		local upstream_title, upstream_sep = ui_render.section(STATUS_NO_UPSTREAM_HEADER, nil, render_opts)
-		lines[#lines + 1] = upstream_title
-		lines[#lines + 1] = upstream_sep
-		lines[#lines + 1] = ui_render.entry("No upstream branch — push will set it automatically")
-		lines[#lines + 1] = ""
+		components.section(B, icons.get("branch", "remote"), STATUS_NO_UPSTREAM_HEADER)
+		components.empty(B, "No upstream branch — push will set it automatically")
+		B:blank()
 	end
 
-	local footer_lines = ui_render.panel_footer(current_branch, nil, render_opts)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
+	-- Final line must be exactly "Current branch: <branch>".
+	components.branch_footer(B, current_branch)
 
-	ui.buffer.update("status", lines)
+	ui.buffer.update("status", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	local entry_highlights = {}
-
-	-- Mark section headers
-	for line_no, line in ipairs(lines) do
-		if
-			vim.startswith(line, "Staged")
-			or vim.startswith(line, "Unstaged")
-			or vim.startswith(line, "Untracked")
-			or vim.startswith(line, "Outgoing")
-			or vim.startswith(line, "Incoming")
-			or vim.startswith(line, "Commit History")
-			or line == STATUS_NO_UPSTREAM_HEADER
-		then
-			entry_highlights[line_no] = "GitflowHeader"
-		end
-	end
-
-	-- Mark file entry highlights
-	for line_no, entry in pairs(line_entries) do
-		if entry.kind == "file" then
-			local group = "GitflowUnstaged"
-			if entry.entry.untracked then
-				group = "GitflowUntracked"
-			elseif entry.diff_staged then
-				group = "GitflowStaged"
-			end
-			entry_highlights[line_no] = group
-		end
-	end
-
-	ui_render.apply_panel_highlights(bufnr, STATUS_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-		entry_highlights = entry_highlights,
-	})
+	B:apply(bufnr, STATUS_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@param err string|nil
@@ -573,6 +586,68 @@ function M.unstage_under_cursor()
 			done(err)
 		end)
 	end)
+end
+
+--- Collect the file entries covered by the current visual-line selection.
+---@return GitflowStatusFileLineEntry[]
+local function file_entries_in_visual_range()
+	local a = vim.fn.line("v")
+	local b = vim.fn.line(".")
+	if a > b then
+		a, b = b, a
+	end
+	local out = {}
+	for line = a, b do
+		local le = M.state.line_entries[line]
+		if le and le.kind == "file" then
+			out[#out + 1] = le
+		end
+	end
+	return out
+end
+
+--- Stage every selected file in one go, then repaint once.
+---@param stage boolean  true = stage, false = unstage
+local function batch_stage_visual(stage)
+	local entries = file_entries_in_visual_range()
+	-- Leave visual mode now that we've captured the range.
+	vim.api.nvim_feedkeys(
+		vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false
+	)
+	if #entries == 0 then
+		utils.notify("No files in selection", vim.log.levels.WARN)
+		return
+	end
+
+	local pending = #entries
+	local function on_one(err)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+		end
+		pending = pending - 1
+		if pending == 0 then
+			emit_post_operation()
+			M.refresh({ files_only = true })
+		end
+	end
+
+	for _, le in ipairs(entries) do
+		if stage then
+			git_status.stage_file(le.entry.path, {}, on_one)
+		else
+			git_status.unstage_file(le.entry.path, {}, on_one)
+		end
+	end
+end
+
+--- Stage all files in the visual selection (V then s).
+function M.stage_visual()
+	batch_stage_visual(true)
+end
+
+--- Unstage all files in the visual selection (V then u).
+function M.unstage_visual()
+	batch_stage_visual(false)
 end
 
 function M.stage_all()
