@@ -92,6 +92,13 @@ end
 --- Count active timers that are NOT part of `baseline` — i.e. timers created
 --- after the baseline snapshot that are still running. Closing/inactive
 --- handles and any handle Neovim already owned are excluded.
+---
+--- Repeating timers are also excluded: the plugin only ever schedules one-shot
+--- timers (via `vim.defer_fn`), so a repeating handle is never one of ours. In
+--- particular `vim.wait` arms its own repeating interval timer to poll the
+--- predicate; on some Neovim builds (e.g. nightly) that heartbeat surfaces as a
+--- fresh libuv handle absent from the idle-time baseline, which would otherwise
+--- be miscounted as a leak and make the predicate never reach zero.
 ---@param baseline table<userdata, boolean>
 ---@return integer
 local function new_active_timer_count(baseline)
@@ -109,7 +116,18 @@ local function new_active_timer_count(baseline)
 				local ok_closing, closing = pcall(function()
 					return handle:is_closing()
 				end)
-				if ok_active and active and (not ok_closing or not closing) then
+				local ok_repeat, repeat_ms = pcall(function()
+					return handle:get_repeat()
+				end)
+				local repeating = ok_repeat
+					and type(repeat_ms) == "number"
+					and repeat_ms > 0
+				if
+					ok_active
+					and active
+					and not repeating
+					and (not ok_closing or not closing)
+				then
 					count = count + 1
 				end
 			end
