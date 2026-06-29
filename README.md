@@ -251,7 +251,7 @@ instructions.
 | `<leader>gP` | Push |
 | `<leader>gp` | Pull |
 | `<leader>gf` | Fetch |
-| `gd` | Diff |
+| `gD` | Diff |
 | `gl` | Log |
 | `gS` | Stash list |
 | `gZ` | Stash push |
