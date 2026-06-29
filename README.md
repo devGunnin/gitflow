@@ -54,6 +54,7 @@ require("gitflow").setup({
   keybindings = {
     help       = "<leader>gh",
     open       = "<leader>go",
+    refresh    = "gr",
     close      = "<leader>gq",
     status     = "gs",
     commit     = "gc",
