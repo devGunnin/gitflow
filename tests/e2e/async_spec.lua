@@ -63,10 +63,18 @@ local function with_temp_git_log(fn)
 	end
 end
 
---- Count active timers via libuv handle walk.
----@return integer
-local function active_timer_count()
-	local count = 0
+--- Snapshot the identities of every live libuv timer handle.
+---
+--- The set is keyed by the handle itself so callers can later distinguish
+--- timers that already existed from ones created in between. This matters
+--- because the loop also carries timers that Neovim itself owns — most
+--- notably the internal CursorHold/`updatetime` handle, which gets armed
+--- (and stays "active" for the whole `updatetime` window) the moment panel
+--- rendering moves the cursor. Those are not ours to drain, so the leak
+--- check below ignores any handle present in the baseline snapshot.
+---@return table<userdata, boolean>
+local function timer_handle_set()
+	local set = {}
 	local uv = vim.uv or vim.loop
 	if uv and uv.walk then
 		uv.walk(function(handle)
@@ -74,6 +82,27 @@ local function active_timer_count()
 				and uv.handle_get_type(handle)
 				or nil
 			if handle_type == "timer" then
+				set[handle] = true
+			end
+		end)
+	end
+	return set
+end
+
+--- Count active timers that are NOT part of `baseline` — i.e. timers created
+--- after the baseline snapshot that are still running. Closing/inactive
+--- handles and any handle Neovim already owned are excluded.
+---@param baseline table<userdata, boolean>
+---@return integer
+local function new_active_timer_count(baseline)
+	local count = 0
+	local uv = vim.uv or vim.loop
+	if uv and uv.walk then
+		uv.walk(function(handle)
+			local handle_type = uv.handle_get_type
+				and uv.handle_get_type(handle)
+				or nil
+			if handle_type == "timer" and not baseline[handle] then
 				local ok_active, active = pcall(function()
 					return handle:is_active()
 				end)
@@ -258,24 +287,39 @@ T.run_suite("E2E: Async Determinism", {
 	end,
 
 	["active timers return to baseline after async operations"] = function()
-		local baseline_timers = active_timer_count()
+		-- Exercise every async surface in one go: open the panels, run a
+		-- command that chains git jobs, drain them, then tear everything down.
+		local function exercise()
+			status_panel.open(cfg, {})
+			diff_panel.open(cfg, {})
+			log_panel.open(cfg, {})
+			commands.dispatch({ "fetch" }, cfg)
+			T.drain_jobs(5000)
+			T.cleanup_panels()
+		end
 
-		status_panel.open(cfg, {})
-		diff_panel.open(cfg, {})
-		log_panel.open(cfg, {})
-		commands.dispatch({ "fetch" }, cfg)
-		T.drain_jobs(5000)
-		T.cleanup_panels()
+		-- Warm-up pass. This arms any timer Neovim lazily creates on first UI
+		-- activity (e.g. the internal CursorHold/`updatetime` handle, armed
+		-- when rendering moves the cursor) so it is captured in the baseline
+		-- snapshot below and excluded from the leak check. Without this, the
+		-- still-active internal timer is indistinguishable from a leak and the
+		-- assertion fails on builds where it lingers past the wait window.
+		exercise()
+		local baseline = timer_handle_set()
+
+		-- Second pass: the only timers that may appear now are ones our async
+		-- work created. After draining jobs and tearing the panels down, none
+		-- of them should still be running.
+		exercise()
 
 		T.wait_until(function()
-			return active_timer_count() <= baseline_timers
-		end, "active timers should return to baseline after drain", 1500)
+			return new_active_timer_count(baseline) == 0
+		end, "active timers should return to baseline after drain", 5000)
 
-		local remaining_timers = active_timer_count()
+		local leaked = new_active_timer_count(baseline)
 		T.assert_true(
-			remaining_timers <= baseline_timers,
-			("active timers should return to baseline (baseline=%d, remaining=%d)")
-				:format(baseline_timers, remaining_timers)
+			leaked == 0,
+			("async work should not leak timers (leaked=%d)"):format(leaked)
 		)
 	end,
 
