@@ -332,7 +332,7 @@ wait_until(function()
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "Gitflow Conflicts") ~= nil
-		and find_line(lines, "Active operation: merge") ~= nil
+		and find_line(lines, "merge in progress") ~= nil
 		and find_line(lines, "choose-local.txt") ~= nil
 		and find_line(lines, "choose-base.txt") ~= nil
 		and find_line(lines, "choose-remote.txt") ~= nil
@@ -457,7 +457,7 @@ end
 
 wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(conflict_buf, 0, -1, false)
-	return find_line(lines, "Unresolved files: 0") ~= nil
+	return find_line(lines, "all resolved") ~= nil
 end, "conflict panel should refresh when all files are resolved", 10000)
 
 wait_until(function()

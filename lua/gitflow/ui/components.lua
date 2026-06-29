@@ -18,6 +18,7 @@ M.pad_right = ui_render.pad_right
 M.content_width = ui_render.content_width
 M.separator = ui_render.separator
 M.is_separator = ui_render.is_separator
+M.is_floating = ui_render.is_floating
 
 ---@param value any
 ---@return string
@@ -133,12 +134,107 @@ function M.label_chunks(labels, opts)
 	return chunks
 end
 
----Push an empty-state line.
+---Push an empty-state line, optionally with a leading icon and a dim action
+---hint underneath. Called with just (B, text) it stays a single muted line so
+---existing callers and last-line invariants are unchanged.
 ---@param B GitflowRenderBuilder
 ---@param text string
+---@param opts table|nil  { icon = string, hint = string }
 ---@return integer line_no
-function M.empty(B, text)
-	return B:push({ { "   ", nil }, { text, "GitflowMeta" } })
+function M.empty(B, text, opts)
+	opts = opts or {}
+	if opts.icon == nil and opts.hint == nil then
+		return B:push({ { "   ", nil }, { text, "GitflowMeta" } })
+	end
+	local icon = opts.icon
+	if icon == nil then
+		icon = icons.get("ui", "empty")
+	end
+	local line_no = B:push({
+		{ "   ", nil },
+		{ (icon ~= "" and icon .. "  " or ""), "GitflowEmptyIcon" },
+		{ text, "GitflowEmptyText" },
+	})
+	if opts.hint and opts.hint ~= "" then
+		B:push({ { "   ", nil }, { opts.hint, "GitflowEmptyHint" } })
+	end
+	return line_no
+end
+
+---Push a styled loading state: a leading glyph plus a label, with an optional
+---dim detail line. Replaces bare "Loading…" text so every surface shows the
+---same cohesive in-progress affordance.
+---@param B GitflowRenderBuilder
+---@param label string
+---@param opts table|nil  { icon = string, detail = string, leading = string }
+---@return integer line_no
+function M.loading(B, label, opts)
+	opts = opts or {}
+	local icon = opts.icon
+	if icon == nil then
+		icon = icons.get("ui", "loading")
+	end
+	local lead = opts.leading or "  "
+	local line_no = B:push({
+		{ lead, nil },
+		{ (icon ~= "" and icon .. "  " or ""), "GitflowLoadingIcon" },
+		{ label, "GitflowLoadingText" },
+	})
+	if opts.detail and opts.detail ~= "" then
+		B:push({ { lead, nil }, { opts.detail, "GitflowEmptyHint" } })
+	end
+	return line_no
+end
+
+---Build a plain (un-highlighted) loading placeholder for buffer creation, used
+---as the brief first paint before a panel renders its highlighted content.
+---@param label string|nil
+---@return string[]
+function M.loading_lines(label)
+	return { "", "  " .. icons.get("ui", "loading") .. "  " .. (label or "Loading…") }
+end
+
+---Push a real in-buffer error state: an error glyph + message, with an optional
+---dim detail line and a retry hint. Surfaces failures inside the panel instead
+---of relying only on a transient notification.
+---@param B GitflowRenderBuilder
+---@param message string
+---@param opts table|nil  { detail = string, hint = string }
+---@return integer line_no
+function M.error_state(B, message, opts)
+	opts = opts or {}
+	local line_no = B:push({
+		{ "  ", nil },
+		{ icons.get("ui", "error") .. "  ", "GitflowStateErrorIcon" },
+		{ message, "GitflowStateError" },
+	})
+	if opts.detail and opts.detail ~= "" then
+		for _, detail_line in ipairs(vim.split(opts.detail, "\n", { plain = true })) do
+			if vim.trim(detail_line) ~= "" then
+				B:push({ { "     ", nil }, { detail_line, "GitflowStateErrorDetail" } })
+			end
+		end
+	end
+	if opts.hint and opts.hint ~= "" then
+		B:blank()
+		B:push({ { "  ", nil }, { opts.hint, "GitflowEmptyHint" } })
+	end
+	return line_no
+end
+
+---Push a grouped key-hint block: a dim group label followed by its hint pairs
+---on the next line. Keeps dense surfaces (e.g. the PR review panel) scannable
+---instead of a flat wall of hints.
+---@param B GitflowRenderBuilder
+---@param label string
+---@param pairs table[]  list of { key, label }
+---@return integer line_no
+function M.hint_group(B, label, pairs)
+	B:push({
+		{ "  ", nil },
+		{ label, "GitflowHintGroupLabel" },
+	})
+	return B:push(ui_render.hint_chunks(pairs, { leading = "    " }))
 end
 
 ---Push a styled inline key-hint bar.
@@ -150,6 +246,26 @@ function M.hint_bar(B, pairs, opts)
 	return B:push(ui_render.hint_chunks(pairs, vim.tbl_extend(
 		"force", { leading = " " }, opts or {}
 	)))
+end
+
+---Push an in-buffer key-hint bar, but only when the panel is an inline split.
+---Floats already advertise the same keys in their window footer, so showing a
+---second bar inside the buffer would be redundant; splits otherwise have no
+---hint chrome at all. This keeps discoverability symmetric across layouts.
+---@param B GitflowRenderBuilder
+---@param render_opts table|nil  { winid?, bufnr? }
+---@param pairs table[]  list of { key, label }
+---@param opts table|nil  { blank_before = boolean }
+---@return integer|nil line_no  nil when rendered as a float (nothing pushed)
+function M.split_hint_bar(B, render_opts, pairs, opts)
+	if M.is_floating(render_opts) then
+		return nil
+	end
+	opts = opts or {}
+	if opts.blank_before ~= false then
+		B:blank()
+	end
+	return M.hint_bar(B, pairs)
 end
 
 ---Push a final "Current branch: <branch>" footer line. Must be the LAST line

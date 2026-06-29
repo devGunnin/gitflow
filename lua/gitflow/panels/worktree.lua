@@ -18,6 +18,16 @@ local WORKTREE_FLOAT_TITLE = "  Gitflow Worktrees  "
 local WORKTREE_FLOAT_FOOTER =
 	" a add · d/D remove · m move · L lock · p prune"
 	.. " · <CR> switch · r refresh · q close "
+local WORKTREE_HINTS = {
+	{ "<CR>", "switch" },
+	{ "a", "add" },
+	{ "d/D", "remove" },
+	{ "m", "move" },
+	{ "L", "lock" },
+	{ "p", "prune" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 local WORKTREE_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_worktree_hl")
 local WORKTREE_AUGROUP =
@@ -57,7 +67,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("worktree", {
 			filetype = "gitflowworktree",
-			lines = { "Loading worktrees..." },
+			lines = components.loading_lines("Loading worktrees…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -155,6 +165,40 @@ local function entry_ref(entry)
 	return "(unknown)"
 end
 
+---Paint the buffer with a single styled state block (loading / error) sharing
+---the rendered panel's header chrome so transitions don't flicker.
+---@param paint fun(B: GitflowRenderBuilder)
+local function render_state(paint)
+	local render_opts = { bufnr = M.state.bufnr, winid = M.state.winid }
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Worktrees", render_opts)
+	B:blank()
+	paint(B)
+	ui.buffer.update("worktree", B.lines)
+	M.state.line_entries = {}
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
+end
+
+local function render_loading()
+	render_state(function(B)
+		components.loading(B, "Loading worktrees…")
+	end)
+end
+
+---@param message string
+local function render_error(message)
+	render_state(function(B)
+		components.error_state(B, "Could not list worktrees", {
+			detail = message,
+			hint = "Press r to retry · q to close",
+		})
+	end)
+end
+
 ---@param entries GitflowWorktreeEntry[]
 local function render(entries)
 	local render_opts = {
@@ -196,7 +240,9 @@ local function render(entries)
 
 	local line_entries = {}
 	if #entries == 0 then
-		components.empty(B, "no worktrees found")
+		components.empty(B, "No worktrees yet", {
+			hint = "Press a to add a worktree.",
+		})
 	else
 		for _, entry in ipairs(entries) do
 			local is_current = normalize(entry.path) == cwd
@@ -241,6 +287,8 @@ local function render(entries)
 		end
 	end
 
+	components.split_hint_bar(B, render_opts, WORKTREE_HINTS)
+
 	ui.buffer.update("worktree", B.lines)
 	M.state.line_entries = line_entries
 
@@ -267,6 +315,7 @@ end
 function M.open(cfg)
 	M.state.cfg = cfg
 	ensure_window(cfg)
+	render_loading()
 
 	-- Keep the list fresh when worktrees change via commands / other panels.
 	vim.api.nvim_clear_autocmds({ group = WORKTREE_AUGROUP })
@@ -292,6 +341,7 @@ function M.refresh()
 	git_worktree.list({}, function(err, entries)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
+			render_error(err)
 			return
 		end
 		render(entries or {})

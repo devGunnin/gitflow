@@ -27,6 +27,14 @@ local REBASE_FLOAT_TITLE = "Gitflow Interactive Rebase"
 local REBASE_FLOAT_FOOTER =
 	" <CR> cycle · p/r/e/s/f/d actions · J/K move · X execute"
 		.. " · b base · q close "
+-- Compact in-buffer hints for split layout (floats use the footer above).
+local REBASE_HINTS = {
+	{ "<CR>", "cycle action" },
+	{ "J/K", "move" },
+	{ "X", "execute" },
+	{ "b", "base" },
+	{ "q", "close" },
+}
 local REBASE_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_rebase_hl")
 
@@ -276,6 +284,8 @@ local function render_todo()
 			line_entries[line_no] = entry
 		end
 	end
+
+	components.split_hint_bar(B, render_opts, REBASE_HINTS)
 
 	ui.buffer.update("rebase", B.lines)
 	M.state.line_entries = line_entries
