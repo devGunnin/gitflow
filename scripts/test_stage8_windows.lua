@@ -271,13 +271,10 @@ assert_float_panel_capture(start, "prs")
 prs_panel.close()
 prs_panel.refresh = original_prs_refresh
 
-local original_review_refresh = review_panel.refresh
-review_panel.refresh = function() end
-start = #captured
-review_panel.open(float_cfg, 7)
-assert_float_panel_capture(start, "review")
-review_panel.close()
-review_panel.refresh = original_review_refresh
+-- NOTE: the PR review panel is intentionally NOT a float — the UI/UX
+-- overhaul moved it to a dedicated tabpage (see panels/review.lua), so it
+-- exposes no open_float capture to assert. Its window layout is covered by
+-- scripts/test_review_loop.lua.
 
 local git_branch = require("gitflow.git.branch")
 local git_diff = require("gitflow.git.diff")
