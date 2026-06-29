@@ -12,6 +12,7 @@ Normal-mode mappings available in any buffer. Configured via
 | --- | --- | --- |
 | `<leader>gh` | Show help / usage | `help` |
 | `<leader>go` | Open main panel | `open` |
+| `gr` | Refresh current panel | `refresh` |
 | `<leader>gq` | Close all Gitflow panels | `close` |
 | `gs` | Open status panel | `status` |
 | `gc` | Commit | `commit` |

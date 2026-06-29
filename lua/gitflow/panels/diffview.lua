@@ -463,7 +463,13 @@ function M.close()
 	M.state.active_idx = nil
 	M.state.hunk_anchors = {}
 	if tabpage and vim.api.nvim_tabpage_is_valid(tabpage) then
-		pcall(vim.cmd, "tabclose")
+		-- Close this diffview's own tabpage explicitly. Using a bare
+		-- `tabclose` would close whatever tab is currently focused, which is
+		-- the wrong tab when close runs while the user is on another tab
+		-- (e.g. opening a second diff, which calls close() first).
+		for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+			pcall(vim.api.nvim_win_close, winid, true)
+		end
 	end
 end
 
