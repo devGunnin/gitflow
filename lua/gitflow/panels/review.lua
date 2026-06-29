@@ -95,6 +95,8 @@ M.state = {
 	file_list_bufnr = nil,
 	diff_winid = nil,
 	files = {},
+	files_loaded = false,
+	files_error = nil,
 	file_diffs = {},
 	comment_threads = {},
 	pending_comments = {},
@@ -666,7 +668,19 @@ local function render_file_list()
 
 	local file_lines_start = #lines + 1
 	if #M.state.files == 0 then
-		if M.state.files_loaded then
+		if M.state.files_error then
+			lines[#lines + 1] =
+				("  %s  Could not load changed files"):format(icons.get("ui", "error"))
+			ctx.highlights[#ctx.highlights + 1] = {
+				line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowStateError",
+			}
+			for _, detail in ipairs(vim.split(M.state.files_error, "\n", { plain = true })) do
+				lines[#lines + 1] = "     " .. detail
+				ctx.highlights[#ctx.highlights + 1] = {
+					line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowStateErrorDetail",
+				}
+			end
+		elseif M.state.files_loaded then
 			lines[#lines + 1] = ("  %s  No changed files"):format(icons.get("ui", "empty"))
 			ctx.highlights[#ctx.highlights + 1] = {
 				line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowReviewHint",
@@ -1657,6 +1671,7 @@ function M.refresh()
 	end
 	local number = M.state.pr_number
 
+	M.state.files_error = nil
 	M.state.pr_title = M.state.pr_title or "(loading)"
 	render_file_list()
 
@@ -1700,6 +1715,8 @@ function M.refresh()
 			local s = M.state.commit_scope
 			build_commit_scope_diffs(s.base, s.head, function(derr)
 				if derr then
+					M.state.files_loaded = true
+					M.state.files_error = derr
 					notify_error(derr)
 				end
 				load_comments_and_finish()
@@ -1709,6 +1726,8 @@ function M.refresh()
 
 		gh_prs.list_files(number, {}, function(files_err, files_data)
 			if files_err then
+				M.state.files_loaded = true
+				M.state.files_error = files_err
 				notify_error(
 					"Could not load PR files list: " .. files_err
 				)
@@ -1878,6 +1897,7 @@ function M.open(cfg, pr_number)
 	M.state.pr_base = nil
 	M.state.files = {}
 	M.state.files_loaded = false
+	M.state.files_error = nil
 	M.state.file_diffs = {}
 	M.state.comment_threads = {}
 	M.state.pending_comments = {}
@@ -1967,6 +1987,7 @@ function M.close()
 	M.state.diff_winid = nil
 	M.state.files = {}
 	M.state.files_loaded = false
+	M.state.files_error = nil
 	M.state.file_diffs = {}
 	M.state.comment_threads = {}
 	M.state.pending_comments = {}
