@@ -1,5 +1,6 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
+local git = require("gitflow.git")
 local git_worktree = require("gitflow.git.worktree")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
@@ -7,11 +8,18 @@ local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
 local list_picker = require("gitflow.ui.list_picker")
 
+---@class GitflowWorktreeEnrichment
+---@field subject string|nil
+---@field rel_time string|nil
+---@field is_dirty boolean
+
 ---@class GitflowWorktreePanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
 ---@field line_entries table<integer, GitflowWorktreeEntry>
 ---@field cfg GitflowConfig|nil
+---@field enrichment table<string, GitflowWorktreeEnrichment>
+---@field enrich_gen integer
 
 local M = {}
 local WORKTREE_FLOAT_TITLE = "  Gitflow Worktrees  "
@@ -39,6 +47,8 @@ M.state = {
 	winid = nil,
 	line_entries = {},
 	cfg = nil,
+	enrichment = {},
+	enrich_gen = 0,
 }
 
 local function emit_post_operation()
@@ -199,6 +209,12 @@ local function render_error(message)
 	end)
 end
 
+---Render the worktree list. Each entry occupies 2–3 lines:
+---  Line 1 — icon + ref + status badges ([current] [locked] [prunable] ~)
+---  Line 2 — dim: short-sha · subject · rel_time · ~/path
+---  Line 3 — (optional) lock or prune reason
+---All card lines map to the entry in line_entries so actions work from
+---any line within a card. A blank line separates cards for readability.
 ---@param entries GitflowWorktreeEntry[]
 local function render(entries)
 	local render_opts = {
@@ -207,8 +223,6 @@ local function render(entries)
 	}
 	local cwd = cwd_abs()
 
-	-- Resolve the ref of the worktree we are currently sitting in for the
-	-- summary bar context.
 	local current_ref
 	for _, entry in ipairs(entries) do
 		if normalize(entry.path) == cwd then
@@ -219,7 +233,6 @@ local function render(entries)
 	local B = ui_render.builder()
 	components.header(B, "Gitflow Worktrees", render_opts)
 
-	-- Count + current-context summary bar.
 	B:push({
 		{ "  ", nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
@@ -248,10 +261,8 @@ local function render(entries)
 			local is_current = normalize(entry.path) == cwd
 			local ref = entry_ref(entry)
 			local display_path = vim.fn.fnamemodify(entry.path, ":~")
+			local enrich = M.state.enrichment[entry.path]
 
-			-- Dominant state group drives the row accent + bracket markers,
-			-- so GitflowWorktreeCurrent/Locked/Prunable land on every row that
-			-- carries that state.
 			local icon_name = is_current and "current" or "local_branch"
 			local ref_group = "GitflowChip"
 			if is_current then
@@ -262,28 +273,76 @@ local function render(entries)
 				ref_group = "GitflowWorktreeLocked"
 			end
 
-			local chunks = {
+			-- Line 1: icon + branch/ref + state badges
+			local line1_chunks = {
 				{ " ", nil },
 				{ icons.get("branch", icon_name) .. "  ", ref_group },
 				{ ref, ref_group },
-				{ "  ->  ", "GitflowMeta" },
-				{ display_path, "GitflowMeta" },
 			}
 			if is_current then
-				chunks[#chunks + 1] = { "  ", nil }
-				chunks[#chunks + 1] = { "[current]", "GitflowWorktreeCurrent" }
+				line1_chunks[#line1_chunks + 1] =
+					{ "  [current]", "GitflowWorktreeCurrent" }
 			end
 			if entry.is_locked then
-				chunks[#chunks + 1] = { "  ", nil }
-				chunks[#chunks + 1] = { "[locked]", "GitflowWorktreeLocked" }
+				line1_chunks[#line1_chunks + 1] =
+					{ "  [locked]", "GitflowWorktreeLocked" }
 			end
 			if entry.is_prunable then
-				chunks[#chunks + 1] = { "  ", nil }
-				chunks[#chunks + 1] = { "[prunable]", "GitflowWorktreePrunable" }
+				line1_chunks[#line1_chunks + 1] =
+					{ "  [prunable]", "GitflowWorktreePrunable" }
+			end
+			if enrich and enrich.is_dirty then
+				line1_chunks[#line1_chunks + 1] =
+					{ "  ~", "GitflowWorktreeDirty" }
 			end
 
-			local line_no = B:push(chunks)
-			line_entries[line_no] = entry
+			local line1 = B:push(line1_chunks)
+			line_entries[line1] = entry
+
+			-- Line 2: sha · subject · rel_time · path (dim meta row)
+			local short_sha = (entry.sha ~= "" and entry.sha:sub(1, 7)) or nil
+			local line2_chunks = { { "       ", nil } }
+
+			if entry.is_bare then
+				line2_chunks[#line2_chunks + 1] =
+					{ display_path, "GitflowMeta" }
+			else
+				if short_sha then
+					line2_chunks[#line2_chunks + 1] =
+						{ short_sha, "GitflowMeta" }
+				end
+				if enrich and enrich.subject and enrich.subject ~= "" then
+					local prefix = short_sha and "  " or ""
+					line2_chunks[#line2_chunks + 1] =
+						{ prefix .. enrich.subject, "GitflowMeta" }
+				end
+				if enrich and enrich.rel_time and enrich.rel_time ~= "" then
+					line2_chunks[#line2_chunks + 1] =
+						{ "  ·  " .. enrich.rel_time, "GitflowRelTime" }
+				end
+				line2_chunks[#line2_chunks + 1] =
+					{ "  ·  " .. display_path, "GitflowMeta" }
+			end
+
+			local line2 = B:push(line2_chunks)
+			line_entries[line2] = entry
+
+			-- Line 3 (optional): lock or prune reason
+			if entry.is_locked and entry.lock_reason then
+				local line3 = B:push({
+					{ "       Locked: ", "GitflowWorktreeLocked" },
+					{ entry.lock_reason, "GitflowMeta" },
+				})
+				line_entries[line3] = entry
+			elseif entry.is_prunable and entry.prune_reason then
+				local line3 = B:push({
+					{ "       Prunable: ", "GitflowWorktreePrunable" },
+					{ entry.prune_reason, "GitflowMeta" },
+				})
+				line_entries[line3] = entry
+			end
+
+			B:blank()
 		end
 	end
 
@@ -298,6 +357,90 @@ local function render(entries)
 	end
 	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
+end
+
+---Fire async enrichment for each non-bare worktree: commit subject + relative
+---time (one git-log call) and dirty status (git-status --porcelain). Both
+---calls are batched in parallel; a single re-render fires once ALL complete.
+---A generation counter discards results from superseded refreshes.
+---@param entries GitflowWorktreeEntry[]
+local function enrich_entries(entries)
+	local enrichable = {}
+	for _, entry in ipairs(entries) do
+		if not entry.is_bare
+			and entry.path ~= ""
+			and vim.fn.isdirectory(entry.path) == 1
+		then
+			enrichable[#enrichable + 1] = entry
+		end
+	end
+
+	if #enrichable == 0 then
+		return
+	end
+
+	M.state.enrich_gen = M.state.enrich_gen + 1
+	local gen = M.state.enrich_gen
+
+	local pending = #enrichable * 2
+	local enrichment = {}
+	for _, entry in ipairs(enrichable) do
+		enrichment[entry.path] = {}
+	end
+
+	local function done()
+		pending = pending - 1
+		if pending > 0 or gen ~= M.state.enrich_gen then
+			return
+		end
+		M.state.enrichment = enrichment
+		-- Re-render with the same entries list — card structure is stable
+		-- (same line count per entry) so cursor position is preserved.
+		if M.is_open() then
+			render(entries)
+		end
+	end
+
+	for _, entry in ipairs(enrichable) do
+		-- Commit subject + relative time in one log call.
+		git.git(
+			{ "log", "-1", "--format=%s%x1F%ar" },
+			{ cwd = entry.path },
+			function(result)
+				if result.code == 0 then
+					local out = vim.trim(result.stdout or "")
+					if out ~= "" then
+						local sep = out:find("\x1F", 1, true)
+						local subject, rel_time
+						if sep then
+							subject = out:sub(1, sep - 1)
+							rel_time = vim.trim(out:sub(sep + 1))
+						else
+							subject = out
+						end
+						-- Guard against multi-line output (e.g. test stubs).
+						enrichment[entry.path].subject =
+							subject and subject:match("^([^\n]*)")
+						enrichment[entry.path].rel_time = rel_time
+					end
+				end
+				done()
+			end
+		)
+
+		-- Dirty indicator: any output from --porcelain means uncommitted changes.
+		git.git(
+			{ "status", "--porcelain" },
+			{ cwd = entry.path },
+			function(result)
+				if result.code == 0 then
+					enrichment[entry.path].is_dirty =
+						vim.trim(result.stdout or "") ~= ""
+				end
+				done()
+			end
+		)
+	end
 end
 
 ---@return GitflowWorktreeEntry|nil
@@ -317,7 +460,6 @@ function M.open(cfg)
 	ensure_window(cfg)
 	render_loading()
 
-	-- Keep the list fresh when worktrees change via commands / other panels.
 	vim.api.nvim_clear_autocmds({ group = WORKTREE_AUGROUP })
 	vim.api.nvim_create_autocmd("User", {
 		group = WORKTREE_AUGROUP,
@@ -338,13 +480,19 @@ function M.refresh()
 		return
 	end
 
+	-- Invalidate any in-flight enrichment from the previous load.
+	M.state.enrich_gen = M.state.enrich_gen + 1
+	M.state.enrichment = {}
+
 	git_worktree.list({}, function(err, entries)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			render_error(err)
 			return
 		end
-		render(entries or {})
+		local list = entries or {}
+		render(list)
+		enrich_entries(list)
 	end)
 end
 
@@ -425,7 +573,6 @@ function M.add_worktree()
 		return
 	end
 
-	-- 1) Where the worktree lives on disk.
 	ui.input.prompt(
 		{ prompt = "New worktree path: " },
 		function(path)
@@ -434,11 +581,7 @@ function M.add_worktree()
 			end
 			path = vim.trim(path)
 
-			-- 2) Pick the base ref from a searchable list of branches.
 			pick_base_ref("Base worktree on", function(base)
-				-- 3) Optionally create a new branch from that base. Leaving
-				--    the name empty checks the base ref out directly.
-				--    (<Esc> aborts — on_confirm only fires on a typed value.)
 				ui.input.prompt(
 					{
 						prompt = ("New branch name (empty = check out '%s'): ")
@@ -474,8 +617,6 @@ function M.remove_under_cursor(force)
 		return
 	end
 
-	-- A locked worktree can't be removed without force; nudge the user to
-	-- unlock (L) or force (D) rather than letting git error out.
 	if entry.is_locked and not force then
 		utils.notify(
 			"Worktree is locked — press L to unlock, or D to force-remove",
@@ -536,7 +677,6 @@ function M.toggle_lock_under_cursor()
 		return
 	end
 
-	-- Locking: offer an optional reason.
 	ui.input.prompt(
 		{ prompt = "Lock reason (optional): " },
 		function(reason)
@@ -634,8 +774,6 @@ function M.switch_under_cursor()
 		return
 	end
 
-	-- Change Neovim's working directory so subsequent gitflow operations
-	-- (which resolve the repo via cwd) target the selected worktree.
 	local ok = pcall(vim.cmd, "cd " .. vim.fn.fnameescape(entry.path))
 	if not ok then
 		utils.notify(
@@ -671,6 +809,7 @@ function M.close()
 	M.state.bufnr = nil
 	M.state.winid = nil
 	M.state.line_entries = {}
+	M.state.enrichment = {}
 end
 
 ---@return boolean
