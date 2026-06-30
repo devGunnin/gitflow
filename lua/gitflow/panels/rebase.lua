@@ -7,7 +7,6 @@ local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
-local list_picker = require("gitflow.ui.list_picker")
 local status_panel = require("gitflow.panels.status")
 
 ---@class GitflowRebasePanelState
@@ -21,18 +20,30 @@ local status_panel = require("gitflow.panels.status")
 ---@field cfg GitflowConfig|nil
 ---@field picker_request_id integer
 ---@field refresh_request_id integer
+---@field focused_line integer|nil
+---@field preview_winid integer|nil
+---@field preview_bufnr integer|nil
+---@field base_line_branches table<integer, GitflowBranchEntry>
 
 local M = {}
 local REBASE_FLOAT_TITLE = "Gitflow Interactive Rebase"
 local REBASE_FLOAT_FOOTER =
-	" <CR> cycle · p/r/e/s/f/d actions · J/K move · X execute"
-		.. " · b base · q close "
+	" <CR> cycle · p/r/e/s/f/d action · J/K move · X execute"
+		.. " · P preview · b base · q close "
 -- Compact in-buffer hints for split layout (floats use the footer above).
 local REBASE_HINTS = {
-	{ "<CR>", "cycle action" },
+	{ "<CR>", "cycle" },
+	{ "p/r/e/s/f/d", "action" },
 	{ "J/K", "move" },
 	{ "X", "execute" },
+	{ "P", "preview" },
 	{ "b", "base" },
+	{ "q", "close" },
+}
+-- Hints for the base-branch picker stage.
+local BASE_FLOAT_FOOTER = " <CR> select · q close "
+local BASE_HINTS = {
+	{ "<CR>", "select" },
 	{ "q", "close" },
 }
 local REBASE_HIGHLIGHT_NS =
@@ -41,12 +52,21 @@ local REBASE_HIGHLIGHT_NS =
 local ACTIONS = { "pick", "reword", "edit", "squash", "fixup", "drop" }
 
 local ACTION_HIGHLIGHTS = {
-	pick = "GitflowRebasePick",
+	pick   = "GitflowRebasePick",
 	reword = "GitflowRebaseReword",
-	edit = "GitflowRebaseEdit",
+	edit   = "GitflowRebaseEdit",
 	squash = "GitflowRebaseSquash",
-	fixup = "GitflowRebaseFixup",
-	drop = "GitflowRebaseDrop",
+	fixup  = "GitflowRebaseFixup",
+	drop   = "GitflowRebaseDrop",
+}
+
+local ACTION_GLYPHS = {
+	pick   = "●",
+	reword = "~",
+	edit   = "≡",
+	squash = "⊕",
+	fixup  = "⊙",
+	drop   = "✗",
 }
 
 ---@type GitflowRebasePanelState
@@ -61,6 +81,10 @@ M.state = {
 	cfg = nil,
 	picker_request_id = 0,
 	refresh_request_id = 0,
+	focused_line = nil,
+	preview_winid = nil,
+	preview_bufnr = nil,
+	base_line_branches = {},
 }
 
 local function next_picker_request_id()
@@ -114,6 +138,9 @@ local function next_action(current)
 	return "pick"
 end
 
+local render_todo           -- forward declaration; defined after ensure_window
+local refresh_float_footer  -- forward declaration; defined before render_base_picker
+
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
 	local bufnr = M.state.bufnr
@@ -125,6 +152,29 @@ local function ensure_window(cfg)
 			lines = { "Loading branches..." },
 		})
 		M.state.bufnr = bufnr
+
+		vim.api.nvim_create_autocmd("CursorMoved", {
+			buffer = bufnr,
+			callback = function()
+				if vim.api.nvim_get_current_buf() ~= bufnr then
+					return
+				end
+				local line = vim.api.nvim_win_get_cursor(0)[1]
+				if line == M.state.focused_line then
+					return
+				end
+				M.state.focused_line = line
+				if M.state.stage ~= "todo" then
+					return
+				end
+				render_todo()
+				if M.state.preview_winid
+					and vim.api.nvim_win_is_valid(M.state.preview_winid)
+				then
+					M.refresh_preview()
+				end
+			end,
+		})
 	end
 
 	vim.api.nvim_set_option_value(
@@ -148,7 +198,7 @@ local function ensure_window(cfg)
 			title = REBASE_FLOAT_TITLE,
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer
-				and REBASE_FLOAT_FOOTER or nil,
+				and BASE_FLOAT_FOOTER or nil,
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = function()
 				M.state.winid = nil
@@ -166,9 +216,13 @@ local function ensure_window(cfg)
 		})
 	end
 
-	-- Action cycling
+	-- CR routes to branch selection in "base" stage, action cycling in "todo".
 	vim.keymap.set("n", "<CR>", function()
-		M.cycle_action()
+		if M.state.stage == "base" then
+			M.select_base_branch()
+		else
+			M.cycle_action()
+		end
 	end, { buffer = bufnr, silent = true })
 
 	-- Direct action keys
@@ -215,6 +269,11 @@ local function ensure_window(cfg)
 		M.show_base_picker()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	-- Toggle diff preview for focused commit
+	vim.keymap.set("n", "P", function()
+		M.toggle_preview()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	-- Close
 	vim.keymap.set("n", "q", function()
 		M.close()
@@ -222,7 +281,7 @@ local function ensure_window(cfg)
 end
 
 ---Render the interactive rebase todo list.
-local function render_todo()
+render_todo = function()
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -250,16 +309,16 @@ local function render_todo()
 		{ current_branch, "GitflowBranchCurrent" },
 	})
 
-	-- Base ref header. The literal "Base: <ref>" text is load-bearing
-	-- (asserted by tests), so keep the key and value adjacent.
-	B:push({
-		{ "  ", nil },
-		{ base_icon .. "  ", "GitflowSectionIcon" },
-		{ "Base: ", "GitflowMetaKey" },
+	-- Base ref as a meta_row (item 4).
+	components.meta_row(B, "Base:", {
+		{ base_icon .. " ", "GitflowSectionIcon" },
 		{ M.state.base_ref or "(none)", "GitflowBranchCurrent" },
-	})
+	}, { width = 7 })
 	B:blank()
 
+	-- Snapshot the previous line_entries for the detail bar lookup below
+	-- (we update M.state.line_entries at the end of this function).
+	local prev_line_entries = M.state.line_entries
 	local line_entries = {}
 
 	components.section(B, commit_icon, ("Commits (%d)"):format(count))
@@ -269,20 +328,55 @@ local function render_todo()
 		for _, entry in ipairs(M.state.entries) do
 			local action_group = ACTION_HIGHLIGHTS[entry.action]
 				or "GitflowRebasePick"
-			-- Action left-padded to 6 cols ("pick  ") + a separator
-			-- space, keeping the "pick" + subject pairing tests rely on.
-			local action_label = ("%-6s"):format(entry.action)
-			local subject = entry.subject ~= ""
-				and ("  " .. entry.subject) or ""
-			local line_no = B:push({
-				{ " ", nil },
-				{ action_label .. " ", action_group },
+			local glyph = ACTION_GLYPHS[entry.action] or "●"
+			-- squash/fixup items are indented under their pick target
+			-- (item 6: squash/fixup chain indentation).
+			local is_chain = entry.action == "squash"
+				or entry.action == "fixup"
+			local lead = is_chain and "   " or " "
+			local lead2 = is_chain and "       " or "     "
+
+			-- Line 1: glyph badge + sha + subject (items 1 & 2).
+			local line1 = B:push({
+				{ lead, nil },
+				{ glyph .. " ", action_group },
+				{ ("%-6s"):format(entry.action) .. "  ", action_group },
 				{ commit_icon .. " ", "GitflowRebaseHash" },
 				{ entry.short_sha, "GitflowRebaseHash" },
-				{ subject, "GitflowCardTitle" },
+				{ "  " .. (entry.subject or ""), "GitflowCardTitle" },
 			})
-			line_entries[line_no] = entry
+			line_entries[line1] = entry
+
+			-- Line 2: author + relative time, dimmed (item 1).
+			local line2 = B:push({
+				{ lead2, nil },
+				{ entry.author or "", "GitflowMeta" },
+				{ " · ", "GitflowMetaKey" },
+				{ entry.relative_time or "", "GitflowMeta" },
+			})
+			line_entries[line2] = entry
 		end
+	end
+
+	-- Detail bar: shows author/time/subject for the focused commit (item 8).
+	B:blank()
+	local focused_entry = prev_line_entries
+		and prev_line_entries[M.state.focused_line]
+	if focused_entry then
+		B:push({
+			{ "  ", nil },
+			{ commit_icon .. " ", "GitflowSectionIcon" },
+			{ focused_entry.author or "", "GitflowMeta" },
+			{ " · ", "GitflowMetaKey" },
+			{ focused_entry.relative_time or "", "GitflowMeta" },
+			{ "   ", nil },
+			{ focused_entry.subject or "", "GitflowCardTitle" },
+		})
+	else
+		B:push({
+			{ "   ", nil },
+			{ "move cursor to a commit to inspect", "GitflowMeta" },
+		})
 	end
 
 	components.split_hint_bar(B, render_opts, REBASE_HINTS)
@@ -296,6 +390,7 @@ local function render_todo()
 	end
 	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
+	refresh_float_footer()
 end
 
 ---Find the index in M.state.entries for the entry under the cursor.
@@ -319,6 +414,241 @@ local function entry_index_under_cursor()
 	return nil
 end
 
+---@return integer|nil
+local function ensure_preview_buffer()
+	if M.state.preview_bufnr
+		and vim.api.nvim_buf_is_valid(M.state.preview_bufnr)
+	then
+		return M.state.preview_bufnr
+	end
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
+	vim.api.nvim_set_option_value("buftype", "nofile", { buf = bufnr })
+	vim.api.nvim_set_option_value("filetype", "diff", { buf = bufnr })
+	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+	M.state.preview_bufnr = bufnr
+	return bufnr
+end
+
+---Fetch and display `git show` for the currently focused commit in the preview
+---window. No-ops when the preview buffer or focused entry is absent.
+function M.refresh_preview()
+	local entry = M.state.line_entries
+		and M.state.line_entries[M.state.focused_line]
+	local preview_bufnr = M.state.preview_bufnr
+	if not entry
+		or not preview_bufnr
+		or not vim.api.nvim_buf_is_valid(preview_bufnr)
+	then
+		return
+	end
+	git.git(
+		{ "show", "--stat", "--patch", entry.sha },
+		{},
+		function(result)
+			if not vim.api.nvim_buf_is_valid(preview_bufnr) then
+				return
+			end
+			local lines = vim.split(result.stdout or "", "\n")
+			vim.schedule(function()
+				if not vim.api.nvim_buf_is_valid(preview_bufnr) then
+					return
+				end
+				vim.api.nvim_set_option_value(
+					"modifiable", true, { buf = preview_bufnr }
+				)
+				vim.api.nvim_buf_set_lines(
+					preview_bufnr, 0, -1, false, lines
+				)
+				vim.api.nvim_set_option_value(
+					"modifiable", false, { buf = preview_bufnr }
+				)
+			end)
+		end
+	)
+end
+
+---Toggle the diff-preview float for the focused commit (item 9).
+---Opens a side float showing `git show <sha>`; pressing P again closes it.
+function M.toggle_preview()
+	if M.state.stage ~= "todo" then
+		return
+	end
+	if M.state.preview_winid
+		and vim.api.nvim_win_is_valid(M.state.preview_winid)
+	then
+		vim.api.nvim_win_close(M.state.preview_winid, true)
+		M.state.preview_winid = nil
+		return
+	end
+
+	local entry = M.state.line_entries
+		and M.state.line_entries[M.state.focused_line]
+	if not entry then
+		utils.notify("Move cursor to a commit first", vim.log.levels.WARN)
+		return
+	end
+
+	local preview_bufnr = ensure_preview_buffer()
+	local columns = vim.o.columns
+	local lines_h = vim.o.lines - vim.o.cmdheight
+	local width = math.floor(columns * 0.48)
+	local height = math.floor(lines_h * 0.72)
+	local col = math.floor(columns * 0.51)
+	local row = math.floor((lines_h - height) / 2)
+
+	local preview_winid = vim.api.nvim_open_win(preview_bufnr, false, {
+		relative = "editor",
+		style = "minimal",
+		width = width,
+		height = height,
+		row = row,
+		col = col,
+		border = "rounded",
+		title = " git show ",
+		title_pos = "center",
+		zindex = 200,
+	})
+	vim.api.nvim_set_option_value(
+		"winhighlight",
+		"NormalFloat:GitflowNormal,FloatBorder:GitflowBorder"
+			.. ",FloatTitle:GitflowTitle",
+		{ win = preview_winid }
+	)
+	M.state.preview_winid = preview_winid
+
+	vim.api.nvim_create_autocmd("WinClosed", {
+		pattern = tostring(preview_winid),
+		once = true,
+		callback = function()
+			if M.state.preview_winid == preview_winid then
+				M.state.preview_winid = nil
+			end
+			if M.state.preview_bufnr
+				and vim.api.nvim_buf_is_valid(M.state.preview_bufnr)
+			then
+				pcall(
+					vim.api.nvim_buf_delete,
+					M.state.preview_bufnr,
+					{ force = true }
+				)
+			end
+			M.state.preview_bufnr = nil
+		end,
+	})
+
+	M.refresh_preview()
+end
+
+---Update the float window footer to match the current stage (best-effort).
+refresh_float_footer = function()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return
+	end
+	if vim.fn.has("nvim-0.10") ~= 1 then
+		return
+	end
+	local win_cfg = vim.api.nvim_win_get_config(winid)
+	if not win_cfg.relative or win_cfg.relative == "" then
+		return
+	end
+	local footer = M.state.stage == "base"
+		and BASE_FLOAT_FOOTER or REBASE_FLOAT_FOOTER
+	pcall(vim.api.nvim_win_set_config, winid, {
+		footer = footer,
+		footer_pos = win_cfg.footer_pos or "center",
+	})
+end
+
+---Render the branch list into the rebase panel for the "base" picker stage.
+---@param branches GitflowBranchEntry[]
+local function render_base_picker(branches)
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Interactive Rebase", render_opts)
+
+	local branch_icon = icons.get("branch", "current")
+	components.section(B, branch_icon, "Select Base Branch")
+
+	local local_entries, remote_entries = git_branch.partition(branches)
+	local base_line_branches = {}
+
+	local function append_branch_section(title, entries)
+		if #entries == 0 then
+			return
+		end
+		B:push({
+			{ "  " .. title, "GitflowSectionTitle" },
+		})
+		B:raw(
+			"  " .. string.rep("-", math.max(8, #title + 2)),
+			"GitflowSeparator"
+		)
+		for _, entry in ipairs(entries) do
+			local icon, group
+			if entry.is_current then
+				icon = icons.get("branch", "current")
+				group = "GitflowBranchCurrent"
+			elseif entry.is_remote then
+				icon = icons.get("branch", "remote")
+				group = "GitflowBranchRemote"
+			else
+				icon = icons.get("branch", "local_branch")
+				group = "GitflowCardTitle"
+			end
+			local chunks = {
+				{ "    ", nil },
+				{ (icon ~= "" and icon .. "  " or ""), group },
+				{ entry.name, group },
+			}
+			if entry.is_current then
+				chunks[#chunks + 1] = {
+					"  (current)", "GitflowMeta",
+				}
+			end
+			local line_no = B:push(chunks)
+			base_line_branches[line_no] = entry
+		end
+		B:blank()
+	end
+
+	append_branch_section("Local", local_entries)
+	append_branch_section("Remote", remote_entries)
+
+	components.split_hint_bar(B, render_opts, BASE_HINTS)
+
+	ui.buffer.update("rebase", B.lines)
+	M.state.base_line_branches = base_line_branches
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
+	refresh_float_footer()
+end
+
+---Confirm the branch under the cursor as the rebase base and switch to the
+---todo view.
+function M.select_base_branch()
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	local branch = M.state.base_line_branches
+		and M.state.base_line_branches[line]
+	if not branch then
+		utils.notify("Move cursor to a branch first", vim.log.levels.WARN)
+		return
+	end
+	next_picker_request_id()
+	M.state.base_ref = branch.name
+	M.state.stage = "todo"
+	M.refresh()
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
@@ -328,12 +658,13 @@ function M.open(cfg)
 end
 
 function M.show_base_picker()
-	local cfg = M.state.cfg
-	if not cfg then
+	if not M.state.cfg then
 		return
 	end
 
+	M.state.stage = "base"
 	local request_id = next_picker_request_id()
+
 	git_branch.list({}, function(err, branches)
 		if not is_active_picker_request(request_id) then
 			return
@@ -345,17 +676,14 @@ function M.show_base_picker()
 		end
 
 		if not branches or #branches == 0 then
-			utils.notify(
-				"No branches found",
-				vim.log.levels.WARN
-			)
+			utils.notify("No branches found", vim.log.levels.WARN)
 			return
 		end
 
-		local items = {}
+		local filtered = {}
 		for _, branch in ipairs(branches) do
 			if not branch.name:match("/HEAD$") then
-				items[#items + 1] = { name = branch.name }
+				filtered[#filtered + 1] = branch
 			end
 		end
 
@@ -363,33 +691,7 @@ function M.show_base_picker()
 			if not is_active_picker_request(request_id) then
 				return
 			end
-
-			list_picker.open({
-				items = items,
-				title = "Select Rebase Base",
-				multi_select = false,
-				on_submit = function(selected)
-					if not is_active_picker_request(request_id) then
-						return
-					end
-
-					if #selected > 0 then
-						next_picker_request_id()
-						M.state.base_ref = selected[1]
-						M.state.stage = "todo"
-						M.refresh()
-					end
-				end,
-				on_cancel = function()
-					if not is_active_picker_request(request_id) then
-						return
-					end
-
-					if M.state.stage == "base" then
-						M.close()
-					end
-				end,
-			})
+			render_base_picker(filtered)
 		end)
 	end)
 end
@@ -481,13 +783,16 @@ function M.move_down()
 	end
 	local entries = M.state.entries
 	entries[idx], entries[idx + 1] = entries[idx + 1], entries[idx]
+	local cur = vim.api.nvim_win_get_cursor(M.state.winid or 0)
 	render_todo()
-	-- Move cursor down to follow the entry
+	-- Each card is 2 lines; step down by 2 to follow the moved entry.
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		local cur = vim.api.nvim_win_get_cursor(M.state.winid)
-		vim.api.nvim_win_set_cursor(
-			M.state.winid, { cur[1] + 1, cur[2] }
+		local new_line = math.min(
+			cur[1] + 2,
+			vim.api.nvim_buf_line_count(M.state.bufnr or 0)
 		)
+		vim.api.nvim_win_set_cursor(M.state.winid, { new_line, cur[2] })
+		M.state.focused_line = new_line
 	end
 end
 
@@ -502,13 +807,13 @@ function M.move_up()
 	end
 	local entries = M.state.entries
 	entries[idx], entries[idx - 1] = entries[idx - 1], entries[idx]
+	local cur = vim.api.nvim_win_get_cursor(M.state.winid or 0)
 	render_todo()
-	-- Move cursor up to follow the entry
+	-- Each card is 2 lines; step up by 2 to follow the moved entry.
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		local cur = vim.api.nvim_win_get_cursor(M.state.winid)
-		vim.api.nvim_win_set_cursor(
-			M.state.winid, { cur[1] - 1, cur[2] }
-		)
+		local new_line = math.max(cur[1] - 2, 1)
+		vim.api.nvim_win_set_cursor(M.state.winid, { new_line, cur[2] })
+		M.state.focused_line = new_line
 	end
 end
 
@@ -598,6 +903,23 @@ function M.close()
 	next_picker_request_id()
 	next_refresh_request_id()
 
+	if M.state.preview_winid
+		and vim.api.nvim_win_is_valid(M.state.preview_winid)
+	then
+		vim.api.nvim_win_close(M.state.preview_winid, true)
+		M.state.preview_winid = nil
+	end
+	if M.state.preview_bufnr
+		and vim.api.nvim_buf_is_valid(M.state.preview_bufnr)
+	then
+		pcall(
+			vim.api.nvim_buf_delete,
+			M.state.preview_bufnr,
+			{ force = true }
+		)
+		M.state.preview_bufnr = nil
+	end
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else
@@ -617,6 +939,8 @@ function M.close()
 	M.state.base_ref = nil
 	M.state.current_branch = nil
 	M.state.stage = "base"
+	M.state.focused_line = nil
+	M.state.base_line_branches = {}
 end
 
 ---@return boolean
