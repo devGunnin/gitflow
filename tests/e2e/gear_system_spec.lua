@@ -432,9 +432,11 @@ T.run_suite("E2E: Conflict Resolution UI", {
 
 		local bufnr = conflict_view.state.merged_bufnr
 		T.assert_true(bufnr ~= nil, "merged buffer should exist")
+		-- Resolution actions are c-prefixed so plain vim motions keep
+		-- working; navigation is ]c/[c (mnemonic: conflict).
 		T.assert_keymaps(
 			bufnr,
-			{ "1", "2", "3", "a", "e", "]x", "[x", "r", "q" }
+			{ "co", "ct", "cb", "cB", "ca", "ce", "cr", "cx", "]c", "[c", "q" }
 		)
 
 		pcall(vim.fn.delete, path)
@@ -470,6 +472,38 @@ T.run_suite("E2E: Conflict Resolution UI", {
 			"modifiable", { buf = merged }
 		)
 		T.assert_true(modifiable, "merged buffer should be modifiable")
+
+		pcall(vim.fn.delete, path)
+		T.cleanup_panels()
+	end,
+
+	-- ── Reset file to conflicted state (cx) ──────────────────────────
+
+	["reset_file recreates the conflict via checkout --merge"] = function()
+		local path = create_conflict_file()
+		with_temp_git_log(function(log_path)
+			with_temporary_patches({
+				{
+					table = ui.input,
+					key = "confirm",
+					value = function()
+						return true
+					end,
+				},
+			}, function()
+				conflict_view.open(path, { cfg = cfg })
+				T.drain_jobs(3000)
+
+				conflict_view.reset_file()
+				T.drain_jobs(3000)
+
+				local lines = T.read_file(log_path)
+				T.assert_true(
+					T.find_line(lines, "checkout --merge") ~= nil,
+					"reset should invoke git checkout --merge"
+				)
+			end)
+		end)
 
 		pcall(vim.fn.delete, path)
 		T.cleanup_panels()

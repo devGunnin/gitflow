@@ -646,11 +646,33 @@ local function render_file_list()
 		total_add = total_add + (f.additions or 0)
 		total_del = total_del + (f.deletions or 0)
 	end
-	local files_header, files_header_spans = join_chunks({
+	-- Count files that carry remote review threads so a reviewer can see at
+	-- a glance how much discussion exists and where.
+	local files_with_threads, total_threads = 0, 0
+	do
+		local seen = {}
+		for _, t in ipairs(M.state.comment_threads) do
+			if t.path then
+				total_threads = total_threads + 1
+				if not seen[t.path] then
+					seen[t.path] = true
+					files_with_threads = files_with_threads + 1
+				end
+			end
+		end
+	end
+	local header_chunks = {
 		{ (" Files (%d)"):format(#M.state.files), nil },
 		{ ("  +%d"):format(total_add), "GitflowReviewCountAdd" },
 		{ (" -%d"):format(total_del), "GitflowReviewCountDel" },
-	})
+	}
+	if total_threads > 0 then
+		header_chunks[#header_chunks + 1] = {
+			("  [%d in %d]"):format(total_threads, files_with_threads),
+			"GitflowReviewComment",
+		}
+	end
+	local files_header, files_header_spans = join_chunks(header_chunks)
 	lines[#lines + 1] = files_header
 	local files_header_line = #lines
 	lines[#lines + 1] = sep
@@ -1013,6 +1035,8 @@ local function apply_review_overlay(bufnr, path, winid, opts)
 	vim.keymap.set("n", "[c", function() M.prev_hunk() end, kopts)
 	vim.keymap.set("n", "]f", function() M.next_file() end, kopts)
 	vim.keymap.set("n", "[f", function() M.prev_file() end, kopts)
+	vim.keymap.set("n", "]C", function() M.next_comment() end, kopts)
+	vim.keymap.set("n", "[C", function() M.prev_comment() end, kopts)
 	vim.keymap.set("n", "<leader>i", function() M.toggle_inline_comments() end, kopts)
 	vim.keymap.set("n", "<leader>d", function() M.toggle_diff_view() end, kopts)
 	vim.keymap.set("n", "<leader>e", function() M.edit_comment_at_cursor() end, kopts)
@@ -1373,6 +1397,8 @@ local function set_up_file_list_keymaps(bufnr)
 	vim.keymap.set("n", "S", function() M.submit_pending_review() end, opts)
 	vim.keymap.set("n", "]f", function() M.next_file() end, opts)
 	vim.keymap.set("n", "[f", function() M.prev_file() end, opts)
+	vim.keymap.set("n", "]C", function() M.next_comment() end, opts)
+	vim.keymap.set("n", "[C", function() M.prev_comment() end, opts)
 	-- File-level comment on the file row under the cursor (#361).
 	vim.keymap.set("n", "c", function() M.file_comment_under_cursor() end, opts)
 	-- Scope the review to a single commit or a range of commits (#363).
@@ -2091,6 +2117,106 @@ function M.prev_hunk()
 	end
 	pcall(vim.api.nvim_win_set_cursor, M.state.diff_winid,
 		{ M.state.hunk_anchors[#M.state.hunk_anchors], 0 })
+end
+
+--- Ordered list of every comment anchor across the whole PR: remote review
+--- threads (from any author) plus local unsubmitted drafts, sorted by the
+--- file-list order then line. Powers ]C / [C comment navigation.
+---@return { path: string, line: integer, file_idx: integer, kind: string }[]
+local function collect_comment_anchors()
+	local file_order = {}
+	for i, f in ipairs(M.state.files) do
+		file_order[f.path] = i
+	end
+	local anchors = {}
+	for _, t in ipairs(M.state.comment_threads) do
+		if t.path and t.line then
+			anchors[#anchors + 1] = {
+				path = t.path,
+				line = t.line,
+				file_idx = file_order[t.path] or math.huge,
+				kind = "thread",
+			}
+		end
+	end
+	for _, pc in ipairs(M.state.pending_comments) do
+		local line = pc.new_line or pc.old_line
+		if pc.path and line then
+			anchors[#anchors + 1] = {
+				path = pc.path,
+				line = line,
+				file_idx = file_order[pc.path] or math.huge,
+				kind = "draft",
+			}
+		end
+	end
+	table.sort(anchors, function(a, b)
+		if a.file_idx ~= b.file_idx then
+			return a.file_idx < b.file_idx
+		end
+		return a.line < b.line
+	end)
+	return anchors
+end
+
+---@param anchor { path: string, line: integer }
+local function goto_comment_anchor(anchor)
+	if M.state.active_path ~= anchor.path then
+		M.open_file(anchor.path)
+	end
+	if M.state.diff_winid and vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		local buf = vim.api.nvim_win_get_buf(M.state.diff_winid)
+		local total = vim.api.nvim_buf_line_count(buf)
+		pcall(vim.api.nvim_win_set_cursor, M.state.diff_winid,
+			{ math.min(anchor.line, total), 0 })
+		vim.api.nvim_set_current_win(M.state.diff_winid)
+	end
+end
+
+--- Jump to the next comment thread/draft in the PR, opening its file and
+--- crossing file boundaries as needed. Wraps at the end.
+function M.next_comment()
+	local anchors = collect_comment_anchors()
+	if #anchors == 0 then
+		notify_info("No comments in this review")
+		return
+	end
+	local cur_idx = M.state.active_file_idx or 0
+	local cur_line = 0
+	if M.state.diff_winid and vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		cur_line = vim.api.nvim_win_get_cursor(M.state.diff_winid)[1]
+	end
+	for _, a in ipairs(anchors) do
+		if a.file_idx > cur_idx
+			or (a.file_idx == cur_idx and a.line > cur_line) then
+			goto_comment_anchor(a)
+			return
+		end
+	end
+	goto_comment_anchor(anchors[1])
+end
+
+--- Jump to the previous comment thread/draft in the PR. Wraps at the start.
+function M.prev_comment()
+	local anchors = collect_comment_anchors()
+	if #anchors == 0 then
+		notify_info("No comments in this review")
+		return
+	end
+	local cur_idx = M.state.active_file_idx or math.huge
+	local cur_line = math.huge
+	if M.state.diff_winid and vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		cur_line = vim.api.nvim_win_get_cursor(M.state.diff_winid)[1]
+	end
+	for i = #anchors, 1, -1 do
+		local a = anchors[i]
+		if a.file_idx < cur_idx
+			or (a.file_idx == cur_idx and a.line < cur_line) then
+			goto_comment_anchor(a)
+			return
+		end
+	end
+	goto_comment_anchor(anchors[#anchors])
 end
 
 -- ── Comments ────────────────────────────────────────────────────────────

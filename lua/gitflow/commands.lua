@@ -572,7 +572,12 @@ end
 ---@param branch string
 ---@param cfg GitflowConfig
 local function run_merge(branch, cfg)
-	git_with_lock_retry({ "merge", branch }, {}, function(result)
+	-- A merge that creates a merge commit would launch $GIT_EDITOR for the
+	-- message; keep it non-interactive so it uses the default message and
+	-- never blocks on `vi`.
+	git_with_lock_retry(
+		{ "merge", branch }, git.with_noninteractive_editor(nil),
+		function(result)
 		if result.code == 0 then
 			local output = result_message(result, ("Merged '%s'"):format(branch))
 			local merge_type = "Merge commit created"
@@ -645,7 +650,9 @@ end
 ---@param commit string
 ---@param cfg GitflowConfig
 local function run_cherry_pick(commit, cfg)
-	git.git({ "cherry-pick", commit }, {}, function(result)
+	git.git(
+		{ "cherry-pick", commit }, git.with_noninteractive_editor(nil),
+		function(result)
 		if result.code == 0 then
 			local output = result_message(result, ("Cherry-picked %s"):format(commit))
 			show_info(output)

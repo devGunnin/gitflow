@@ -2,9 +2,12 @@
 ---
 --- Replaces the old four-board layout with ONE focused editor showing the
 --- conflicted file. Each conflict is colour-coded — OURS (current) vs THEIRS
---- (incoming) — with inline labels and a winbar listing every bind:
----   o take ours · t take theirs · b keep both · 2 base · e edit · a all
----   ]x/[x jump between conflicts · r refresh · q save & close
+--- (incoming) — with inline labels and a winbar listing every bind. The
+--- resolution actions are c-prefixed so plain vim motions (o, a, e, b, t, r,
+--- i, …) keep working while you hand-edit a hunk:
+---   co ours · ct theirs · cb both · cB base · ca all · ce edit
+---   cx reset file to conflicted state · ]c/[c jump · cr refresh
+---   q save & close
 
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
@@ -127,11 +130,13 @@ local function set_winbar(winid)
 		"%#GitflowConflictMarker#  ·  ",
 		"%#GitflowHintText#" .. status,
 		"%#GitflowConflictMarker#  ·  ",
-		"%#GitflowHintKey#o%#GitflowHintText# ours  ",
-		"%#GitflowHintKey#t%#GitflowHintText# theirs  ",
-		"%#GitflowHintKey#b%#GitflowHintText# both  ",
-		"%#GitflowHintKey#e%#GitflowHintText# edit  ",
-		"%#GitflowHintKey#]x/[x%#GitflowHintText# jump  ",
+		"%#GitflowHintKey#co%#GitflowHintText# ours  ",
+		"%#GitflowHintKey#ct%#GitflowHintText# theirs  ",
+		"%#GitflowHintKey#cb%#GitflowHintText# both  ",
+		"%#GitflowHintKey#ca%#GitflowHintText# all  ",
+		"%#GitflowHintKey#ce%#GitflowHintText# edit  ",
+		"%#GitflowHintKey#cx%#GitflowHintText# reset  ",
+		"%#GitflowHintKey#]c/[c%#GitflowHintText# jump  ",
 		"%#GitflowHintKey#q%#GitflowHintText# save&close ",
 	})
 	pcall(vim.api.nvim_set_option_value, "winbar", bar, { win = winid })
@@ -496,22 +501,63 @@ function M.edit_current_hunk()
 	enter_manual_edit()
 end
 
+--- Discard every edit/resolution made to the file and restore its original
+--- conflicted state (markers regenerated from the index stages), so a
+--- botched merge for one file can be redone from scratch.
+function M.reset_file()
+	local path = M.state.path
+	if not path then
+		return
+	end
+	local confirmed = ui.input.confirm(
+		("Reset '%s' back to its original conflicted state?\n\n"
+		.. "This discards all edits and hunk choices made here."):format(path),
+		{ choices = { "&Yes", "&No" }, default_choice = 2 }
+	)
+	if not confirmed then
+		return
+	end
+	git_conflict.recreate_conflict(path, {}, function(err)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		M.state.prompt_shown = false
+		local reload_err = reload_merged_from_disk()
+		if reload_err then
+			utils.notify(reload_err, vim.log.levels.ERROR)
+			return
+		end
+		local winid = M.state.merged_winid
+		if winid and vim.api.nvim_win_is_valid(winid) and #M.state.hunks > 0 then
+			pcall(vim.api.nvim_win_set_cursor, winid,
+				{ M.state.hunks[1].start_line, 0 })
+		end
+		utils.notify(
+			("Reset '%s' to its conflicted state"):format(path),
+			vim.log.levels.INFO
+		)
+	end)
+end
+
 ---@param bufnr integer
 local function set_keymaps(bufnr)
 	local function map(lhs, fn)
 		vim.keymap.set("n", lhs, fn, { buffer = bufnr, silent = true, nowait = true })
 	end
-	map("o", function() M.resolve_current("local") end)
-	map("1", function() M.resolve_current("local") end)
-	map("t", function() M.resolve_current("remote") end)
-	map("3", function() M.resolve_current("remote") end)
-	map("2", function() M.resolve_current("base") end)
-	map("b", function() M.resolve_both() end)
-	map("a", function() M.resolve_all_from_prompt() end)
-	map("e", function() M.edit_current_hunk() end)
-	map("]x", function() M.jump(1) end)
-	map("[x", function() M.jump(-1) end)
-	map("r", function() M.refresh() end)
+	-- Resolution actions are c-prefixed (mnemonic: conflict) so single-key
+	-- vim motions (o, a, e, b, t, r, i, counts …) still work while
+	-- hand-editing a hunk.
+	map("co", function() M.resolve_current("local") end)
+	map("ct", function() M.resolve_current("remote") end)
+	map("cB", function() M.resolve_current("base") end)
+	map("cb", function() M.resolve_both() end)
+	map("ca", function() M.resolve_all_from_prompt() end)
+	map("ce", function() M.edit_current_hunk() end)
+	map("cr", function() M.refresh() end)
+	map("cx", function() M.reset_file() end)
+	map("]c", function() M.jump(1) end)
+	map("[c", function() M.jump(-1) end)
 	map("q", function() M.close() end)
 end
 

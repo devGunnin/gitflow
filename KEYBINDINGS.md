@@ -199,11 +199,17 @@ file list and the editing area with the standard `<C-w>w` motion.
 | --- | --- |
 | `<CR>` / `o` | Open the file under cursor in the right pane |
 | `]f` / `[f` | Next / previous file |
+| `]C` / `[C` | Jump to the next / previous comment thread (any file) |
 | `c` | Comment on the whole file under the cursor (works for deleted files too) |
 | `C` | Scope the review to a single commit or a range of commits |
 | `S` | Submit review — opens dropdown (comment / request changes / approve), then prompts for an optional body |
 | `r` | Refresh PR metadata, diff, and threads |
 | `q` | Close review mode (confirms if pending comments exist) |
+
+Files that carry review comments show a `[n]` badge (remote threads, from
+any author) and `●n` for your unsubmitted drafts; collapsed folders roll
+those counts up, and the **Files** header shows the total (`[threads in
+files]`). Use `]C` / `[C` to walk straight through every comment.
 
 On a draft row in the **Drafts** section: `<CR>` jumps to the comment,
 `e` edits the draft body, `dd` deletes it, `X` deletes all off-diff drafts.
@@ -219,6 +225,7 @@ comment); if the file has more than one draft you're asked which to edit.
 | `R` | Reply to the existing thread on the current line |
 | `]f` / `[f` | Next / previous file (without leaving the editing pane) |
 | `]c` / `[c` | Next / previous hunk |
+| `]C` / `[C` | Next / previous comment thread — opens the file and jumps to the line, crossing files as needed |
 | `<leader>e` | Edit the draft comment on the current line |
 | `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
 | `<leader>i` | Toggle inline comment body lines (collapsed vs. expanded) |
@@ -236,28 +243,32 @@ Buffer-local bindings in the conflict list (`:Gitflow conflicts`).
 
 | Key | Action |
 | --- | --- |
-| `<CR>` | Open 3-way conflict view |
+| `<CR>` | Open the conflict resolver for the file under the cursor |
 | `r` | Refresh conflict list |
 | `R` | Refresh conflict list |
 | `C` | Continue active merge/rebase/cherry-pick |
 | `A` | Abort active operation |
 | `q` | Close |
 
-### 3-Way Merge View
+### Merge Conflict Resolver
 
-Buffer-local bindings in the merged pane of the 3-way conflict editor.
+Buffer-local bindings in the single-pane conflict editor. Resolution actions
+are `c`-prefixed so plain vim motions (`o`, `a`, `e`, `b`, `t`, `r`, …) keep
+working while you hand-edit a hunk.
 
 | Key | Action |
 | --- | --- |
-| `1` | Accept LOCAL version for current hunk |
-| `2` | Accept BASE version for current hunk |
-| `3` | Accept REMOTE version for current hunk |
-| `a` | Resolve all hunks (prompts for side) |
-| `e` | Enter manual edit mode for hunk |
-| `]x` | Jump to next conflict hunk |
-| `[x` | Jump to previous conflict hunk |
-| `r` | Refresh merged buffer |
-| `q` | Close conflict view |
+| `co` | Take OURS (current) for the hunk |
+| `ct` | Take THEIRS (incoming) for the hunk |
+| `cb` | Keep BOTH sides for the hunk |
+| `cB` | Take BASE version for the hunk |
+| `ca` | Resolve all hunks (prompts for side) |
+| `ce` | Enter manual edit mode for hunk |
+| `cx` | Reset the file to its original conflicted state (undo all edits/choices) |
+| `cr` | Refresh from disk |
+| `]c` | Jump to next conflict hunk |
+| `[c` | Jump to previous conflict hunk |
+| `q` | Save & close conflict view |
 
 ## Label Panel
 

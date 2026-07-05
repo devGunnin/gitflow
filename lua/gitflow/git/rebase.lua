@@ -148,7 +148,9 @@ end
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
 function M.continue(opts, cb)
-	git.git({ "rebase", "--continue" }, opts or {}, function(result)
+	-- Reuse the prepared commit message non-interactively so the continue
+	-- never blocks on $GIT_EDITOR (e.g. `vi`) when finalizing a commit.
+	git.git({ "rebase", "--continue" }, git.with_noninteractive_editor(opts), function(result)
 		if result.code ~= 0 then
 			cb(
 				error_from_result(result, "rebase --continue"),
