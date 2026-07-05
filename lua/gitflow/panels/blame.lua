@@ -17,6 +17,11 @@ local components = require("gitflow.ui.components")
 local M = {}
 local BLAME_FLOAT_TITLE = "  Gitflow Blame  "
 local BLAME_FLOAT_FOOTER = " <CR> open commit · r refresh · q close "
+local BLAME_HINTS = {
+	{ "<CR>", "open commit" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 local BLAME_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_blame_hl")
 
 ---@type GitflowBlamePanelState
@@ -37,7 +42,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("blame", {
 			filetype = "gitflowblame",
-			lines = { "Loading blame..." },
+			lines = components.loading_lines("Loading blame…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -89,6 +94,43 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---Paint the buffer with a single styled state block (loading / error) sharing
+---the same header chrome as the rendered blame so transitions don't flicker.
+---@param paint fun(B: GitflowRenderBuilder)
+local function render_state(paint)
+	local render_opts = { bufnr = M.state.bufnr, winid = M.state.winid }
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Blame", render_opts)
+	B:blank()
+	paint(B)
+	ui.buffer.update("blame", B.lines)
+	M.state.line_entries = {}
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	B:apply(bufnr, BLAME_HIGHLIGHT_NS)
+end
+
+local function render_loading()
+	render_state(function(B)
+		local short_path = vim.fn.fnamemodify(M.state.filepath or "", ":~:.")
+		components.loading(B, "Computing blame…", {
+			detail = short_path ~= "" and short_path or nil,
+		})
+	end)
+end
+
+---@param message string
+local function render_error(message)
+	render_state(function(B)
+		components.error_state(B, "Could not compute blame", {
+			detail = message,
+			hint = "Press r to retry · q to close",
+		})
+	end)
+end
+
 ---@param str string|nil
 ---@param width integer
 ---@return string  padding spaces to reach the given display width
@@ -135,7 +177,9 @@ local function render(entries, current_branch)
 	)
 
 	if #entries == 0 then
-		components.empty(B, "no blame data")
+		components.empty(B, "No blame data for this file", {
+			hint = "The file may be untracked or have no committed history.",
+		})
 	else
 		-- Compute max widths for aligned columns.
 		local max_sha, max_author, max_date = 0, 0, 0
@@ -168,6 +212,8 @@ local function render(entries, current_branch)
 			line_entries[line_no] = entry
 		end
 	end
+
+	components.split_hint_bar(B, render_opts, BLAME_HINTS)
 
 	ui.buffer.update("blame", B.lines)
 	M.state.line_entries = line_entries
@@ -215,6 +261,7 @@ function M.open(cfg, opts)
 	end
 
 	ensure_window(cfg)
+	render_loading()
 	M.refresh()
 end
 
@@ -230,6 +277,7 @@ function M.refresh()
 			"No file to blame (open a file first)",
 			vim.log.levels.WARN
 		)
+		render_error("No file to blame — open a file first.")
 		return
 	end
 
@@ -237,6 +285,7 @@ function M.refresh()
 		git_blame.run({ filepath = filepath }, function(err, entries)
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				render_error(err)
 				return
 			end
 			render(entries or {}, branch or "(unknown)")

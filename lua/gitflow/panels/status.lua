@@ -45,6 +45,17 @@ local STATUS_FLOAT_TITLE = "  Gitflow Status  "
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
 local STATUS_FLOAT_FOOTER = " s/u stage · V then s/u batch · a/A all · cc commit"
 	.. " · dd diff · cx conflict · p push · r refresh · q close "
+-- Compact in-buffer hints for split layout (floats use the footer above).
+local STATUS_HINTS = {
+	{ "s/u", "stage/unstage" },
+	{ "a/A", "all" },
+	{ "<CR>", "open" },
+	{ "cc", "commit" },
+	{ "dd", "diff" },
+	{ "p", "push" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 
 ---@type GitflowStatusPanelState
 M.state = {
@@ -239,7 +250,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("status", {
 			filetype = "gitflowstatus",
-			lines = { "Loading git status..." },
+			lines = components.loading_lines("Loading git status…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -432,6 +443,11 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		components.empty(B, "No upstream branch — push will set it automatically")
 		B:blank()
 	end
+
+	-- In-buffer hints for split layout (floats advertise the same keys in their
+	-- window footer). Kept above the branch footer so the final line stays the
+	-- exact "Current branch: <branch>" string other panels/tests rely on.
+	components.split_hint_bar(B, render_opts, STATUS_HINTS)
 
 	-- Final line must be exactly "Current branch: <branch>".
 	components.branch_footer(B, current_branch)

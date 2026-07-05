@@ -111,6 +111,10 @@ local function parse_porcelain(output)
 	}
 end
 
+-- Keep the inline annotation from running off the screen on long commit
+-- subjects; the full message is still available in the blame panel.
+local INLINE_SUMMARY_MAX = 72
+
 ---@param info { author: string, date: string, summary: string, committed: boolean }
 ---@return string
 local function format_blame(info)
@@ -119,7 +123,11 @@ local function format_blame(info)
 	end
 	local parts = ("%s, %s"):format(info.author, info.date)
 	if info.summary ~= "" then
-		parts = parts .. " • " .. info.summary
+		local summary = info.summary
+		if vim.fn.strdisplaywidth(summary) > INLINE_SUMMARY_MAX then
+			summary = vim.fn.strcharpart(summary, 0, INLINE_SUMMARY_MAX - 1) .. "\u{2026}"
+		end
+		parts = parts .. " • " .. summary
 	end
 	return parts
 end

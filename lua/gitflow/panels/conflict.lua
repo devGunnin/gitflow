@@ -4,6 +4,8 @@ local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
 local conflict_view = require("gitflow.ui.conflict")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
+local icons = require("gitflow.icons")
 
 ---@class GitflowConflictFileEntry
 ---@field path string
@@ -27,6 +29,13 @@ local CONFLICT_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_conflict_hl
 local CONFLICT_FLOAT_TITLE = "Gitflow Conflicts"
 local CONFLICT_FLOAT_FOOTER =
 	"<CR> open 3-way  r refresh  C continue  A abort  q close"
+local CONFLICT_HINTS = {
+	{ "<CR>", "open 3-way" },
+	{ "C", "continue" },
+	{ "A", "abort" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 
 ---@type GitflowConflictPanelState
 M.state = {
@@ -88,7 +97,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("conflict", {
 			filetype = "gitflowconflict",
-			lines = { "Loading conflicts..." },
+			lines = components.loading_lines("Loading conflicts…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -152,6 +161,39 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---Paint a single styled state block (loading / error) with shared chrome.
+---@param paint fun(B: GitflowRenderBuilder)
+local function render_state(paint)
+	local render_opts = { bufnr = M.state.bufnr, winid = M.state.winid }
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Conflicts", render_opts)
+	B:blank()
+	paint(B)
+	ui.buffer.update("conflict", B.lines)
+	M.state.line_entries = {}
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	B:apply(bufnr, CONFLICT_HIGHLIGHT_NS)
+end
+
+local function render_loading()
+	render_state(function(B)
+		components.loading(B, "Scanning for conflicts…")
+	end)
+end
+
+---@param message string
+local function render_error(message)
+	render_state(function(B)
+		components.error_state(B, "Could not list conflicts", {
+			detail = message,
+			hint = "Press r to retry · q to close",
+		})
+	end)
+end
+
 ---@param files GitflowConflictFileEntry[]
 ---@param operation GitflowConflictOperation|nil
 local function render(files, operation)
@@ -159,28 +201,73 @@ local function render(files, operation)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Conflicts", render_opts)
-	local header_line_count = #lines
-	lines[#lines + 1] = ("Active operation: %s"):format(operation_label(operation))
-	lines[#lines + 1] = ("Unresolved files: %d"):format(#files)
-	lines[#lines + 1] = ""
-	local line_entries = {}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Conflicts", render_opts)
 
+	-- Summary bar: active operation + unresolved count. When everything is
+	-- resolved the count flips to an "all resolved" affordance in the ok accent.
+	local op = operation_label(operation)
+	local resolved = #files == 0
+	B:push({
+		{ "  ", nil },
+		{ icons.get("ui", "merge") .. "  ", "GitflowSectionIcon" },
+		{ op ~= "none" and (op .. " in progress") or "No active operation",
+			"GitflowSectionTitle" },
+		{ "     ", nil },
+		{
+			resolved and (icons.get("git_state", "staged") .. " all resolved")
+				or ("%s %d unresolved"):format(
+					icons.get("git_state", "conflict"), #files
+				),
+			resolved and "GitflowReviewApproved" or "GitflowConflictRemote",
+		},
+	})
+	B:blank()
+
+	components.section(
+		B,
+		icons.get("git_state", "conflict"),
+		("Conflicted files (%d)"):format(#files)
+	)
+
+	local line_entries = {}
 	if #files == 0 then
-		lines[#lines + 1] = ui_render.empty()
+		if op ~= "none" then
+			components.empty(B, "All conflicts resolved", {
+				icon = icons.get("git_state", "staged"),
+				hint = ("Press C to continue the %s, or A to abort."):format(op),
+			})
+		else
+			components.empty(B, "No conflicts", {
+				icon = icons.get("git_state", "staged"),
+				hint = "Your working tree has no unmerged paths.",
+			})
+		end
 	else
 		for _, item in ipairs(files) do
-			local suffix = (" (%d hunks)"):format(item.hunk_count)
-			lines[#lines + 1] = ui_render.entry(("%s%s"):format(item.path, suffix))
-			line_entries[#lines] = item
+			local line_no = B:push({
+				{ " ", nil },
+				{ icons.get("git_state", "conflict") .. "  ", "GitflowConflictRemote" },
+				{ item.path, "GitflowCardTitle" },
+				{ ("   (%d hunk%s)"):format(
+					item.hunk_count, item.hunk_count == 1 and "" or "s"
+				), "GitflowMeta" },
+			})
+			line_entries[line_no] = item
 
 			if item.marker_error then
-				lines[#lines + 1] = ("    ! %s"):format(item.marker_error)
+				B:push({
+					{ "     ", nil },
+					{ icons.get("ui", "error") .. " ", "GitflowStateErrorIcon" },
+					{ item.marker_error, "GitflowStateError" },
+				})
 			end
 		end
 	end
 
-	ui.buffer.update("conflict", lines)
+	components.split_hint_bar(B, render_opts, CONFLICT_HINTS)
+
+	ui.buffer.update("conflict", B.lines)
 	M.state.files = files
 	M.state.line_entries = line_entries
 	M.state.active_operation = operation
@@ -189,26 +276,8 @@ local function render(files, operation)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	local entry_highlights = {}
-	entry_highlights[header_line_count + 1] = "GitflowHeader"
-	entry_highlights[header_line_count + 2] = "GitflowHeader"
-
-	-- File entry lines
-	for line_no, _ in pairs(line_entries) do
-		entry_highlights[line_no] = "GitflowConflictBase"
-	end
-
-	-- Error marker lines
-	for line_no, line in ipairs(lines) do
-		if vim.startswith(line, "    ! ") then
-			entry_highlights[line_no] = "GitflowConflictRemote"
-		end
-	end
-
-	ui_render.apply_panel_highlights(bufnr, CONFLICT_HIGHLIGHT_NS, lines, {
-		entry_highlights = entry_highlights,
-	})
+	B:apply(bufnr, CONFLICT_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowConflictFileEntry|nil
@@ -306,6 +375,7 @@ function M.open(cfg, opts)
 	M.state.cfg = cfg
 	M.state.pending_open_path = opts and opts.path or nil
 	ensure_window(cfg)
+	render_loading()
 	M.refresh()
 end
 
@@ -318,6 +388,7 @@ function M.refresh()
 		git_conflict.list({}, function(err, paths)
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				render_error(err)
 				return
 			end
 
