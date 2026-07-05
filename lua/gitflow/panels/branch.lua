@@ -22,7 +22,7 @@ local GRAPH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_graph_h
 local BRANCH_FLOAT_TITLE = "Gitflow Branches"
 local LIST_FOOTER =
 	" <CR> switch · c create · d delete · D force delete · m merge"
-	.. " · r rename · R refresh · f fetch · G graph · q close "
+	.. " · u update · r rename · R refresh · f fetch · G graph · q close "
 local GRAPH_FOOTER =
 	" R refresh · f fetch · G list · q close "
 
@@ -162,6 +162,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "m", function()
 		M.merge_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "u", function()
+		M.update_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "G", function()
@@ -918,6 +922,40 @@ function M.rename_under_cursor()
 			)
 			M.refresh()
 		end)
+	end)
+end
+
+function M.update_under_cursor()
+	local entry = entry_under_cursor()
+	if not entry then
+		if M.state.view_mode == "graph" then
+			utils.notify(
+				"Switch to list view (G) to update branches",
+				vim.log.levels.INFO
+			)
+		else
+			utils.notify("No branch selected", vim.log.levels.WARN)
+		end
+		return
+	end
+
+	utils.notify(
+		("Updating '%s'..."):format(entry.name),
+		vim.log.levels.INFO
+	)
+	git_branch.update(entry, {}, function(err, result)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(
+			result_message(
+				result,
+				("Updated '%s'"):format(entry.name)
+			),
+			vim.log.levels.INFO
+		)
+		M.refresh()
 	end)
 end
 
