@@ -364,6 +364,24 @@ function M.checkout(path, side, opts, cb)
 	end)
 end
 
+--- Recreate the original conflicted state of `path`, restoring the
+--- `<<<<<<<`/`=======`/`>>>>>>>` markers from the still-unmerged index
+--- stages (base/ours/theirs). Used to undo hand-edits or a wrong hunk
+--- choice mid-merge without aborting the whole operation.
+---@param path string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.recreate_conflict(path, opts, cb)
+	local normalized = normalize_path(path)
+	git.git({ "checkout", "--merge", "--", normalized }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, ("checkout --merge -- %s"):format(normalized)), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
 ---@param path string
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
@@ -567,7 +585,14 @@ local function run_known_operation_action(operation, action, opts, cb)
 		return
 	end
 
-	git.git(args or {}, opts, function(result)
+	-- `--continue` finalizes a commit and would launch $GIT_EDITOR; reuse
+	-- the prepared message non-interactively so it never blocks on `vi`.
+	local run_opts = opts
+	if action == "continue" then
+		run_opts = git.with_noninteractive_editor(opts)
+	end
+
+	git.git(args or {}, run_opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, table.concat(args or {}, " ")), operation, result)
 			return

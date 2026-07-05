@@ -26,7 +26,7 @@ local M = {}
 local CONFLICT_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_conflict_hl")
 local CONFLICT_FLOAT_TITLE = "Gitflow Conflicts"
 local CONFLICT_FLOAT_FOOTER =
-	"<CR> open 3-way  r refresh  C continue  A abort  q close"
+	"<CR> open resolver  r refresh  C continue  A abort  q close"
 
 ---@type GitflowConflictPanelState
 M.state = {

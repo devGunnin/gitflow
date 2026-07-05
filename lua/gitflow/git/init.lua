@@ -155,6 +155,27 @@ function M.run(cmd, opts, on_exit)
 	run_with_jobstart(normalized_cmd, run_opts, on_exit)
 end
 
+--- Return a copy of `opts` with a non-interactive editor configured.
+--- Commands that finalize a commit — `git <merge|rebase|cherry-pick>
+--- --continue`, `git commit`, … — otherwise launch $GIT_EDITOR (often
+--- `vi`) for the message and fail when no editor is installed or when
+--- running headless. Pointing the editor at the shell no-op `:` makes git
+--- reuse the prepared message (MERGE_MSG, the original commit message, …)
+--- non-interactively.
+---@param opts GitflowGitRunOpts|nil
+---@return GitflowGitRunOpts
+function M.with_noninteractive_editor(opts)
+	local run_opts = opts and vim.deepcopy(opts) or {}
+	run_opts.env = run_opts.env or {}
+	if run_opts.env.GIT_EDITOR == nil then
+		run_opts.env.GIT_EDITOR = ":"
+	end
+	if run_opts.env.GIT_SEQUENCE_EDITOR == nil then
+		run_opts.env.GIT_SEQUENCE_EDITOR = ":"
+	end
+	return run_opts
+end
+
 ---@param args string[]
 ---@param opts GitflowGitRunOpts|nil
 ---@param on_exit fun(result: GitflowGitResult)

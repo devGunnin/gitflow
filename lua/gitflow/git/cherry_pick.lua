@@ -152,7 +152,7 @@ function M.cherry_pick(sha, cb)
 		)
 	end
 
-	git.git({ "cherry-pick", sha }, {}, function(result)
+	git.git({ "cherry-pick", sha }, git.with_noninteractive_editor(nil), function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "cherry-pick"), result)
 			return

@@ -309,6 +309,9 @@ Review view ~
     left, the real working-tree file (with inline PR diff annotations) on
     the right.  Removed lines are shown as syntax-highlighted virt_lines;
     comments render as rounded note boxes beneath the line they target.
+    Files with review comments show a [n] badge in the tree (remote threads
+    from any author) plus a running total in the Files header; ]C / [C walk
+    through every comment in the PR.
 
     Files that belong to the PR are decorated with the inline diff overlay
     no matter how you open them inside the review tabpage — the file tree,
@@ -322,6 +325,8 @@ Review view ~
     zM      Fold all folders
     ]f      Jump to / open next file
     [f      Jump to / open previous file
+    ]C      Jump to next comment thread (any file)
+    [C      Jump to previous comment thread (any file)
     S       Submit pending review
     r       Refresh
     q       Close
@@ -332,6 +337,8 @@ Review view ~
             line has no comment, behaves like the native <CR> motion.
     ]c      Jump to next hunk
     [c      Jump to previous hunk
+    ]C      Jump to next comment thread (opens file, crosses files)
+    [C      Jump to previous comment thread
     c       Inline comment (normal and visual mode)
     S       Submit pending review (Comment / Request changes / Approve)
     R       Reply to comment thread on the current line
@@ -343,22 +350,26 @@ Review view ~
     q/<Esc> Close the popup
 
 Conflict list ~
-    <CR>    Open 3-way conflict view
+    <CR>    Open the conflict resolver for the file under the cursor
     r/R     Refresh conflict list
     C       Continue active merge/rebase/cherry-pick
     A       Abort active operation
     q       Close
 
-3-way merge view ~
-    1       Accept LOCAL version for current hunk
-    2       Accept BASE version for current hunk
-    3       Accept REMOTE version for current hunk
-    a       Resolve all hunks (prompts for side)
-    e       Enter manual edit mode for hunk
-    ]x      Jump to next conflict hunk
-    [x      Jump to previous conflict hunk
-    r       Refresh merged buffer
-    q       Close conflict view
+Merge conflict resolver ~
+    Resolution actions are c-prefixed so plain vim motions keep working.
+    co      Take OURS (current) for the hunk
+    ct      Take THEIRS (incoming) for the hunk
+    cb      Keep BOTH sides for the hunk
+    cB      Take BASE version for the hunk
+    ca      Resolve all hunks (prompts for side)
+    ce      Enter manual edit mode for hunk
+    cx      Reset the file to its original conflicted state (undo all
+            edits and hunk choices for this file)
+    cr      Refresh from disk
+    ]c      Jump to next conflict hunk
+    [c      Jump to previous conflict hunk
+    q       Save & close conflict view
 
 Label panel ~
     c       Create new label
