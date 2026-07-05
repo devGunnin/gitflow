@@ -77,6 +77,7 @@ local function build_default_groups(palette)
 		GitflowWorktreeCurrent = { link = "GitflowBranchCurrent" },
 		GitflowWorktreeLocked = { link = "WarningMsg" },
 		GitflowWorktreePrunable = { link = "Comment" },
+		GitflowWorktreeDirty = { link = "DiagnosticWarn" },
 		-- PR state
 		GitflowPROpen = { link = "DiagnosticOk" },
 		GitflowPRMerged = { link = "Special" },

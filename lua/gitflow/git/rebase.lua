@@ -5,6 +5,8 @@ local git = require("gitflow.git")
 ---@field sha string
 ---@field short_sha string
 ---@field subject string
+---@field author string
+---@field relative_time string
 
 local M = {}
 
@@ -26,13 +28,16 @@ end
 function M.parse_commits(output)
 	local entries = {}
 	for _, line in ipairs(vim.split(output, "\n", { trimempty = true })) do
-		local sha, subject = line:match("^([0-9a-fA-F]+)\t(.*)$")
+		local sha, author, rel_time, subject =
+			line:match("^([0-9a-fA-F]+)\t([^\t]*)\t([^\t]*)\t(.*)$")
 		if sha then
 			entries[#entries + 1] = {
 				action = "pick",
 				sha = sha,
 				short_sha = sha:sub(1, 7),
 				subject = subject,
+				author = author,
+				relative_time = rel_time,
 			}
 		end
 	end
@@ -49,7 +54,7 @@ function M.list_commits(base_ref, opts, cb)
 	local count = tonumber(options.count) or 50
 	local args = {
 		"log",
-		"--pretty=format:%H\t%s",
+		"--pretty=format:%H\t%an\t%ar\t%s",
 		"--reverse",
 	}
 	if count > 0 then
