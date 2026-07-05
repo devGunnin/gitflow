@@ -70,6 +70,23 @@ local function resolve_fallback(explicit_fallback)
 	return DEFAULT_SEPARATOR_WIDTH
 end
 
+---Whether the panel is rendered in a floating window (vs an inline split).
+---Floats carry their key hints in the window footer chrome, so panels show an
+---in-buffer hint bar only when this returns false.
+---@param opts table|nil  { winid?, bufnr? }
+---@return boolean
+function M.is_floating(opts)
+	local winid = resolve_window_id(opts)
+	if not winid then
+		return false
+	end
+	local ok, config = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(config) ~= "table" then
+		return false
+	end
+	return config.relative ~= nil and config.relative ~= ""
+end
+
 ---Resolve content width for a panel buffer/window.
 ---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
 ---@return integer

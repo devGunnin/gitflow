@@ -207,7 +207,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 				"conflict panel should show conflicted file.txt"
 			)
 			T.assert_true(
-				T.find_line(lines, "Unresolved files: 1") ~= nil,
+				T.find_line(lines, "1 unresolved") ~= nil,
 				"should show 1 unresolved file"
 			)
 		end)
@@ -236,9 +236,12 @@ T.run_suite("E2E: Conflict Resolution UI", {
 
 		local bufnr = ui.buffer.get("conflict")
 		local lines = T.buf_lines(bufnr)
+		-- With no active operation the summary bar shows the idle state; when a
+		-- merge/rebase/cherry-pick is in progress it shows "<op> in progress".
 		T.assert_true(
-			T.find_line(lines, "Active operation:") ~= nil,
-			"should show active operation line"
+			T.find_line(lines, "No active operation") ~= nil
+				or T.find_line(lines, "in progress") ~= nil,
+			"should show active operation context line"
 		)
 
 		T.cleanup_panels()
@@ -254,9 +257,11 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		local bufnr = ui.buffer.get("conflict")
 		T.assert_true(bufnr ~= nil, "conflict buffer should exist")
 		local lines = T.buf_lines(bufnr)
+		-- Empty state shows the resolved affordance instead of a raw count.
 		T.assert_true(
-			T.find_line(lines, "Unresolved files: 0") ~= nil,
-			"should show 0 unresolved files when no conflicts"
+			T.find_line(lines, "all resolved") ~= nil
+				or T.find_line(lines, "No conflicts") ~= nil,
+			"should show resolved/no-conflicts state when there are none"
 		)
 
 		T.cleanup_panels()

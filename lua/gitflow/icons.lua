@@ -50,6 +50,12 @@ local NF = {
 	merge = "\u{f43f}",            -- nf-oct-git_merge
 	dot = "\u{f444}",              -- nf-oct-dot_fill
 	chevron = "\u{f432}",          -- nf-oct-chevron_right
+	-- state feedback (loading / error / empty)
+	loading = "\u{f43a}",          -- nf-oct-clock (static "in progress" glyph)
+	error = "\u{f421}",            -- nf-oct-x_circle_fill
+	info = "\u{f449}",             -- nf-oct-info
+	empty = "\u{f487}",            -- nf-oct-inbox
+	keyboard = "\u{f40b}",         -- nf-oct-keyboard (hint blocks)
 }
 
 ---@type table<string, table<string, {nerd: string, ascii: string}>>
@@ -134,6 +140,11 @@ local registry = {
 		merge = { nerd = NF.merge, ascii = "" },
 		dot = { nerd = NF.dot, ascii = "\u{b7}" },
 		chevron = { nerd = NF.chevron, ascii = ">" },
+		loading = { nerd = NF.loading, ascii = "\u{2026}" },
+		error = { nerd = NF.error, ascii = "!" },
+		info = { nerd = NF.info, ascii = "i" },
+		empty = { nerd = NF.empty, ascii = "\u{2014}" },
+		keyboard = { nerd = NF.keyboard, ascii = "::" },
 	},
 }
 

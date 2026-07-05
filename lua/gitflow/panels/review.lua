@@ -15,6 +15,7 @@ local gh_prs = require("gitflow.gh.prs")
 local git_branch = require("gitflow.git.branch")
 local inline = require("gitflow.review.inline")
 local cache = require("gitflow.review.cache")
+local icons = require("gitflow.icons")
 
 ---@class GitflowPrReviewFile
 ---@field path string
@@ -94,6 +95,8 @@ M.state = {
 	file_list_bufnr = nil,
 	diff_winid = nil,
 	files = {},
+	files_loaded = false,
+	files_error = nil,
 	file_diffs = {},
 	comment_threads = {},
 	pending_comments = {},
@@ -623,11 +626,13 @@ local function render_file_list()
 	local lines = { (" PR REVIEW · #%s"):format(n), (" %s"):format(title) }
 	local header_lines = 2
 	if M.state.pr_author then
-		lines[#lines + 1] = ("  by @%s"):format(M.state.pr_author)
+		lines[#lines + 1] = ("  %s @%s"):format(
+			icons.get("ui", "author"), M.state.pr_author
+		)
 	end
 	if M.state.pr_head and M.state.pr_base then
-		lines[#lines + 1] = ("  %s ← %s"):format(
-			M.state.pr_base, M.state.pr_head
+		lines[#lines + 1] = ("  %s %s ← %s"):format(
+			icons.get("branch", "current"), M.state.pr_base, M.state.pr_head
 		)
 	end
 	if M.state.commit_scope and M.state.commit_scope.label then
@@ -685,7 +690,34 @@ local function render_file_list()
 
 	local file_lines_start = #lines + 1
 	if #M.state.files == 0 then
-		lines[#lines + 1] = "  (no files)"
+		if M.state.files_error then
+			lines[#lines + 1] =
+				("  %s  Could not load changed files"):format(icons.get("ui", "error"))
+			ctx.highlights[#ctx.highlights + 1] = {
+				line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowStateError",
+			}
+			for _, detail in ipairs(vim.split(M.state.files_error, "\n", { plain = true })) do
+				lines[#lines + 1] = "     " .. detail
+				ctx.highlights[#ctx.highlights + 1] = {
+					line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowStateErrorDetail",
+				}
+			end
+		elseif M.state.files_loaded then
+			lines[#lines + 1] = ("  %s  No changed files"):format(icons.get("ui", "empty"))
+			ctx.highlights[#ctx.highlights + 1] = {
+				line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowReviewHint",
+			}
+			lines[#lines + 1] = "     Nothing to review in this PR."
+			ctx.highlights[#ctx.highlights + 1] = {
+				line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowReviewHint",
+			}
+		else
+			lines[#lines + 1] =
+				("  %s  Loading changed files…"):format(icons.get("ui", "loading"))
+			ctx.highlights[#ctx.highlights + 1] = {
+				line = #lines - 1, col_start = 0, col_end = -1, hl = "GitflowLoadingText",
+			}
+		end
 	else
 		render_tree_node(build_file_tree(M.state.files), 0, "", ctx)
 	end
@@ -736,26 +768,71 @@ local function render_file_list()
 
 	lines[#lines + 1] = ""
 	lines[#lines + 1] = sep
-	local hints = {
-		" ~ mod  + add  - del  > ren",
-		" [n] threads  ●n drafts",
-		" <CR>/o open · <Tab> fold",
-		" zR/zM  unfold/fold all",
-		" c comment (file/line/del)",
-		" S submit · C scope commits",
-		" R reply · <leader>e edit",
-		" <leader>d toggle diff view",
-		" <leader>x delete comment",
-		" ]f/[f file · ]c/[c hunk",
-		" ]C/[C next/prev comment",
-		" on draft: <CR> jump · dd del",
-		" e edit draft/file · X off-diff",
-		" r refresh · q close",
-	}
-	local hint_start = #lines + 1
-	for _, h in ipairs(hints) do
-		lines[#lines + 1] = h
+
+	-- Grouped, styled key hints. Each group carries an accent label and every
+	-- key is highlighted distinctly from its description, so the legend reads as
+	-- scannable sections rather than a flat wall of identical grey text.
+	local hint_spans = {}
+	local function push_hint(text, spans)
+		lines[#lines + 1] = text
+		if spans and #spans > 0 then
+			hint_spans[#lines] = spans
+		end
 	end
+	local function hint_label(label)
+		push_hint(" " .. label, { { 1, 1 + #label, "GitflowHintGroupLabel" } })
+	end
+	local function hint_chunks_line(chunks)
+		local s, spans = join_chunks(chunks)
+		local conv = {}
+		for _, sp in ipairs(spans) do
+			conv[#conv + 1] = { sp.col_start, sp.col_end, sp.hl }
+		end
+		push_hint(s, conv)
+	end
+	local function hint_keys(pairs)
+		local chunks = { { "   ", nil } }
+		for i, p in ipairs(pairs) do
+			if i > 1 then
+				chunks[#chunks + 1] = { "   ", "GitflowReviewHint" }
+			end
+			chunks[#chunks + 1] = { p[1], "GitflowHintKey" }
+			chunks[#chunks + 1] = { " " .. p[2], "GitflowReviewHint" }
+		end
+		hint_chunks_line(chunks)
+	end
+
+	hint_label("LEGEND")
+	hint_chunks_line({
+		{ "   ", nil },
+		{ "~", "GitflowModified" }, { " mod  ", "GitflowReviewHint" },
+		{ "+", "GitflowAdded" }, { " add  ", "GitflowReviewHint" },
+		{ "-", "GitflowRemoved" }, { " del  ", "GitflowReviewHint" },
+		{ ">", "GitflowChip" }, { " ren", "GitflowReviewHint" },
+	})
+	hint_chunks_line({
+		{ "   ", nil },
+		{ "[n]", "GitflowReviewCountAdd" }, { " threads   ", "GitflowReviewHint" },
+		{ "●n", "GitflowReviewDraftBox" }, { " drafts", "GitflowReviewHint" },
+	})
+
+	hint_label("NAVIGATE")
+	hint_keys({ { "<CR>/o", "open" }, { "<Tab>", "fold" } })
+	hint_keys({ { "zR/zM", "unfold/fold all" } })
+	hint_keys({ { "]f/[f", "file" }, { "]c/[c", "hunk" } })
+
+	hint_label("REVIEW")
+	hint_keys({ { "c", "comment" }, { "R", "reply" } })
+	hint_keys({ { "S", "submit" }, { "C", "scope" } })
+	hint_keys({ { "<leader>e", "edit" }, { "<leader>x", "delete" } })
+	hint_keys({ { "<leader>d", "toggle diff view" } })
+
+	hint_label("DRAFTS")
+	hint_keys({ { "<CR>", "jump" }, { "dd", "delete" } })
+	hint_keys({ { "e", "edit/file" }, { "X", "off-diff" } })
+
+	lines[#lines + 1] = ""
+	hint_keys({ { "r", "refresh" }, { "q", "close" } })
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -779,9 +856,11 @@ local function render_file_list()
 	for _, sp in ipairs(ctx.highlights) do
 		hl(sp.line, sp.col_start, sp.col_end, sp.hl)
 	end
-	-- Footer hints.
-	for i = 0, #hints - 1 do
-		hl(hint_start - 1 + i, 0, -1, "GitflowReviewHint")
+	-- Footer hints (grouped labels + per-key styling).
+	for line1, spans in pairs(hint_spans) do
+		for _, sp in ipairs(spans) do
+			hl(line1 - 1, sp[1], sp[2], sp[3])
+		end
 	end
 	-- Drafts section spans.
 	for line1, group in pairs(draft_hl) do
@@ -1430,6 +1509,7 @@ local function pull_pr_metadata(view)
 		end
 		if #files > 0 then
 			M.state.files = files
+			M.state.files_loaded = true
 		end
 	end
 end
@@ -1493,6 +1573,7 @@ local function ingest_pr_files(files_data)
 	end
 
 	M.state.files = files
+	M.state.files_loaded = true
 	M.state.file_diffs = file_diffs
 	M.state.file_markers = file_markers
 	M.state.hunk_markers = hunk_markers
@@ -1603,6 +1684,7 @@ local function build_commit_scope_diffs(base, head, cb)
 			end
 			table.sort(files, function(a, b) return a.path < b.path end)
 			M.state.files = files
+			M.state.files_loaded = true
 			M.state.file_diffs = file_diffs
 			cb(nil)
 		end
@@ -1615,6 +1697,7 @@ function M.refresh()
 	end
 	local number = M.state.pr_number
 
+	M.state.files_error = nil
 	M.state.pr_title = M.state.pr_title or "(loading)"
 	render_file_list()
 
@@ -1658,6 +1741,8 @@ function M.refresh()
 			local s = M.state.commit_scope
 			build_commit_scope_diffs(s.base, s.head, function(derr)
 				if derr then
+					M.state.files_loaded = true
+					M.state.files_error = derr
 					notify_error(derr)
 				end
 				load_comments_and_finish()
@@ -1667,6 +1752,8 @@ function M.refresh()
 
 		gh_prs.list_files(number, {}, function(files_err, files_data)
 			if files_err then
+				M.state.files_loaded = true
+				M.state.files_error = files_err
 				notify_error(
 					"Could not load PR files list: " .. files_err
 				)
@@ -1835,6 +1922,8 @@ function M.open(cfg, pr_number)
 	M.state.pr_head_sha = nil
 	M.state.pr_base = nil
 	M.state.files = {}
+	M.state.files_loaded = false
+	M.state.files_error = nil
 	M.state.file_diffs = {}
 	M.state.comment_threads = {}
 	M.state.pending_comments = {}
@@ -1923,6 +2012,8 @@ function M.close()
 	M.state.file_list_bufnr = nil
 	M.state.diff_winid = nil
 	M.state.files = {}
+	M.state.files_loaded = false
+	M.state.files_error = nil
 	M.state.file_diffs = {}
 	M.state.comment_threads = {}
 	M.state.pending_comments = {}

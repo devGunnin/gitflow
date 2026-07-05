@@ -77,6 +77,7 @@ local function build_default_groups(palette)
 		GitflowWorktreeCurrent = { link = "GitflowBranchCurrent" },
 		GitflowWorktreeLocked = { link = "WarningMsg" },
 		GitflowWorktreePrunable = { link = "Comment" },
+		GitflowWorktreeDirty = { link = "DiagnosticWarn" },
 		-- PR state
 		GitflowPROpen = { link = "DiagnosticOk" },
 		GitflowPRMerged = { link = "Special" },
@@ -206,6 +207,21 @@ local function build_default_groups(palette)
 		GitflowFormPlaceholder = { fg = palette.separator_fg, italic = true },
 		GitflowFormSection = { fg = palette.accent_secondary, bold = true },
 		GitflowFormHint = { link = "Comment" },
+		-- Shared state feedback — loading / error / empty placeholders so every
+		-- surface shows the same cohesive language instead of plain text. The
+		-- error/spinner accents link to standard semantic groups so they follow
+		-- the user's colorscheme.
+		GitflowLoadingIcon = { fg = palette.accent_primary, bold = true },
+		GitflowLoadingText = { link = "Comment" },
+		GitflowStateError = { link = "DiagnosticError" },
+		GitflowStateErrorIcon = { link = "DiagnosticError" },
+		GitflowStateErrorDetail = { link = "Comment" },
+		GitflowEmptyIcon = { fg = palette.separator_fg },
+		GitflowEmptyText = { link = "Comment" },
+		GitflowEmptyHint = { link = "Comment" },
+		-- Grouped key-hint blocks (review panel and other dense surfaces): a dim
+		-- group label sits above its hints, matching the form-section accent.
+		GitflowHintGroupLabel = { fg = palette.accent_secondary, bold = true },
 	}
 end
 
