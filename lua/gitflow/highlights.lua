@@ -64,6 +64,12 @@ local function build_default_groups(palette)
 		GitflowConflictBase = { link = "DiffChange" },
 		GitflowConflictRemote = { link = "DiffDelete" },
 		GitflowConflictResolved = { link = "DiffText" },
+		-- Single-pane inline conflict resolver
+		GitflowConflictOurs = { link = "DiffAdd" },
+		GitflowConflictTheirs = { link = "DiffText" },
+		GitflowConflictMarker = { fg = palette.separator_fg, bold = true, italic = true },
+		GitflowConflictOursLabel = { fg = palette.accent_primary, bold = true },
+		GitflowConflictTheirsLabel = { fg = palette.stash_ref, bold = true },
 		-- Branch
 		GitflowBranchCurrent = { link = "Title" },
 		GitflowBranchRemote = { link = "Comment" },
@@ -71,6 +77,7 @@ local function build_default_groups(palette)
 		GitflowWorktreeCurrent = { link = "GitflowBranchCurrent" },
 		GitflowWorktreeLocked = { link = "WarningMsg" },
 		GitflowWorktreePrunable = { link = "Comment" },
+		GitflowWorktreeDirty = { link = "DiagnosticWarn" },
 		-- PR state
 		GitflowPROpen = { link = "DiagnosticOk" },
 		GitflowPRMerged = { link = "Special" },
@@ -174,6 +181,47 @@ local function build_default_groups(palette)
 		GitflowGraphBranch6 = { fg = "#C678DD" },
 		GitflowGraphBranch7 = { fg = "#E5C07B" },
 		GitflowGraphBranch8 = { fg = "#7F848E" },
+		-- UI/UX overhaul — cards, chips, sections, hint bars, pickers, forms
+		GitflowNumber = { fg = palette.accent_secondary, bold = true },
+		GitflowMeta = { link = "Comment" },
+		GitflowMetaKey = { fg = palette.separator_fg },
+		GitflowCardTitle = { link = "Normal" },
+		GitflowCardTitleDim = { link = "Comment" },
+		GitflowRelTime = { link = "Comment" },
+		GitflowAuthor = { fg = palette.accent_primary },
+		GitflowChip = { fg = palette.accent_primary },
+		GitflowCount = { fg = palette.accent_secondary },
+		GitflowSectionIcon = { fg = palette.accent_primary, bold = true },
+		GitflowSectionTitle = { fg = palette.accent_primary, bold = true },
+		GitflowDetailTitle = { fg = palette.accent_primary, bold = true },
+		GitflowHintKey = { fg = palette.accent_secondary, bold = true },
+		GitflowHintText = { link = "Comment" },
+		GitflowHintSep = { fg = palette.separator_fg },
+		GitflowPickerPrompt = { fg = palette.accent_primary, bold = true },
+		GitflowPickerPromptIcon = { fg = palette.accent_secondary, bold = true },
+		GitflowPickerMatch = { fg = palette.accent_secondary, bold = true },
+		GitflowPickerCheck = { link = "DiagnosticOk" },
+		GitflowPickerCheckOff = { fg = palette.separator_fg },
+		GitflowPickerCount = { link = "Comment" },
+		GitflowFormHeader = { fg = palette.accent_primary, bold = true },
+		GitflowFormPlaceholder = { fg = palette.separator_fg, italic = true },
+		GitflowFormSection = { fg = palette.accent_secondary, bold = true },
+		GitflowFormHint = { link = "Comment" },
+		-- Shared state feedback — loading / error / empty placeholders so every
+		-- surface shows the same cohesive language instead of plain text. The
+		-- error/spinner accents link to standard semantic groups so they follow
+		-- the user's colorscheme.
+		GitflowLoadingIcon = { fg = palette.accent_primary, bold = true },
+		GitflowLoadingText = { link = "Comment" },
+		GitflowStateError = { link = "DiagnosticError" },
+		GitflowStateErrorIcon = { link = "DiagnosticError" },
+		GitflowStateErrorDetail = { link = "Comment" },
+		GitflowEmptyIcon = { fg = palette.separator_fg },
+		GitflowEmptyText = { link = "Comment" },
+		GitflowEmptyHint = { link = "Comment" },
+		-- Grouped key-hint blocks (review panel and other dense surfaces): a dim
+		-- group label sits above its hints, matching the form-section accent.
+		GitflowHintGroupLabel = { fg = palette.accent_secondary, bold = true },
 	}
 end
 

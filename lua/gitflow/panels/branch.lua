@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 
 ---@class GitflowBranchPanelState
 ---@field bufnr integer|nil
@@ -20,10 +21,10 @@ local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
 local GRAPH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_graph_hl")
 local BRANCH_FLOAT_TITLE = "Gitflow Branches"
 local LIST_FOOTER =
-	"<CR> switch  c create  d delete  D force delete  m merge"
-	.. "  r rename  R refresh  f fetch  G graph  q close"
+	" <CR> switch · c create · d delete · D force delete · m merge"
+	.. " · r rename · R refresh · f fetch · G graph · q close "
 local GRAPH_FOOTER =
-	"R refresh  f fetch  G list  q close"
+	" R refresh · f fetch · G list · q close "
 
 ---@type GitflowBranchPanelState
 M.state = {
@@ -172,38 +173,52 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---Push a list section (Local / Remote) into the builder.
+---The header line MUST equal the bare title ("Local"/"Remote") because tests
+---assert it via an exact `line == "Local"` match, so the icon/count live on the
+---summary bar instead and the title gets only a styled underline beneath it.
+---@param B GitflowRenderBuilder
 ---@param title string
 ---@param entries GitflowBranchEntry[]
----@param lines string[]
 ---@param line_entries table<integer, GitflowBranchEntry>
----@param render_opts table
-local function append_section(title, entries, lines, line_entries, render_opts)
-	local section_title, section_separator = ui_render.section(title, nil, render_opts)
-	lines[#lines + 1] = section_title
-	lines[#lines + 1] = section_separator
+local function append_section(B, title, entries, line_entries)
+	B:push({ { title, "GitflowSectionTitle" } })
+	B:raw(
+		" " .. string.rep("-", math.max(8, #title + 4)),
+		"GitflowSeparator"
+	)
+
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty()
-		lines[#lines + 1] = ""
+		components.empty(B, "(none)")
+		B:blank()
 		return
 	end
 
 	for _, entry in ipairs(entries) do
-		local marker
+		local icon, group
 		if entry.is_current then
-			marker = icons.get("branch", "current")
+			icon = icons.get("branch", "current")
+			group = "GitflowBranchCurrent"
 		elseif entry.is_remote then
-			marker = icons.get("branch", "remote")
+			icon = icons.get("branch", "remote")
+			group = "GitflowBranchRemote"
 		else
-			marker = icons.get("branch", "local_branch")
+			icon = icons.get("branch", "local_branch")
+			group = "GitflowCardTitle"
 		end
-		local current_text = entry.is_current and " (current)" or ""
-		local line = ui_render.entry(
-			("%s %s%s"):format(marker, entry.name, current_text)
-		)
-		lines[#lines + 1] = line
-		line_entries[#lines] = entry
+
+		local chunks = {
+			{ "  ", nil },
+			{ icon ~= "" and (icon .. "  ") or "", group },
+			{ entry.name, group },
+		}
+		if entry.is_current then
+			chunks[#chunks + 1] = { " (current)", "GitflowMeta" }
+		end
+		local line_no = B:push(chunks)
+		line_entries[line_no] = entry
 	end
-	lines[#lines + 1] = ""
+	B:blank()
 end
 
 ---@param entries GitflowBranchEntry[]
@@ -213,13 +228,34 @@ local function render_list(entries)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Branches", render_opts)
+
+	local current_name
+	for _, entry in ipairs(entries) do
+		if entry.is_current then
+			current_name = entry.name
+			break
+		end
+	end
+
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Branches", render_opts)
+
+	-- Summary bar: branch icon + current branch + local/remote counts.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
+		{ current_name or "(detached)", "GitflowSectionTitle" },
+		{ ("     %d local"):format(#local_entries), "GitflowMeta" },
+		{ "  \u{b7}  ", "GitflowMeta" },
+		{ ("%d remote"):format(#remote_entries), "GitflowMeta" },
+	})
+	B:blank()
+
 	local line_entries = {}
+	append_section(B, "Local", local_entries, line_entries)
+	append_section(B, "Remote", remote_entries, line_entries)
 
-	append_section("Local", local_entries, lines, line_entries, render_opts)
-	append_section("Remote", remote_entries, lines, line_entries, render_opts)
-
-	ui.buffer.update("branch", lines)
+	ui.buffer.update("branch", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
@@ -227,26 +263,8 @@ local function render_list(entries)
 		return
 	end
 	clear_graph_highlights(bufnr)
-
-	local entry_highlights = {}
-
-	for line_no, line in ipairs(lines) do
-		if line == "Local" or line == "Remote" then
-			entry_highlights[line_no] = "GitflowHeader"
-		end
-	end
-
-	for line_no, entry in pairs(line_entries) do
-		if entry.is_current then
-			entry_highlights[line_no] = "GitflowBranchCurrent"
-		elseif entry.is_remote then
-			entry_highlights[line_no] = "GitflowBranchRemote"
-		end
-	end
-
-	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {
-		entry_highlights = entry_highlights,
-	})
+	B:apply(bufnr, BRANCH_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 -- ── Graph rendering ──────────────────────────────────────────────────

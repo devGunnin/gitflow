@@ -91,6 +91,7 @@ Default keybindings:
     Action          Default             Plug Mapping ~
     help            <leader>gh          <Plug>(GitflowHelp)
     open            <leader>go          <Plug>(GitflowOpen)
+    refresh         gr                  <Plug>(GitflowRefresh)
     close           <leader>gq          <Plug>(GitflowClose)
     status          gs                  <Plug>(GitflowStatus)
     commit          gc                  <Plug>(GitflowCommit)
@@ -479,6 +480,17 @@ Link-based groups (track your colorscheme automatically):
     GitflowPaletteNormal            NormalFloat
     GitflowResetMergeBase           WarningMsg
     GitflowFormActiveField          CursorLine
+    GitflowLoadingText              Comment
+    GitflowStateError               DiagnosticError
+    GitflowStateErrorIcon           DiagnosticError
+    GitflowStateErrorDetail         Comment
+    GitflowEmptyText                Comment
+    GitflowEmptyHint                Comment
+
+These shared state groups give every panel a cohesive loading / error / empty
+affordance: `GitflowLoadingText` styles in-progress labels, the
+`GitflowStateError*` family styles in-buffer error blocks, and the
+`GitflowEmpty*` family styles empty-state placeholders and their action hints.
 
 Accent-colored groups (dark-background defaults shown below; light mode uses
 `PALETTE_LIGHT` values from the table above):
@@ -499,6 +511,9 @@ Accent-colored groups (dark-background defaults shown below; light mode uses
     GitflowPaletteHeaderIcon    fg=#56B6C2, bg=#DCA561, bold
     GitflowPaletteEntryIcon     fg=#56B6C2
     GitflowPaletteBackdrop      bg=#000000
+    GitflowLoadingIcon          fg=#56B6C2, bold
+    GitflowEmptyIcon            fg=#3E4452
+    GitflowHintGroupLabel       fg=#DCA561, bold
 
 To make these groups track your colorscheme instead of using hardcoded
 colors, override them with link-based definitions: >lua

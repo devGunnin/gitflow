@@ -1,6 +1,25 @@
 local gh = require("gitflow.gh")
+local git = require("gitflow.git")
+local utils = require("gitflow.utils")
 
 local M = {}
+
+--- Heuristic: does this failed `gh pr create` look like the local branch
+--- simply hasn't been pushed to a remote yet? If so we can push and retry
+--- instead of surfacing a confusing error.
+---@param result GitflowGitResult
+---@return boolean
+local function pr_create_needs_push(result)
+	local text = (
+		tostring(result.stderr or "") .. " " .. tostring(result.stdout or "")
+	):lower()
+	return text:find("must first push", 1, true) ~= nil
+		or text:find("push the current branch", 1, true) ~= nil
+		or text:find("no git remote", 1, true) ~= nil
+		or text:find("no commits between", 1, true) ~= nil
+		or text:find("head branch", 1, true) ~= nil
+			and text:find("not found", 1, true) ~= nil
+end
 
 local PR_LIST_FIELDS = table.concat({
 	"number",
@@ -358,16 +377,44 @@ function M.create(input, opts, cb)
 		args[#args + 1] = label_csv
 	end
 
-	gh.run(args, opts, function(result)
-		if result.code ~= 0 then
-			cb(error_from_result(result, "create"), nil, result)
-			return
-		end
-
+	local function succeed(result)
 		cb(nil, {
 			url = vim.trim(result.stdout or ""),
 			output = gh.output(result),
 		}, result)
+	end
+
+	gh.run(args, opts, function(result)
+		if result.code == 0 then
+			succeed(result)
+			return
+		end
+
+		-- Smooth over the most common failure: the branch isn't on the remote
+		-- yet. Push it (set upstream) and retry once before giving up.
+		if pr_create_needs_push(result) then
+			utils.notify(
+				"Branch not pushed — pushing to origin and retrying…",
+				vim.log.levels.INFO
+			)
+			git.git({ "push", "-u", "origin", "HEAD" }, opts or {}, function(push_result)
+				if (push_result.code or 1) ~= 0 then
+					-- Surface the original PR-create error, plus the push failure.
+					cb(error_from_result(result, "create"), nil, result)
+					return
+				end
+				gh.run(args, opts, function(retry)
+					if retry.code ~= 0 then
+						cb(error_from_result(retry, "create"), nil, retry)
+						return
+					end
+					succeed(retry)
+				end)
+			end)
+			return
+		end
+
+		cb(error_from_result(result, "create"), nil, result)
 	end)
 end
 

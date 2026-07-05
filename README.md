@@ -54,6 +54,7 @@ require("gitflow").setup({
   keybindings = {
     help       = "<leader>gh",
     open       = "<leader>go",
+    refresh    = "gr",
     close      = "<leader>gq",
     status     = "gs",
     commit     = "gc",
@@ -251,7 +252,7 @@ instructions.
 | `<leader>gP` | Push |
 | `<leader>gp` | Pull |
 | `<leader>gf` | Fetch |
-| `gd` | Diff |
+| `gD` | Diff |
 | `gl` | Log |
 | `gS` | Stash list |
 | `gZ` | Stash push |

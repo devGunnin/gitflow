@@ -3,6 +3,8 @@ local utils = require("gitflow.utils")
 local gh_actions = require("gitflow.gh.actions")
 local git_branch = require("gitflow.git.branch")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
+local icons = require("gitflow.icons")
 
 ---@class GitflowActionsPanelState
 ---@field bufnr integer|nil
@@ -15,9 +17,9 @@ local ui_render = require("gitflow.ui.render")
 ---@field post_operation_augroup integer|nil
 
 local M = {}
-local ACTIONS_FLOAT_TITLE = "Gitflow Actions"
-local ACTIONS_LIST_FOOTER = "<CR> detail  o open in browser  r refresh  q close"
-local ACTIONS_DETAIL_FOOTER = "<BS> back  o open in browser  r refresh  q close"
+local ACTIONS_FLOAT_TITLE = "  Gitflow Actions  "
+local ACTIONS_LIST_FOOTER = " <CR> detail · o open · r refresh · q close "
+local ACTIONS_DETAIL_FOOTER = " <BS> back · o open · r refresh · q close "
 local ACTIONS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_actions_hl")
 
 ---@type GitflowActionsPanelState
@@ -197,65 +199,24 @@ end
 
 ---@param run GitflowActionRun
 ---@return string
-local function format_run_line(run)
-	local icon = gh_actions.status_icon(run)
+local function run_title(run)
 	local name = run.display_title
-	if name == "" then
+	if name == nil or name == "" then
 		name = run.name
 	end
-	return ("%s %s  %s  %s"):format(icon, name, run.branch, run.event)
+	return name or ""
 end
 
----@param job GitflowActionJob
----@return string
-local function format_job_line(job)
-	local icon = "?"
-	local conclusion = job.conclusion
-	if conclusion == "success" then
-		icon = "✓"
-	elseif conclusion == "failure" then
-		icon = "✗"
-	elseif conclusion == "cancelled" or conclusion == "skipped" then
-		icon = "⊘"
-	elseif job.status == "in_progress" or job.status == "queued"
-		or job.status == "waiting" then
-		icon = "●"
+---Push a duration range chunk (dim) when both endpoints are present.
+---@param B GitflowRenderBuilder
+---@param chunks table[]
+---@param started_at string|nil
+---@param completed_at string|nil
+local function append_duration_chunk(chunks, started_at, completed_at)
+	local range = format_duration_range(started_at or "", completed_at or "")
+	if range ~= "" then
+		chunks[#chunks + 1] = { range, "GitflowMeta" }
 	end
-
-	local duration = format_duration_range(job.started_at, job.completed_at)
-	return ("  %s %s%s"):format(icon, job.name, duration)
-end
-
----@param step GitflowActionStep
----@return string
-local function format_step_line(step)
-	local icon = "?"
-	local conclusion = step.conclusion
-	if conclusion == "success" then
-		icon = "✓"
-	elseif conclusion == "failure" then
-		icon = "✗"
-	elseif conclusion == "cancelled" or conclusion == "skipped" then
-		icon = "⊘"
-	elseif step.status == "in_progress" or step.status == "queued"
-		or step.status == "waiting" then
-		icon = "●"
-	end
-	local duration = format_duration_range(
-		step.started_at or "",
-		step.completed_at or ""
-	)
-	return ("    %s %d. %s%s"):format(icon, step.number, step.name, duration)
-end
-
----@param step GitflowActionStep
----@return string|nil
-local function format_step_snippet_line(step)
-	local snippet = vim.trim(step.log_snippet or "")
-	if snippet == "" then
-		return nil
-	end
-	return ("      log: %s"):format(snippet)
 end
 
 ---@param runs GitflowActionRun[]
@@ -266,50 +227,67 @@ local function render_list(runs, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Actions", render_opts)
-	local line_entries = {}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Actions", render_opts)
 
+	-- Summary bar: run count + current branch context.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("palette", "actions") .. "  ", "GitflowSectionIcon" },
+		{ ("%d run%s"):format(#runs, #runs == 1 and "" or "s"), "GitflowSectionTitle" },
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
+	local line_entries = {}
 	if #runs == 0 then
-		lines[#lines + 1] = ui_render.empty("no workflow runs found")
+		components.empty(B, "no workflow runs found")
 	else
+		local width = ui_render.content_width(render_opts)
 		for _, run in ipairs(runs) do
-			lines[#lines + 1] = ui_render.entry(format_run_line(run))
-			line_entries[#lines] = run
+			local icon = gh_actions.status_icon(run)
+			local status_hl = gh_actions.status_highlight(run)
+			local name = run_title(run)
+			local time = ui_render.relative_time(run.created_at)
+			local left = " " .. icon .. "  "
+			local left_w = vim.fn.strdisplaywidth(left)
+			local time_w = vim.fn.strdisplaywidth(time)
+			local name_max = math.max(8, width - left_w - time_w - 2)
+			name = ui_render.truncate(name, name_max)
+			local gap = math.max(
+				2, width - left_w - vim.fn.strdisplaywidth(name) - time_w
+			)
+			local title_line = B:push({
+				{ " ", nil },
+				{ icon .. "  ", status_hl },
+				{ name, "GitflowCardTitle" },
+				{ string.rep(" ", gap), nil },
+				{ time, "GitflowRelTime" },
+			})
+			line_entries[title_line] = run
+
+			local meta_line = B:push({
+				{ "     ", nil },
+				{ icons.get("branch", "current") .. " ", "GitflowMeta" },
+				{ run.branch ~= "" and run.branch or "\u{2014}", "GitflowChip" },
+				{ "    " .. icons.get("ui", "dot") .. " ", "GitflowMeta" },
+				{ run.event ~= "" and run.event or "\u{2014}", "GitflowMeta" },
+			})
+			line_entries[meta_line] = run
+			B:blank()
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("actions", lines)
+	ui.buffer.update("actions", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(bufnr, ACTIONS_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-	})
-
-	for line_no, run in pairs(line_entries) do
-		local hl_group = gh_actions.status_highlight(run)
-		local line_text = lines[line_no] or ""
-		local icon = gh_actions.status_icon(run)
-		local icon_start = line_text:find(icon, 1, true)
-		if icon_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr, ACTIONS_HIGHLIGHT_NS, hl_group,
-				line_no - 1, icon_start - 1,
-				icon_start - 1 + #icon
-			)
-		end
-	end
+	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@param run GitflowActionRun
@@ -319,63 +297,102 @@ local function render_detail(run)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local title = ("Gitflow Actions — %s"):format(run.display_title)
-	local lines = ui_render.panel_header(title, render_opts)
+	local title = run_title(run)
+	local B = ui_render.builder()
+	components.header(B, ("Gitflow Actions — %s"):format(title), render_opts)
+	B:blank()
 
+	-- Summary bar: title + colored status.
 	local icon = gh_actions.status_icon(run)
-	lines[#lines + 1] = ui_render.entry(
-		("%s %s"):format(icon, run.conclusion ~= "" and run.conclusion or run.status)
-	)
-	lines[#lines + 1] = ui_render.entry(("  Branch: %s"):format(run.branch))
-	lines[#lines + 1] = ui_render.entry(("  Event:  %s"):format(run.event))
-	lines[#lines + 1] = ui_render.entry(
-		("  Started: %s"):format(run.created_at)
-	)
-	lines[#lines + 1] = ""
+	local status_hl = gh_actions.status_highlight(run)
+	local status_text = run.conclusion ~= "" and run.conclusion or run.status
+	if status_text == "" then
+		status_text = "unknown"
+	end
+	B:push({
+		{ "  ", nil },
+		{ icons.get("palette", "actions") .. "  ", "GitflowSectionIcon" },
+		{ title ~= "" and title or "(run)", "GitflowSectionTitle" },
+		{ "     ", nil },
+		{ icon .. " ", status_hl },
+		{ status_text, status_hl },
+	})
+	B:blank()
+
+	components.meta_row(B, "Branch:", {
+		{ components.maybe_text(run.branch), "GitflowChip" },
+	})
+	components.meta_row(B, "Event:", {
+		{ components.maybe_text(run.event), "GitflowMeta" },
+	})
+	components.meta_row(B, "Started:", {
+		{ components.maybe_text(run.created_at), "GitflowRelTime" },
+	})
+	B:blank()
 
 	local jobs = run.jobs or {}
+	components.section(
+		B,
+		icons.get("palette", "actions"),
+		("Jobs (%d)"):format(#jobs)
+	)
 	if #jobs == 0 then
-		lines[#lines + 1] = ui_render.empty("no job details available")
+		components.empty(B, "no job details available")
 	else
 		for _, job in ipairs(jobs) do
-			lines[#lines + 1] = format_job_line(job)
+			local job_chunks = {
+				{ " ", nil },
+				{ gh_actions.status_icon(job) .. "  ", gh_actions.status_highlight(job) },
+				{ job.name, "GitflowCardTitle" },
+			}
+			append_duration_chunk(job_chunks, job.started_at, job.completed_at)
+			B:push(job_chunks)
+
 			local has_step_snippet = false
 			for _, step in ipairs(job.steps or {}) do
-				lines[#lines + 1] = format_step_line(step)
-				local snippet_line = format_step_snippet_line(step)
-				if snippet_line then
+				local step_chunks = {
+					{ "    ", nil },
+					{ gh_actions.status_icon(step) .. " ", gh_actions.status_highlight(step) },
+					{ ("%d. "):format(step.number), "GitflowNumber" },
+					{ step.name, "GitflowMeta" },
+				}
+				append_duration_chunk(step_chunks, step.started_at, step.completed_at)
+				B:push(step_chunks)
+
+				local snippet = vim.trim(step.log_snippet or "")
+				if snippet ~= "" then
 					has_step_snippet = true
-					lines[#lines + 1] = snippet_line
+					B:push({
+						{ "      ", nil },
+						{ "log: ", "GitflowMetaKey" },
+						{ snippet, "GitflowMeta" },
+					})
 				end
 			end
+
 			if not has_step_snippet then
 				local job_snippet = vim.trim(job.log_snippet or "")
 				if job_snippet ~= "" then
-					lines[#lines + 1] = ("    log: %s"):format(job_snippet)
+					B:push({
+						{ "    ", nil },
+						{ "log: ", "GitflowMetaKey" },
+						{ job_snippet, "GitflowMeta" },
+					})
 				end
 			end
-			lines[#lines + 1] = ""
+			B:blank()
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		run.branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("actions", lines)
+	ui.buffer.update("actions", B.lines)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(bufnr, ACTIONS_HIGHLIGHT_NS, lines, {
-		footer_line = #lines,
-	})
+	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowActionRun|nil

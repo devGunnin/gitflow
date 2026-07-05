@@ -6,6 +6,7 @@ local git_branch = require("gitflow.git.branch")
 local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local status_panel = require("gitflow.panels.status")
 
 ---@class GitflowRevertPanelState
@@ -16,9 +17,9 @@ local status_panel = require("gitflow.panels.status")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local REVERT_FLOAT_TITLE = "Gitflow Revert"
+local REVERT_FLOAT_TITLE = "  Gitflow Revert  "
 local REVERT_FLOAT_FOOTER =
-	"<CR> revert  1-9 by position  r refresh  q close"
+	" <CR> revert · 1-9 by position · r refresh · q close "
 local REVERT_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_revert_hl")
 
@@ -122,55 +123,63 @@ local function render(entries, merge_base_sha, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Revert", render_opts
-	)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Revert", render_opts)
+
+	-- Commit-count + branch summary bar.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
+		{
+			("%d commit%s"):format(#entries, #entries == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
 	local line_entries = {}
-	local entry_highlights = {}
+
+	components.section(
+		B, icons.get("git_state", "commit"), ("Commits (%d)"):format(#entries)
+	)
 
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no commits found")
+		components.empty(B, "no commits found")
 	else
 		for idx, entry in ipairs(entries) do
-			local commit_icon = icons.get("git_state", "commit")
 			local position_marker = ""
 			if idx <= 9 then
 				position_marker = ("[%d] "):format(idx)
 			end
-			lines[#lines + 1] = ui_render.entry(
-				("%s%s %s %s"):format(
-					position_marker,
-					commit_icon,
-					entry.short_sha,
-					entry.summary
-				)
-			)
-			line_entries[#lines] = entry
 
-			if merge_base_sha
-				and entry.sha:sub(1, #merge_base_sha)
-					== merge_base_sha
-			then
-				entry_highlights[#lines] =
-					"GitflowRevertMergeBase"
-			elseif merge_base_sha
-				and merge_base_sha:sub(1, #entry.sha)
-					== entry.sha
-			then
-				entry_highlights[#lines] =
-					"GitflowRevertMergeBase"
+			local is_merge_base = merge_base_sha ~= nil
+				and (
+					entry.sha:sub(1, #merge_base_sha) == merge_base_sha
+					or merge_base_sha:sub(1, #entry.sha) == entry.sha
+				)
+
+			local summary = entry.summary or ""
+			if entry.short_sha ~= "" and vim.startswith(summary, entry.short_sha) then
+				summary = vim.trim(summary:sub(#entry.short_sha + 1))
+			end
+			local line_no = B:push({
+				{ " ", nil },
+				{ position_marker, "GitflowNumber" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ entry.short_sha .. "  ", "GitflowLogHash" },
+				{ summary, "GitflowCardTitle" },
+			})
+			line_entries[line_no] = entry
+
+			if is_merge_base then
+				B:hl(line_no, 0, -1, "GitflowRevertMergeBase")
 			end
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("revert", lines)
+	ui.buffer.update("revert", B.lines)
 	M.state.line_entries = line_entries
 	M.state.merge_base_sha = merge_base_sha
 
@@ -178,13 +187,8 @@ local function render(entries, merge_base_sha, current_branch)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, REVERT_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-			entry_highlights = entry_highlights,
-		}
-	)
+	B:apply(bufnr, REVERT_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowRevertEntry|nil

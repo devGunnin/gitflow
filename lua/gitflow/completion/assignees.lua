@@ -38,7 +38,13 @@ function M.fetch_repo_assignee_candidates()
 	local names = {}
 	for _, line in ipairs(vim.split(text, "\n", { trimempty = true })) do
 		local name = vim.trim(line)
-		if name ~= "" then
+		-- Skip empty output and stray JSON literals ("[]", "{}", "null") that
+		-- can appear when the endpoint returns no assignees.
+		if name ~= ""
+			and name ~= "[]"
+			and name ~= "{}"
+			and name ~= "null"
+		then
 			names[#names + 1] = name
 		end
 	end

@@ -87,8 +87,8 @@ T.run_suite("Interactive Rebase Panel", {
 	["parse_commits returns entries with pick default action"] = function()
 		local git_rebase = require("gitflow.git.rebase")
 		local output = table.concat({
-			"abc1234567890123456789012345678901234567\tfirst",
-			"def5678901234567890123456789012345678901\tsecond",
+			"abc1234567890123456789012345678901234567\tJohn Doe\t3 days ago\tfirst",
+			"def5678901234567890123456789012345678901\tJane Smith\t1 hour ago\tsecond",
 		}, "\n")
 		local entries = git_rebase.parse_commits(output)
 		T.assert_equals(#entries, 2, "should parse 2 entries")
@@ -99,6 +99,14 @@ T.run_suite("Interactive Rebase Panel", {
 		T.assert_equals(
 			entries[1].short_sha, "abc1234",
 			"short_sha should be 7 chars"
+		)
+		T.assert_equals(
+			entries[1].author, "John Doe",
+			"author should be parsed"
+		)
+		T.assert_equals(
+			entries[1].relative_time, "3 days ago",
+			"relative_time should be parsed"
 		)
 	end,
 

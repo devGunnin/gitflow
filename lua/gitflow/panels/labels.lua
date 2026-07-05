@@ -1,14 +1,16 @@
 local ui = require("gitflow.ui")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local form = require("gitflow.ui.form")
 local gh_labels = require("gitflow.gh.labels")
 local highlights = require("gitflow.highlights")
+local icons = require("gitflow.icons")
 
 local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
-local LABELS_FLOAT_TITLE = "Gitflow Labels"
-local LABELS_FLOAT_FOOTER = "c create  d delete  r refresh  q close"
+local LABELS_FLOAT_TITLE = "  Gitflow Labels  "
+local LABELS_FLOAT_FOOTER = " c create · d delete · r refresh · q close "
 
 ---@class GitflowLabelPanelState
 ---@field bufnr integer|nil
@@ -103,14 +105,19 @@ local function render_loading(message)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Labels", render_opts)
-	lines[#lines + 1] = ui_render.entry(message)
-	ui.buffer.update("labels", lines)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Labels", render_opts)
+	components.summary(B, icons.get("ui", "tag"), "Labels", {})
+	B:blank()
+	components.empty(B, message)
+
+	ui.buffer.update("labels", B.lines)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {})
+		B:apply(bufnr, LABELS_HIGHLIGHT_NS)
+		components.cursorline(M.state.winid, true)
 	end
 end
 
@@ -120,72 +127,78 @@ local function render_list(labels)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header("Gitflow Labels", render_opts)
-	local section_title, section_separator = ui_render.section("Labels", #labels, render_opts)
-	lines[#lines + 1] = section_title
-	lines[#lines + 1] = section_separator
-	local line_entries = {}
+	local tag_icon = icons.get("ui", "tag")
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Labels", render_opts)
 
+	-- Summary bar: tag icon + label count.
+	B:push({
+		{ "  ", nil },
+		{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
+		{ ("%d label%s"):format(#labels, #labels == 1 and "" or "s"), "GitflowSectionTitle" },
+	})
+	B:blank()
+
+	components.section(B, tag_icon, "Repository Labels")
+
+	local line_entries = {}
 	if #labels == 0 then
-		lines[#lines + 1] = ui_render.empty()
+		components.empty(B, "(no labels)")
 	else
 		for _, label in ipairs(labels) do
 			local name = maybe_text(label.name)
 			local color = maybe_text(label.color)
 			local description = maybe_text(label.description)
-			lines[#lines + 1] = ui_render.entry(("%s (#%s)"):format(name, color))
-			lines[#lines + 1] = ui_render.entry(("    %s"):format(description))
-			line_entries[#lines - 1] = label
-			line_entries[#lines] = label
-		end
-	end
 
-	local key_hints = ui_render.format_key_hints({
-		{ "c", "create" },
-		{ "d", "delete" },
-		{ "r", "refresh" },
-		{ "q", "quit" },
-	})
-	local footer_lines = ui_render.panel_footer(nil, key_hints, render_opts)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
+			-- Name line: text MUST contain "<name> (#<color>)" exactly so the
+			-- colored highlight can target the name and tests can locate it.
+			local name_line = B:push({
+				{ " ", nil },
+				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
+				{ name, "GitflowCardTitle" },
+				{ (" (#%s)"):format(color), "GitflowMeta" },
+			})
+			local desc_line = B:push({
+				{ "      ", nil },
+				{ description, "GitflowMeta" },
+			})
 
-	ui.buffer.update("labels", lines)
+			line_entries[name_line] = label
+			line_entries[desc_line] = label
 
-	local bufnr = M.state.bufnr
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		local entry_highlights = {}
-		-- Mark section header
-		for line_no, line in ipairs(lines) do
-			if vim.startswith(line, "Labels (") or line == "Labels" then
-				entry_highlights[line_no] = "GitflowHeader"
-			end
-		end
-
-		ui_render.apply_panel_highlights(bufnr, LABELS_HIGHLIGHT_NS, lines, {
-			footer_line = key_hints ~= "" and #lines or nil,
-			entry_highlights = entry_highlights,
-		})
-
-		-- Apply colored label highlights
-		for line_no, label in pairs(line_entries) do
-			if label.color and label.name then
+			-- Color the label NAME substring with its own dynamic group.
+			if label.color and label.name and label.name ~= "" then
 				local group = highlights.label_color_group(label.color)
-				local line_text = lines[line_no] or ""
+				local line_text = B.lines[name_line] or ""
 				local name_start = line_text:find(label.name, 1, true)
 				if name_start then
-					vim.api.nvim_buf_add_highlight(
-						bufnr, LABELS_HIGHLIGHT_NS, group,
-						line_no - 1, name_start - 1,
-						name_start - 1 + #label.name
+					B:hl(
+						name_line,
+						name_start - 1,
+						name_start - 1 + #label.name,
+						group
 					)
 				end
 			end
 		end
 	end
 
+	B:blank()
+	components.hint_bar(B, {
+		{ "c", "create" },
+		{ "d", "delete" },
+		{ "r", "refresh" },
+		{ "q", "close" },
+	})
+
+	ui.buffer.update("labels", B.lines)
 	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		B:apply(bufnr, LABELS_HIGHLIGHT_NS)
+		components.cursorline(M.state.winid, true)
+	end
 end
 
 ---@return table|nil
@@ -228,6 +241,7 @@ function M.create_interactive()
 
 	form.open({
 		title = "Create Label",
+		draft_key = "label:create",
 		fields = {
 			{ name = "Name", key = "name", required = true },
 			{ name = "Color (hex)", key = "color", required = true,

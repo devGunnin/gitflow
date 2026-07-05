@@ -4,11 +4,78 @@
 
 local ui_window = require("gitflow.ui.window")
 local utils = require("gitflow.utils")
+local icons = require("gitflow.icons")
 
 local M = {}
 
 local FORM_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_form_hl")
 local FORM_MARKER_NS = vim.api.nvim_create_namespace("gitflow_form_markers")
+local FORM_PLACEHOLDER_NS = vim.api.nvim_create_namespace("gitflow_form_placeholder")
+
+-- In-memory draft store, keyed by `opts.draft_key`. A form cancelled with
+-- q/<Esc> stashes its field values here so reopening the same form restores
+-- them. Drafts live for the Neovim session (gone on next launch); <C-d> clears
+-- the active one. Cleared automatically on successful submit.
+M._drafts = {}
+
+---@param key string|nil
+---@return table<string, string>|nil
+local function load_draft(key)
+	if not key then
+		return nil
+	end
+	local draft = M._drafts[key]
+	if type(draft) ~= "table" then
+		return nil
+	end
+	for _, value in pairs(draft) do
+		if vim.trim(tostring(value or "")) ~= "" then
+			return draft
+		end
+	end
+	return nil
+end
+
+---@param key string|nil
+---@param values table<string, string>|nil
+local function save_draft(key, values)
+	if not key then
+		return false
+	end
+	local has_content = false
+	for _, value in pairs(values or {}) do
+		if vim.trim(tostring(value or "")) ~= "" then
+			has_content = true
+			break
+		end
+	end
+	M._drafts[key] = has_content and values or nil
+	return has_content
+end
+
+---@param key string|nil
+local function clear_draft(key)
+	if key then
+		M._drafts[key] = nil
+	end
+end
+
+-- A field accent bar drawn before each label.
+local LABEL_BAR = "\u{2590}" -- ▐
+
+---@param field GitflowFormField
+---@return string
+local function field_glyph(field)
+	local key = field.key or ""
+	local map = {
+		title = "comment", body = "comment", description = "comment",
+		labels = "tag", label = "tag",
+		assignees = "author", reviewers = "author",
+		base = "ref", branch = "ref",
+		name = "tag", color = "dot",
+	}
+	return icons.get("ui", map[key] or "dot")
+end
 
 ---@class GitflowFormField
 ---@field name string        display label (e.g. "Title")
@@ -31,6 +98,7 @@ local FORM_MARKER_NS = vim.api.nvim_create_namespace("gitflow_form_markers")
 ---@field on_cancel? fun()            optional cancel callback
 ---@field width? number               float width (fraction or absolute)
 ---@field height? number              float height (fraction or absolute)
+---@field draft_key? string           when set, cancel stashes a resumable draft
 
 ---@class GitflowFormState
 ---@field bufnr integer|nil
@@ -69,11 +137,11 @@ local function render_form(state, values)
 	lines[#lines + 1] = ""  -- top padding
 
 	for idx, field in ipairs(state.fields) do
-		local label = field.name
+		local label = (" %s  %s"):format(field_glyph(field), field.name)
 		if field.required then
 			label = label .. " *"
 		end
-		lines[#lines + 1] = label .. ":"
+		lines[#lines + 1] = label
 		local label_line = #lines
 
 		local value = values[field.key] or field.default or ""
@@ -99,10 +167,13 @@ local function render_form(state, values)
 	end
 
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = string.rep(FIELD_SEPARATOR, 40)
+	lines[#lines + 1] = string.rep(FIELD_SEPARATOR, 50)
 	local hints = "<Tab> next  <S-Tab> prev  <CR> submit"
 	if has_picker_field(state) then
-		hints = hints .. "  <C-l> picker"
+		hints = hints .. "  <C-l> picker  <C-Space> suggest"
+	end
+	if state.draft_key then
+		hints = hints .. "  <C-d> clear"
 	end
 	hints = hints .. "  q/Esc cancel"
 	lines[#lines + 1] = hints
@@ -389,6 +460,101 @@ local function close_form(state)
 	state.bufnr = nil
 end
 
+---Determine which field the cursor is currently inside.
+---@param state GitflowFormState
+---@return integer|nil
+local function field_at_cursor(state)
+	if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
+		return nil
+	end
+	local line = vim.api.nvim_win_get_cursor(state.winid)[1]
+	sync_field_lines(state)
+	for idx, range in pairs(state.field_lines) do
+		if line >= range.start and line <= range.stop then
+			return idx
+		end
+	end
+	return nil
+end
+
+---Render dim placeholder hints over empty value rows.
+---@param state GitflowFormState
+local function refresh_placeholders(state)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	vim.api.nvim_buf_clear_namespace(bufnr, FORM_PLACEHOLDER_NS, 0, -1)
+	sync_field_lines(state)
+	for idx, field in ipairs(state.fields) do
+		local ph = field.placeholder
+		if ph and ph ~= "" then
+			local range = state.field_lines[idx]
+			if range then
+				local first = vim.api.nvim_buf_get_lines(
+					bufnr, range.start - 1, range.start, false
+				)[1] or ""
+				if vim.trim(first) == "" then
+					pcall(vim.api.nvim_buf_set_extmark, bufnr,
+						FORM_PLACEHOLDER_NS, range.start - 1, 0, {
+							virt_text = { { ph, "GitflowFormPlaceholder" } },
+							virt_text_pos = "overlay",
+						})
+				end
+			end
+		end
+	end
+end
+
+---Offer inline completion for the active field's current comma-token.
+---@param state GitflowFormState
+---@param manual boolean|nil  true when invoked via <C-Space> (allows empty lead)
+local function trigger_completion(state, manual)
+	if state._completing then
+		return
+	end
+	if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
+		return
+	end
+	if vim.fn.pumvisible() == 1 and not manual then
+		return
+	end
+	local idx = field_at_cursor(state)
+	if not idx then
+		return
+	end
+	local field = state.fields[idx]
+	if not field or type(field.complete) ~= "function" then
+		return
+	end
+
+	local cursor = vim.api.nvim_win_get_cursor(state.winid)
+	local row, col = cursor[1], cursor[2]
+	local line = vim.api.nvim_buf_get_lines(state.bufnr, row - 1, row, false)[1] or ""
+	local before = line:sub(1, col)
+	local token = before:match("([^,]*)$") or ""
+	local lead = vim.trim(token):gsub("^[%+%-]", "")
+	if lead == "" and not manual then
+		return
+	end
+
+	local ok, items = pcall(field.complete, lead)
+	if not ok or type(items) ~= "table" or #items == 0 then
+		return
+	end
+
+	-- Replace from the start of the current token (after the last comma and any
+	-- leading whitespace) so multi-value fields complete cleanly.
+	local ws = token:match("^(%s*)") or ""
+	local token_start = col - #token + #ws
+
+	state._completing = true
+	pcall(vim.fn.complete, token_start + 1, items)
+	vim.schedule(function()
+		state._completing = false
+	end)
+end
+
 ---Open an interactive form float.
 ---@param opts GitflowFormOpts
 ---@return GitflowFormState
@@ -403,6 +569,7 @@ function M.open(opts)
 		on_submit = opts.on_submit,
 		on_cancel = opts.on_cancel,
 		active_field = 1,
+		draft_key = opts.draft_key,
 	}
 
 	-- Create buffer
@@ -413,8 +580,9 @@ function M.open(opts)
 	vim.api.nvim_set_option_value("filetype", "gitflow-form", { buf = bufnr })
 	state.bufnr = bufnr
 
-	-- Render initial content
-	local lines = render_form(state, nil)
+	-- Render initial content (restoring a saved draft when present)
+	local restored_draft = load_draft(opts.draft_key)
+	local lines = render_form(state, restored_draft)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	initialize_markers(state, lines)
 	sync_field_lines(state)
@@ -430,6 +598,21 @@ function M.open(opts)
 		title = "  " .. opts.title .. "  ",
 		title_pos = "center",
 		enter = true,
+	})
+
+	-- Show completion suggestions without force-inserting/selecting them, so
+	-- typing a brand-new label/assignee still works.  Restored when the form
+	-- buffer is wiped.
+	local saved_completeopt = vim.o.completeopt
+	vim.o.completeopt = "menuone,noselect,noinsert"
+	vim.api.nvim_create_autocmd({ "BufWipeout", "BufUnload" }, {
+		buffer = bufnr,
+		once = true,
+		callback = function()
+			pcall(function()
+				vim.o.completeopt = saved_completeopt
+			end)
+		end,
 	})
 
 	-- Apply highlights
@@ -476,6 +659,7 @@ function M.open(opts)
 			end
 		end
 
+		clear_draft(state.draft_key)
 		close_form(state)
 		state.on_submit(values)
 	end, { buffer = bufnr, silent = true })
@@ -485,9 +669,29 @@ function M.open(opts)
 		trigger_field_picker(state)
 	end, { buffer = bufnr, silent = true })
 
-	-- q / <Esc>: cancel
+	-- <C-d>: discard any saved draft and reset all fields to empty
+	vim.keymap.set("n", "<C-d>", function()
+		clear_draft(state.draft_key)
+		local empty_lines = render_form(state, {})
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, empty_lines)
+		initialize_markers(state, empty_lines)
+		sync_field_lines(state)
+		apply_form_highlights(state, empty_lines)
+		refresh_placeholders(state)
+		jump_to_field(state, 1)
+		utils.notify("Draft cleared", vim.log.levels.INFO)
+	end, { buffer = bufnr, silent = true })
+
+	-- q / <Esc>: cancel — stash a draft so the form can be resumed later
 	local function cancel()
+		local saved = save_draft(state.draft_key, collect_values(state))
 		close_form(state)
+		if saved then
+			utils.notify(
+				"Draft saved — reopen to resume, <C-d> to discard",
+				vim.log.levels.INFO
+			)
+		end
 		if state.on_cancel then
 			state.on_cancel()
 		end
@@ -503,6 +707,41 @@ function M.open(opts)
 			vim.api.nvim_set_option_value("modified", false, { buf = bufnr })
 		end,
 	})
+
+	-- Placeholders + inline completion (autocomplete) ------------------
+	refresh_placeholders(state)
+
+	vim.keymap.set("i", "<C-Space>", function()
+		trigger_completion(state, true)
+	end, { buffer = bufnr, silent = true })
+
+	local completion_group = vim.api.nvim_create_augroup(
+		("GitflowFormCompletion_%d"):format(bufnr), { clear = true }
+	)
+	vim.api.nvim_create_autocmd("TextChangedI", {
+		group = completion_group,
+		buffer = bufnr,
+		callback = function()
+			refresh_placeholders(state)
+			trigger_completion(state, false)
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "TextChanged", "InsertLeave" }, {
+		group = completion_group,
+		buffer = bufnr,
+		callback = function()
+			refresh_placeholders(state)
+		end,
+	})
+
+	if restored_draft then
+		vim.schedule(function()
+			utils.notify(
+				"Draft restored — <C-d> to start fresh",
+				vim.log.levels.INFO
+			)
+		end)
+	end
 
 	return state
 end

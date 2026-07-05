@@ -5,6 +5,7 @@ local git_tag = require("gitflow.git.tag")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 
 ---@class GitflowTagPanelState
 ---@field bufnr integer|nil
@@ -13,9 +14,9 @@ local ui_render = require("gitflow.ui.render")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local TAG_FLOAT_TITLE = "Gitflow Tags"
+local TAG_FLOAT_TITLE = "  Gitflow Tags  "
 local TAG_FLOAT_FOOTER =
-	"c create  D delete  X remote del  P push  r refresh  q close"
+	" c create · D delete · X remote del · P push · r refresh · q close "
 local TAG_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_tag_hl")
 
@@ -117,59 +118,62 @@ local function render(entries, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Tags", render_opts
-	)
-	local line_entries = {}
-	local entry_highlights = {}
+	local tag_icon = icons.get("git_state", "tag")
 
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Tags", render_opts)
+
+	-- Tag count + branch context summary bar.
+	B:push({
+		{ "  ", nil },
+		{ tag_icon .. "  ", "GitflowSectionIcon" },
+		{
+			("%d tag%s"):format(#entries, #entries == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
+	components.section(B, tag_icon, ("Tags (%d)"):format(#entries))
+
+	local line_entries = {}
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no tags found")
+		components.empty(B, "no tags found")
 	else
 		for _, entry in ipairs(entries) do
-			local tag_icon = icons.get("git_state", "commit")
-			local type_indicator = entry.is_annotated
-				and "[annotated]" or "[lightweight]"
-			local subject_part = entry.subject
-				and ("  " .. entry.subject) or ""
-			lines[#lines + 1] = ui_render.entry(
-				("%s %s %s%s"):format(
-					tag_icon,
-					entry.name,
-					type_indicator,
-					subject_part
-				)
-			)
-			line_entries[#lines] = entry
-
-			if entry.is_annotated then
-				entry_highlights[#lines] =
-					"GitflowTagAnnotated"
+			local annotated = entry.is_annotated
+			-- Annotated tags carry the GitflowTagAnnotated accent on their
+			-- icon + name; lightweight tags use the neutral chip color.
+			local accent = annotated and "GitflowTagAnnotated" or "GitflowChip"
+			local type_marker = annotated and "[annotated]" or "[lightweight]"
+			local chunks = {
+				{ " ", nil },
+				{ tag_icon .. "  ", accent },
+				{ entry.name, accent },
+				{ "  " .. type_marker, "GitflowMeta" },
+			}
+			if entry.subject and entry.subject ~= "" then
+				chunks[#chunks + 1] = { "  " .. entry.subject, "GitflowCardTitle" }
 			end
+			if entry.sha and entry.sha ~= "" then
+				chunks[#chunks + 1] = { "   " .. entry.sha, "GitflowLogHash" }
+			end
+			local line_no = B:push(chunks)
+			line_entries[line_no] = entry
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("tag", lines)
+	ui.buffer.update("tag", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, TAG_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-			entry_highlights = entry_highlights,
-		}
-	)
+	B:apply(bufnr, TAG_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowTagEntry|nil

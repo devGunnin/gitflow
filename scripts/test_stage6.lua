@@ -332,7 +332,7 @@ wait_until(function()
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	return find_line(lines, "Gitflow Conflicts") ~= nil
-		and find_line(lines, "Active operation: merge") ~= nil
+		and find_line(lines, "merge in progress") ~= nil
 		and find_line(lines, "choose-local.txt") ~= nil
 		and find_line(lines, "choose-base.txt") ~= nil
 		and find_line(lines, "choose-remote.txt") ~= nil
@@ -366,13 +366,13 @@ local function resolve_single_file(path, side, expected, opts)
 		local current_tab = vim.api.nvim_get_current_tabpage()
 		assert_equals(
 			#vim.api.nvim_tabpage_list_wins(current_tab),
-			4,
-			"3-way view should create three top panes and merged pane"
+			1,
+			"single-pane conflict resolver should use one focused window"
 		)
 
 		local merged_buf = conflict_view.state.merged_bufnr
 		assert_true(merged_buf ~= nil, "merged buffer should be created")
-		assert_keymaps(merged_buf, { "1", "2", "3", "a", "e", "]x", "[x", "q" })
+		assert_keymaps(merged_buf, { "1", "2", "3", "o", "t", "b", "a", "e", "]x", "[x", "q" })
 		asserted_view_shape = true
 	end
 
@@ -457,7 +457,7 @@ end
 
 wait_until(function()
 	local lines = vim.api.nvim_buf_get_lines(conflict_buf, 0, -1, false)
-	return find_line(lines, "Unresolved files: 0") ~= nil
+	return find_line(lines, "all resolved") ~= nil
 end, "conflict panel should refresh when all files are resolved", 10000)
 
 wait_until(function()

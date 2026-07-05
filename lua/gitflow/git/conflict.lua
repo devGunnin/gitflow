@@ -423,8 +423,22 @@ local function resolve_replacement(hunk, choice, edited_lines)
 	if choice == "remote" then
 		return copy_lines(hunk.remote_lines), nil
 	end
+	if choice == "both" then
+		local out = copy_lines(hunk.local_lines)
+		for _, line in ipairs(hunk.remote_lines) do
+			out[#out + 1] = line
+		end
+		return out, nil
+	end
+	if choice == "both_reverse" then
+		local out = copy_lines(hunk.remote_lines)
+		for _, line in ipairs(hunk.local_lines) do
+			out[#out + 1] = line
+		end
+		return out, nil
+	end
 	if choice ~= "edit" then
-		return nil, "Resolution choice must be local, base, remote, or edit"
+		return nil, "Resolution choice must be local, base, remote, both, or edit"
 	end
 
 	if edited_lines == nil then

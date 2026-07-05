@@ -82,6 +82,7 @@ function M.defaults()
 			-- scripts/test_keybinding_docs.lua.
 			help = "<leader>gh",
 			open = "<leader>go",
+			refresh = "gr",
 			close = "<leader>gq",
 			status = "gs",
 			commit = "gc",

@@ -4,6 +4,8 @@ local git = require("gitflow.git")
 local git_reflog = require("gitflow.git.reflog")
 local git_branch = require("gitflow.git.branch")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
+local icons = require("gitflow.icons")
 
 ---@class GitflowReflogPanelState
 ---@field bufnr integer|nil
@@ -16,7 +18,7 @@ local REFLOG_FLOAT_TITLE = "Gitflow Reflog"
 local REFLOG_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_reflog_hl")
 local REFLOG_FLOAT_FOOTER =
-	"<CR> checkout  1-9 quick checkout  R reset  r refresh  q close"
+	" <CR> checkout · 1-9 quick checkout · R reset · r refresh · q close "
 
 ---@type GitflowReflogPanelState
 M.state = {
@@ -107,6 +109,20 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---Choose a per-row accent icon based on the reflog action.
+---@param action string
+---@return string
+local function action_icon(action)
+	if action == "checkout" then
+		return icons.get("branch", "current")
+	elseif action == "reset" then
+		return icons.get("git_state", "modified")
+	elseif action == "merge" or action == "rebase" then
+		return icons.get("ui", "merge")
+	end
+	return icons.get("git_state", "commit")
+end
+
 ---@param entries GitflowReflogEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
@@ -114,67 +130,81 @@ local function render(entries, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Reflog", render_opts
-	)
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Reflog", render_opts)
+
+	-- Summary bar: entry count + current branch context.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
+		{
+			("%d entr%s"):format(#entries, #entries == 1 and "y" or "ies"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
 	local line_entries = {}
 
+	components.section(
+		B,
+		icons.get("git_state", "commit"),
+		("History (%d)"):format(#entries)
+	)
+
 	if #entries == 0 then
-		lines[#lines + 1] = ui_render.empty("no reflog entries")
+		components.empty(B, "no reflog entries")
 	else
 		for idx, entry in ipairs(entries) do
-			local position_marker = ""
-			if idx <= 9 then
-				position_marker = ("[%d] "):format(idx)
+			-- Quick-access marker for the first 9 entries; keep the literal
+			-- "[N] <sha>" token contiguous so 1-9 selection stays discoverable.
+			local marker = idx <= 9 and ("[%d] "):format(idx) or "    "
+			local sha = entry.short_sha or ""
+			local selector = entry.selector or ""
+
+			-- Split "<action>: <rest>" so the action word can be accented
+			-- while keeping the literal "commit:"/"checkout:"/"reset:" text.
+			local action = entry.action or ""
+			local desc = entry.description or ""
+			local action_text, rest_text
+			if action ~= "" and vim.startswith(desc, action .. ":") then
+				action_text = action .. ":"
+				rest_text = desc:sub(#action_text + 1)
 			end
-			lines[#lines + 1] = ui_render.entry(
-				("%s%s %s %s"):format(
-					position_marker,
-					entry.short_sha,
-					entry.selector,
-					entry.description
-				)
-			)
-			line_entries[#lines] = entry
+
+			local icon = action_icon(action)
+			local chunks = {
+				{ " ", nil },
+				{ icon ~= "" and (icon .. "  ") or "", "GitflowSectionIcon" },
+				{ marker, "GitflowNumber" },
+				{ sha, "GitflowReflogHash" },
+				{ "  ", nil },
+				{ selector, "GitflowMetaKey" },
+				{ "  ", nil },
+			}
+			if action_text then
+				chunks[#chunks + 1] = { action_text, "GitflowReflogAction" }
+				chunks[#chunks + 1] = { rest_text, "GitflowCardTitle" }
+			else
+				chunks[#chunks + 1] = { desc, "GitflowCardTitle" }
+			end
+
+			local line_no = B:push(chunks)
+			line_entries[line_no] = entry
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
-
-	ui.buffer.update("reflog", lines)
+	ui.buffer.update("reflog", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, REFLOG_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-		}
-	)
-
-	-- Apply GitflowReflogHash to short SHA portion of each entry
-	for line_no, entry in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		local sha_start = line_text:find(
-			entry.short_sha, 1, true
-		)
-		if sha_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr, REFLOG_HIGHLIGHT_NS,
-				"GitflowReflogHash",
-				line_no - 1, sha_start - 1,
-				sha_start - 1 + #entry.short_sha
-			)
-		end
-	end
+	B:apply(bufnr, REFLOG_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowReflogEntry|nil

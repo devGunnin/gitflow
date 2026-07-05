@@ -6,6 +6,7 @@ local git_branch = require("gitflow.git.branch")
 local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local list_picker = require("gitflow.ui.list_picker")
 local status_panel = require("gitflow.panels.status")
 
@@ -23,7 +24,7 @@ local status_panel = require("gitflow.panels.status")
 local M = {}
 local CP_FLOAT_TITLE = "Gitflow Cherry Pick"
 local CP_FLOAT_FOOTER_COMMITS =
-	"<CR> pick  B into branch  b branches  r refresh  q close"
+	" <CR> pick · B into branch · b branches · r refresh · q close "
 local CP_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_cherry_pick_hl")
 
@@ -188,79 +189,74 @@ local function render_commits(commits, source_branch, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(
-		"Gitflow Cherry Pick", render_opts
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Cherry Pick", render_opts)
+
+	-- Summary bar: commit count + the branch we're picking onto.
+	B:push({
+		{ "  ", nil },
+		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
+		{
+			("%d commit%s"):format(#commits, #commits == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. icons.get("branch", "current") .. " onto ", "GitflowMetaKey" },
+		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+	})
+	B:blank()
+
+	-- Source section header (HARD INVARIANT: a header line containing
+	-- "Source: <branch>" highlighted GitflowCherryPickBranch, then a separator).
+	local source_label = ("Source: %s"):format(source_branch)
+	B:push({
+		{ " ", nil },
+		{ icons.get("branch", "remote") .. "  ", "GitflowSectionIcon" },
+		{ source_label, "GitflowCherryPickBranch" },
+	})
+	B:raw(
+		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(source_label) + 4)),
+		"GitflowSeparator"
 	)
+
 	local line_entries = {}
-	local entry_highlights = {}
-
-	-- Branch section header
-	local branch_header = ("Source: %s"):format(source_branch)
-	lines[#lines + 1] = ui_render.entry(branch_header)
-	entry_highlights[#lines] = "GitflowCherryPickBranch"
-	lines[#lines + 1] = ui_render.separator(render_opts)
-
 	if #commits == 0 then
-		lines[#lines + 1] = ui_render.empty(
-			"no unique commits on this branch"
-		)
+		components.empty(B, "no unique commits on this branch")
 	else
 		for idx, entry in ipairs(commits) do
-			local commit_icon = icons.get("git_state", "commit")
-			local position_marker = ""
 			local summary = display_summary(entry)
-			if idx <= 9 then
-				position_marker = ("[%d] "):format(idx)
-			end
-			local line_text = ("%s%s %s"):format(
-				position_marker,
-				commit_icon,
-				entry.short_sha
-			)
+			local marker = idx <= 9 and ("[%d] "):format(idx) or ""
+			local chunks = {
+				{ "  ", nil },
+				{ marker, "GitflowNumber" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ entry.short_sha, "GitflowCherryPickHash" },
+			}
 			if summary ~= "" then
-				line_text = ("%s %s"):format(line_text, summary)
+				chunks[#chunks + 1] = { "  " .. summary, "GitflowCardTitle" }
 			end
-			lines[#lines + 1] = ui_render.entry(line_text)
-			line_entries[#lines] = entry
+			local line_no = B:push(chunks)
+			line_entries[line_no] = entry
 		end
 	end
 
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
-	end
+	B:blank()
+	components.hint_bar(B, {
+		{ "<CR>", "pick" },
+		{ "B", "into branch" },
+		{ "b", "branches" },
+		{ "r", "refresh" },
+		{ "q", "close" },
+	})
 
-	ui.buffer.update("cherry_pick", lines)
+	ui.buffer.update("cherry_pick", B.lines)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, CP_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-			entry_highlights = entry_highlights,
-		}
-	)
-
-	for line_no, entry in pairs(line_entries) do
-		local line_text = lines[line_no] or ""
-		local sha_start = line_text:find(entry.short_sha, 1, true)
-		if sha_start then
-			vim.api.nvim_buf_add_highlight(
-				bufnr,
-				CP_HIGHLIGHT_NS,
-				"GitflowCherryPickHash",
-				line_no - 1,
-				sha_start - 1,
-				sha_start - 1 + #entry.short_sha
-			)
-		end
-	end
+	B:apply(bufnr, CP_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowCherryPickEntry|nil
