@@ -225,6 +225,21 @@ local function render_diff(file)
 	end
 end
 
+---Move the file-list cursor onto the row for file index `idx`.
+---@param idx integer
+local function select_file_line(idx)
+	local winid = M.state.file_list_winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return
+	end
+	for line, file_idx in pairs(M.state.file_line_map or {}) do
+		if file_idx == idx then
+			pcall(vim.api.nvim_win_set_cursor, winid, { line, 0 })
+			return
+		end
+	end
+end
+
 ---@param idx integer
 function M.open_index(idx)
 	local file = M.state.files[idx]
@@ -377,13 +392,14 @@ end
 ---@param args string[]  git argv that produces a unified diff
 ---@param title string
 ---@param cfg table|nil
-local function open_from_git(args, title, cfg)
+---@param focus_path string|nil  file to select in the list (defaults to first)
+local function open_from_git(args, title, cfg, focus_path)
 	if M.is_open() then
 		M.close()
 	end
 	M.state.cfg = cfg
 	M.state.title = title
-	M.state._last = { args = args, title = title }
+	M.state._last = { args = args, title = title, focus_path = focus_path }
 
 	git.git(args, {}, function(result)
 		if (result.code or 1) ~= 0 then
@@ -402,7 +418,17 @@ local function open_from_git(args, title, cfg)
 		build_tabpage()
 		render_file_list()
 		if #M.state.files > 0 then
-			M.open_index(1)
+			local target = 1
+			if focus_path then
+				for idx, f in ipairs(M.state.files) do
+					if f.path == focus_path then
+						target = idx
+						break
+					end
+				end
+			end
+			M.open_index(target)
+			select_file_line(target)
 			vim.api.nvim_set_current_win(M.state.file_list_winid)
 		end
 	end)
@@ -434,17 +460,17 @@ function M.open_working(cfg, opts)
 	if opts.staged then
 		args[#args + 1] = "--staged"
 	end
-	if opts.path and opts.path ~= "" then
-		args[#args + 1] = "--"
-		args[#args + 1] = opts.path
-	end
-	open_from_git(args, opts.staged and "Staged changes" or "Working tree", cfg)
+	-- Always review the full set of changes; `opts.path` only decides which
+	-- file is focused in the list, not which files are shown (issue: status
+	-- `dd` should open every changed file, not just one).
+	local focus_path = opts.path ~= "" and opts.path or nil
+	open_from_git(args, opts.staged and "Staged changes" or "Working tree", cfg, focus_path)
 end
 
 function M.refresh()
 	if M.state._last then
 		local last = M.state._last
-		open_from_git(last.args, last.title, M.state.cfg)
+		open_from_git(last.args, last.title, M.state.cfg, last.focus_path)
 	end
 end
 
