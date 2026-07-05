@@ -300,6 +300,7 @@ PR list ~
     C       Comment on PR
     L       Edit labels
     m       Merge PR
+    x       Close PR
     o       Checkout PR branch
     v       Open review panel
     r       Refresh
