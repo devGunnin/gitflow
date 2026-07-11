@@ -483,7 +483,7 @@ T.run_suite("E2E: Keybinding Verification", {
 			bufnr,
 			{
 				"<CR>", "c", "C", "L", "A",
-				"m", "o", "v", "r", "b", "q",
+				"m", "o", "v", "x", "r", "b", "q",
 			}
 		)
 

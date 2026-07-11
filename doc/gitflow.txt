@@ -265,9 +265,11 @@ Branch list ~
     d       Delete branch
     D       Force delete branch
     m       Merge branch into current
+    u       Update branch to its upstream (fast-forward, no checkout)
     r       Rename branch
     R       Refresh branch list
     f       Fetch remote branches
+    G       Toggle list / graph view
     q       Close
 
 Log view ~
@@ -298,6 +300,7 @@ PR list ~
     C       Comment on PR
     L       Edit labels
     m       Merge PR
+    x       Close PR
     o       Checkout PR branch
     v       Open review panel
     r       Refresh

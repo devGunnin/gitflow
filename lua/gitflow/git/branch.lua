@@ -321,6 +321,75 @@ function M.switch(entry, opts, cb)
 	end)
 end
 
+---Fast-forward a branch to its upstream without checking it out.
+---For the current branch this is a `git pull --ff-only`; for any other local
+---branch it uses a `git fetch <remote> <upstream>:<name>` refspec so no branch
+---switch is needed. Remote-tracking entries just fetch their remote.
+---@param entry GitflowBranchEntry
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult, info: table|nil)
+function M.update(entry, opts, cb)
+	if not entry or not entry.name then
+		error("gitflow branch error: update(entry, opts, cb) requires entry", 2)
+	end
+
+	if entry.is_remote then
+		M.fetch(entry.remote, opts, function(err, result)
+			cb(err, result, { remote = entry.remote })
+		end)
+		return
+	end
+
+	git.git({
+		"rev-parse",
+		"--abbrev-ref",
+		"--symbolic-full-name",
+		entry.name .. "@{upstream}",
+	}, opts, function(up_result)
+		if up_result.code ~= 0 then
+			local output = git.output(up_result)
+			if output_mentions_no_upstream(output) then
+				cb(
+					("Branch '%s' has no upstream configured"):format(entry.name),
+					up_result
+				)
+				return
+			end
+			cb(error_from_result(up_result, "rev-parse @{upstream}"), up_result)
+			return
+		end
+
+		local upstream = vim.trim(up_result.stdout or "")
+		local remote, remote_branch = upstream:match("^([^/]+)/(.+)$")
+		if not remote or not remote_branch then
+			cb(("Could not parse upstream '%s'"):format(upstream), up_result)
+			return
+		end
+
+		if entry.is_current then
+			run_branch_cmd(
+				{ "pull", "--ff-only", remote, remote_branch },
+				opts,
+				"pull --ff-only",
+				function(err, result)
+					cb(err, result, { upstream = upstream, current = true })
+				end
+			)
+			return
+		end
+
+		local refspec = ("%s:%s"):format(remote_branch, entry.name)
+		run_branch_cmd(
+			{ "fetch", remote, refspec },
+			opts,
+			("fetch %s %s"):format(remote, refspec),
+			function(err, result)
+				cb(err, result, { upstream = upstream })
+			end
+		)
+	end)
+end
+
 ---@param name string
 ---@param force boolean
 ---@param opts GitflowGitRunOpts|nil

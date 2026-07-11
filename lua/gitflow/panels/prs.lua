@@ -29,7 +29,7 @@ local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
 local PRS_FLOAT_TITLE = "  Gitflow Pull Requests  "
 local PRS_FLOAT_FOOTER =
 	" <CR> view · c create · m merge · o checkout · v review"
-	.. " · L labels · r refresh · q close "
+	.. " · L labels · x close PR · r refresh · q close "
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -128,6 +128,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "m", function()
 		M.merge_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "x", function()
+		M.close_pr_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "o", function()
@@ -1152,6 +1156,52 @@ function M.merge_under_cursor()
 			M.refresh()
 		end
 	end)
+end
+
+---@param number integer|string
+local function close_pr(number)
+	gh_prs.close(number, {}, function(err)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(
+			("Closed PR #%s"):format(tostring(number)),
+			vim.log.levels.INFO
+		)
+		if M.state.mode == "view" then
+			M.open_view(number)
+		else
+			M.refresh()
+		end
+	end)
+end
+
+function M.close_pr_under_cursor()
+	local number = M.state.active_pr_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No pull request selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+
+	local confirmed = input.confirm(
+		("Close PR #%s?"):format(tostring(number)),
+		{ choices = { "&Yes", "&No" }, default_choice = 2 }
+	)
+	if not confirmed then
+		return
+	end
+
+	close_pr(number)
 end
 
 function M.checkout_under_cursor()
