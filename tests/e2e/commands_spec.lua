@@ -150,7 +150,9 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 				{
 					table = input,
 					key = "prompt",
-					value = function(_, on_confirm)
+					value = function(opts, on_confirm)
+						T.assert_true(opts.multiline, "commit should use the multiline composer")
+						T.assert_equals(opts.draft_key, "commit:create:message", "commit should retain a draft")
 						on_confirm("Test commit from E2E")
 					end,
 				},
@@ -203,7 +205,9 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 				{
 					table = input,
 					key = "prompt",
-					value = function(_, on_confirm)
+					value = function(opts, on_confirm)
+						T.assert_true(opts.multiline, "quick commit should use the multiline composer")
+						T.assert_equals(opts.draft_key, "commit:quick:message", "quick commit should retain a draft")
 						on_confirm("Quick commit from E2E")
 					end,
 				},

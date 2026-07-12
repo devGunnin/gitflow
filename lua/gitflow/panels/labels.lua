@@ -246,7 +246,7 @@ function M.create_interactive()
 			{ name = "Name", key = "name", required = true },
 			{ name = "Color (hex)", key = "color", required = true,
 				placeholder = "e.g. ff0000" },
-			{ name = "Description", key = "description" },
+			{ name = "Description", key = "description", multiline = true },
 		},
 		on_submit = function(values)
 			gh_labels.create(

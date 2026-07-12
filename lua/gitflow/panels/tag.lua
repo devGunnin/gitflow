@@ -226,7 +226,11 @@ function M.create_tag()
 			name = vim.trim(name)
 
 			ui.input.prompt(
-				{ prompt = "Message (empty for lightweight): " },
+				{
+					multiline = true,
+					title = "Tag message (empty for lightweight)",
+					draft_key = ("tag:%s:message"):format(name),
+				},
 				function(message)
 					local opts = {}
 					if message and vim.trim(message) ~= "" then
