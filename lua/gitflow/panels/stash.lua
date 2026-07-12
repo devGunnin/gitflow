@@ -196,8 +196,10 @@ function M.open(cfg)
 end
 
 function M.push_with_prompt()
-	vim.ui.input({
-		prompt = "Stash message (optional): ",
+	ui.input.prompt({
+		multiline = true,
+		title = "Stash message (optional)",
+		draft_key = "stash:push:message",
 	}, function(input)
 		if input == nil then
 			return

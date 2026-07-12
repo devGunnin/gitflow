@@ -181,8 +181,10 @@ local function run_stash_push(message)
 end
 
 local function prompt_and_run_stash_push()
-	vim.ui.input({
-		prompt = "Stash message (optional): ",
+	ui.input.prompt({
+		multiline = true,
+		title = "Stash message (optional)",
+		draft_key = "stash:push:message",
 	}, function(input)
 		if input == nil then
 			return
@@ -212,7 +214,9 @@ local function open_commit_prompt(amend)
 
 		local prompt_text = amend and "Amend commit message: " or "Commit message: "
 		ui.input.prompt({
-			prompt = prompt_text,
+			multiline = true,
+			title = prompt_text:gsub(":%s*$", ""),
+			draft_key = amend and "commit:amend:message" or "commit:create:message",
 		}, function(message)
 			local trimmed = vim.trim(message)
 			if trimmed == "" then
@@ -406,7 +410,9 @@ local function run_quick_commit_flow(on_done)
 			end
 
 			ui.input.prompt({
-				prompt = "Quick commit message: ",
+				multiline = true,
+				title = "Quick commit message",
+				draft_key = "commit:quick:message",
 				on_cancel = function()
 					utils.notify("Quick commit canceled", vim.log.levels.INFO)
 					if on_done then

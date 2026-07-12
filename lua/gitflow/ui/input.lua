@@ -1,8 +1,23 @@
 ---@class GitflowPromptOpts
----@field prompt string
+---@field prompt? string
 ---@field default? string
 ---@field completion? string|fun(arglead: string, cmdline: string, cursorpos: integer): string[]
 ---@field on_cancel? fun()
+---@field multiline? boolean
+---@field title? string
+---@field draft_key? string
+---@field placeholder? string
+---@field width? number
+---@field height? number
+
+---@class GitflowComposeOpts
+---@field title string
+---@field default? string
+---@field draft_key? string
+---@field placeholder? string
+---@field on_cancel? fun()
+---@field width? number
+---@field height? number
 
 ---@class GitflowConfirmOpts
 ---@field choices? string[]
@@ -142,6 +157,18 @@ end
 ---@param opts GitflowPromptOpts
 ---@param on_confirm fun(value: string)
 function M.prompt(opts, on_confirm)
+	if opts.multiline then
+		return M.compose({
+			title = opts.title or (opts.prompt or "Message"):gsub(":%s*$", ""),
+			default = opts.default,
+			draft_key = opts.draft_key,
+			placeholder = opts.placeholder,
+			on_cancel = opts.on_cancel,
+			width = opts.width,
+			height = opts.height,
+		}, on_confirm)
+	end
+
 	local completion, cleanup_completion, force_completion_defaults =
 		resolve_completion(opts.completion)
 	if completion then
@@ -168,6 +195,41 @@ function M.prompt(opts, on_confirm)
 		end
 		on_confirm(input)
 	end)
+end
+
+---Open an editable multiline composer. Cancelling retains a session draft when
+---`draft_key` is provided; submitting clears it before invoking the callback.
+---@param opts GitflowComposeOpts
+---@param on_confirm fun(value: string)
+---@return GitflowFormState
+function M.compose(opts, on_confirm)
+	assert(type(opts) == "table", "compose options are required")
+	assert(type(opts.title) == "string" and opts.title ~= "", "compose title is required")
+	assert(type(on_confirm) == "function", "compose callback is required")
+	assert(opts.draft_key == nil or type(opts.draft_key) == "string", "draft_key must be a string")
+
+	local form = require("gitflow.ui.form")
+	return form.open({
+		title = opts.title,
+		width = opts.width or 0.65,
+		height = opts.height or 0.55,
+		draft_key = opts.draft_key,
+		on_cancel = opts.on_cancel,
+		fields = {
+			{
+				name = "Message",
+				key = "body",
+				default = opts.default,
+				multiline = true,
+				placeholder = opts.placeholder or "Write your message…",
+			},
+		},
+		on_submit = function(values)
+			assert(type(values) == "table", "composer values must be a table")
+			assert(type(values.body) == "string", "composer body must be a string")
+			on_confirm(values.body)
+		end,
+	})
 end
 
 ---@param message string

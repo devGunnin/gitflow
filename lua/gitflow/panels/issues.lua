@@ -739,7 +739,11 @@ end
 
 ---@param number integer|string
 local function comment_on_issue(number)
-	input.prompt({ prompt = ("Issue #%s comment: "):format(tostring(number)) }, function(body)
+	input.prompt({
+		multiline = true,
+		title = ("Comment on issue #%s"):format(tostring(number)),
+		draft_key = ("issue:%s:comment"):format(tostring(number)),
+	}, function(body)
 		local normalized = vim.trim(body or "")
 		if normalized == "" then
 			utils.notify("Comment cannot be empty", vim.log.levels.WARN)

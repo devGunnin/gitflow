@@ -678,7 +678,11 @@ function M.toggle_lock_under_cursor()
 	end
 
 	ui.input.prompt(
-		{ prompt = "Lock reason (optional): " },
+		{
+			multiline = true,
+			title = "Worktree lock reason (optional)",
+			draft_key = ("worktree:%s:lock-reason"):format(entry.path),
+		},
 		function(reason)
 			local opts = {}
 			if reason and vim.trim(reason) ~= "" then

@@ -1258,8 +1258,10 @@ function M.edit_draft(pc)
 		return
 	end
 	input.prompt({
-		prompt = "Edit draft: ",
+		multiline = true,
+		title = "Edit draft comment",
 		default = pc.body or "",
+		draft_key = ("review:%s:draft:%s"):format(tostring(M.state.pr_number), tostring(pc.id)),
 	}, function(text)
 		local body = vim.trim(text or "")
 		if body == "" then
@@ -2296,7 +2298,14 @@ end
 ---@param path string
 ---@param target table  { hunk, new_line, old_line, desc }
 local function queue_target_comment(path, target)
-	input.prompt({ prompt = "Inline comment: " }, function(text)
+	input.prompt({
+		multiline = true,
+		title = "Inline comment",
+		draft_key = ("review:%s:inline:%s:%s:%s"):format(
+			tostring(M.state.pr_number), path,
+			tostring(target.new_line), tostring(target.old_line)
+		),
+	}, function(text)
 		local body = vim.trim(text or "")
 		if body == "" then
 			notify_warn("Comment cannot be empty")
@@ -2399,7 +2408,9 @@ function M.file_comment(path)
 		return
 	end
 	input.prompt({
-		prompt = ("File comment on %s: "):format(vim.fn.fnamemodify(path, ":t")),
+		multiline = true,
+		title = ("Comment on %s"):format(vim.fn.fnamemodify(path, ":t")),
+		draft_key = ("review:%s:file:%s"):format(tostring(M.state.pr_number), path),
 	}, function(text)
 		local body = vim.trim(text or "")
 		if body == "" then
@@ -2475,7 +2486,13 @@ function M.inline_comment_visual()
 	end
 
 	input.prompt(
-		{ prompt = "Inline comment (range): " },
+		{
+			multiline = true,
+			title = "Inline range comment",
+			draft_key = ("review:%s:range:%s:%d:%d"):format(
+				tostring(M.state.pr_number), path, start_line, end_line
+			),
+		},
 		function(text)
 			local body = vim.trim(text or "")
 			if body == "" then
@@ -2722,7 +2739,11 @@ end
 ---@param prompt string
 ---@param success string
 local function prompt_and_submit(mode, prompt, success)
-	input.prompt({ prompt = prompt }, function(body)
+	input.prompt({
+		multiline = true,
+		title = prompt:gsub(":%s*$", ""),
+		draft_key = ("review:%s:submit:%s"):format(tostring(M.state.pr_number), mode),
+	}, function(body)
 		submit_review_with_pending(mode, body or "", success)
 	end)
 end
@@ -2788,7 +2809,9 @@ function M.submit_pending_review()
 		local mode = choice.key
 
 		input.prompt({
-			prompt = ("%s message (optional): "):format(choice.label),
+		multiline = true,
+			title = ("%s message"):format(choice.label),
+			draft_key = ("review:%s:submit:%s"):format(tostring(number), mode),
 		}, function(body_in)
 			local body = vim.trim(body_in or "")
 			submit_review_with_pending(
@@ -3051,7 +3074,9 @@ function M.reply_to_thread()
 	end
 
 	input.prompt({
-		prompt = ("Reply to @%s: "):format(thread.comments[1].user),
+		multiline = true,
+		title = ("Reply to @%s"):format(thread.comments[1].user),
+		draft_key = ("review:%s:reply:%s"):format(tostring(number), tostring(thread.id)),
 	}, function(text)
 		local body = vim.trim(text or "")
 		if body == "" then
@@ -3106,7 +3131,9 @@ function M.respond_to_review(number)
 			author = latest.user.login
 		end
 		input.prompt({
-			prompt = ("Reply to @%s's review: "):format(author),
+		multiline = true,
+			title = ("Reply to @%s's review"):format(author),
+			draft_key = ("review:%s:response:%s"):format(tostring(pr_num), author),
 		}, function(reply)
 			local body = vim.trim(reply or "")
 			if body == "" then
