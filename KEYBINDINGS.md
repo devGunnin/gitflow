@@ -38,7 +38,7 @@ Normal-mode mappings available in any buffer. Configured via
 | `gB` | Toggle blame panel | `blame` |
 | `gF` | Open reflog panel | `reflog` |
 | `gC` | Open cherry-pick panel | `cherry_pick` |
-| `gI` | Open interactive rebase panel | `rebase_interactive` |
+| `gI` | Open rebase panel (normal, `i` for interactive) | `rebase_interactive` |
 | `gA` | Open GitHub Actions panel | `actions` |
 | `gN` | Open notification center | `notifications` |
 | `<leader>gG` | Toggle PR review mode (tabpage with file list + inline diff) | `pr_review` |
@@ -356,9 +356,30 @@ Buffer-local bindings active in the cherry-pick panel (`:Gitflow cherry-pick-pan
 | `r` | Refresh |
 | `q` | Close |
 
-## Interactive Rebase Panel
+## Rebase Panel
 
-Buffer-local bindings active in the interactive rebase panel (`:Gitflow rebase-interactive`).
+Buffer-local bindings active in the rebase panel (`:Gitflow rebase-interactive`).
+The panel opens on a base-branch picker, then a plain (non-interactive) rebase
+preview. Press `i` from the preview to switch to the interactive editor.
+
+Base picker:
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Select base branch |
+| `q` | Close |
+
+Normal rebase preview:
+
+| Key | Action |
+| --- | --- |
+| `X` | Execute plain rebase onto base |
+| `i` | Switch to interactive rebase |
+| `P` | Toggle diff preview for commit under cursor |
+| `b` | Change base branch |
+| `q` | Close |
+
+Interactive rebase editor:
 
 | Key | Action |
 | --- | --- |
@@ -371,7 +392,8 @@ Buffer-local bindings active in the interactive rebase panel (`:Gitflow rebase-i
 | `d` | Set action to drop |
 | `J` | Move commit down |
 | `K` | Move commit up |
-| `X` | Execute rebase |
+| `X` | Execute interactive rebase |
+| `P` | Toggle diff preview for commit under cursor |
 | `b` | Change base branch |
 | `q` | Close |
 

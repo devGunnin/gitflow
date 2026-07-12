@@ -7,6 +7,7 @@ local git = require("gitflow.git")
 ---@field subject string
 ---@field author string
 ---@field relative_time string
+---@field message? string  new commit message for a `reword` action
 
 local M = {}
 
@@ -72,15 +73,30 @@ function M.list_commits(base_ref, opts, cb)
 end
 
 ---Build the rebase todo file content from entries.
+---A `reword` entry carrying a `message` is emitted as a `pick` followed by an
+---`exec git commit --amend` so the new message is applied deterministically,
+---without depending on an interactive $GIT_EDITOR.
 ---@param entries GitflowRebaseEntry[]
 ---@return string
 function M.build_todo(entries)
 	local lines = {}
 	for _, entry in ipairs(entries) do
 		local commit = entry.sha or entry.short_sha or ""
-		lines[#lines + 1] = ("%s %s %s"):format(
-			entry.action, commit, entry.subject
-		)
+		if entry.action == "reword"
+			and entry.message
+			and entry.message ~= ""
+		then
+			lines[#lines + 1] = ("pick %s %s"):format(
+				commit, entry.subject or ""
+			)
+			lines[#lines + 1] = ("exec git commit --amend -m %s"):format(
+				vim.fn.shellescape(entry.message)
+			)
+		else
+			lines[#lines + 1] = ("%s %s %s"):format(
+				entry.action, commit, entry.subject or ""
+			)
+		end
 	end
 	return table.concat(lines, "\n") .. "\n"
 end
@@ -111,7 +127,19 @@ function M.start_interactive(base_ref, entries, opts, cb)
 		)
 	end
 
-	local env = { GIT_SEQUENCE_EDITOR = editor_cmd }
+	-- GIT_SEQUENCE_EDITOR feeds git our prepared todo list. GIT_EDITOR must
+	-- also be neutralised: reword/squash/fixup otherwise launch $GIT_EDITOR
+	-- (falling back to `vi`) to edit the commit message, which cannot run in
+	-- the headless subprocess and leaves the rebase stuck mid-way. Pointing it
+	-- at the shell no-op `:` reuses the prepared message non-interactively.
+	local env = {
+		GIT_SEQUENCE_EDITOR = editor_cmd,
+		GIT_EDITOR = ":",
+	}
+	local existing_env = (opts or {}).env
+	if type(existing_env) == "table" then
+		env = vim.tbl_extend("force", existing_env, env)
+	end
 	local run_opts = vim.tbl_extend("force", opts or {}, { env = env })
 
 	git.git(
@@ -124,6 +152,25 @@ function M.start_interactive(base_ref, entries, opts, cb)
 					error_from_result(result, "rebase -i"),
 					result
 				)
+				return
+			end
+			cb(nil, result)
+		end
+	)
+end
+
+---Execute a plain (non-interactive) rebase of the current branch onto base_ref.
+---Uses a non-interactive editor so a stopped rebase never blocks on $GIT_EDITOR.
+---@param base_ref string
+---@param opts table|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.start(base_ref, opts, cb)
+	git.git(
+		{ "rebase", base_ref },
+		git.with_noninteractive_editor(opts),
+		function(result)
+			if result.code ~= 0 then
+				cb(error_from_result(result, "rebase"), result)
 				return
 			end
 			cb(nil, result)

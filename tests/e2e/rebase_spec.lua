@@ -22,6 +22,10 @@ T.run_suite("Interactive Rebase Panel", {
 			"start_interactive should be a function"
 		)
 		T.assert_true(
+			type(git_rebase.start) == "function",
+			"start (plain rebase) should be a function"
+		)
+		T.assert_true(
 			type(git_rebase.abort) == "function",
 			"abort should be a function"
 		)
@@ -69,6 +73,34 @@ T.run_suite("Interactive Rebase Panel", {
 			type(rb_panel.execute) == "function",
 			"execute should be a function"
 		)
+		T.assert_true(
+			type(rb_panel.execute_plain) == "function",
+			"execute_plain should be a function"
+		)
+		T.assert_true(
+			type(rb_panel.execute_interactive) == "function",
+			"execute_interactive should be a function"
+		)
+		T.assert_true(
+			type(rb_panel.switch_to_interactive) == "function",
+			"switch_to_interactive should be a function"
+		)
+	end,
+
+	["switch_to_interactive is a no-op outside the normal stage"] = function()
+		local rb_panel = require("gitflow.panels.rebase")
+		rb_panel.state.stage = "base"
+		rb_panel.switch_to_interactive()
+		T.assert_equals(
+			rb_panel.state.stage, "base",
+			"stage should be unchanged when not in normal stage"
+		)
+		rb_panel.state.stage = "todo"
+		rb_panel.switch_to_interactive()
+		T.assert_equals(
+			rb_panel.state.stage, "todo",
+			"stage should be unchanged when already in todo stage"
+		)
 	end,
 
 	["rebase-interactive subcommand is registered"] = function()
@@ -79,7 +111,7 @@ T.run_suite("Interactive Rebase Panel", {
 		)
 		T.assert_equals(
 			commands.subcommands["rebase-interactive"].description,
-			"Open interactive rebase panel",
+			"Open rebase panel (normal rebase, press i for interactive)",
 			"description should match"
 		)
 	end,
@@ -143,6 +175,69 @@ T.run_suite("Interactive Rebase Panel", {
 		T.assert_contains(
 			todo, "squash def second",
 			"todo should contain squash line"
+		)
+	end,
+
+	["build_todo emits pick + exec amend for reword with a message"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local todo = git_rebase.build_todo({
+			{
+				action = "reword",
+				sha = "abc",
+				short_sha = "abc",
+				subject = "new subject",
+				message = "new subject",
+			},
+		})
+		T.assert_contains(
+			todo, "pick abc new subject",
+			"reword should be emitted as a pick line"
+		)
+		T.assert_contains(
+			todo, "exec git commit --amend -m",
+			"reword should append an amend exec line"
+		)
+		T.assert_true(
+			todo:find("reword abc", 1, true) == nil,
+			"reword with a message should not emit a raw reword line"
+		)
+	end,
+
+	["build_todo keeps a raw reword line when no message is captured"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local todo = git_rebase.build_todo({
+			{
+				action = "reword",
+				sha = "abc",
+				short_sha = "abc",
+				subject = "keep me",
+			},
+		})
+		T.assert_contains(
+			todo, "reword abc keep me",
+			"reword without a message falls back to a raw reword line"
+		)
+		T.assert_true(
+			todo:find("exec git commit", 1, true) == nil,
+			"no amend exec line without a captured message"
+		)
+	end,
+
+	["build_todo shell-escapes reword messages with special characters"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local todo = git_rebase.build_todo({
+			{
+				action = "reword",
+				sha = "abc",
+				short_sha = "abc",
+				subject = "x",
+				message = [[weird 'quote" ;rm]],
+			},
+		})
+		T.assert_contains(
+			todo,
+			"exec git commit --amend -m " .. vim.fn.shellescape([[weird 'quote" ;rm]]),
+			"message should be shell-escaped in the exec line"
 		)
 	end,
 

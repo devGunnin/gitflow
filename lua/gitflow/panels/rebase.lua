@@ -16,7 +16,7 @@ local status_panel = require("gitflow.panels.status")
 ---@field entries GitflowRebaseEntry[]
 ---@field base_ref string|nil
 ---@field current_branch string|nil
----@field stage "base"|"todo"
+---@field stage "base"|"normal"|"todo"
 ---@field cfg GitflowConfig|nil
 ---@field picker_request_id integer
 ---@field refresh_request_id integer
@@ -26,7 +26,7 @@ local status_panel = require("gitflow.panels.status")
 ---@field base_line_branches table<integer, GitflowBranchEntry>
 
 local M = {}
-local REBASE_FLOAT_TITLE = "Gitflow Interactive Rebase"
+local REBASE_FLOAT_TITLE = "Gitflow Rebase"
 local REBASE_FLOAT_FOOTER =
 	" <CR> cycle · p/r/e/s/f/d action · J/K move · X execute"
 		.. " · P preview · b base · q close "
@@ -36,6 +36,16 @@ local REBASE_HINTS = {
 	{ "p/r/e/s/f/d", "action" },
 	{ "J/K", "move" },
 	{ "X", "execute" },
+	{ "P", "preview" },
+	{ "b", "base" },
+	{ "q", "close" },
+}
+-- Hints for the plain (non-interactive) rebase stage.
+local NORMAL_FLOAT_FOOTER =
+	" X execute · i interactive · P preview · b base · q close "
+local NORMAL_HINTS = {
+	{ "X", "execute" },
+	{ "i", "interactive" },
 	{ "P", "preview" },
 	{ "b", "base" },
 	{ "q", "close" },
@@ -110,7 +120,7 @@ end
 local function is_active_refresh_request(request_id, base_ref)
 	return M.state.refresh_request_id == request_id
 		and M.is_open()
-		and M.state.stage == "todo"
+		and (M.state.stage == "todo" or M.state.stage == "normal")
 		and M.state.base_ref == base_ref
 end
 
@@ -139,6 +149,7 @@ local function next_action(current)
 end
 
 local render_todo           -- forward declaration; defined after ensure_window
+local render_normal         -- forward declaration; defined after render_todo
 local refresh_float_footer  -- forward declaration; defined before render_base_picker
 
 ---@param cfg GitflowConfig
@@ -164,10 +175,13 @@ local function ensure_window(cfg)
 					return
 				end
 				M.state.focused_line = line
-				if M.state.stage ~= "todo" then
+				if M.state.stage == "todo" then
+					render_todo()
+				elseif M.state.stage == "normal" then
+					render_normal()
+				else
 					return
 				end
-				render_todo()
 				if M.state.preview_winid
 					and vim.api.nvim_win_is_valid(M.state.preview_winid)
 				then
@@ -262,6 +276,11 @@ local function ensure_window(cfg)
 	-- Execute
 	vim.keymap.set("n", "X", function()
 		M.execute()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	-- Switch from the plain rebase view into the interactive editor.
+	vim.keymap.set("n", "i", function()
+		M.switch_to_interactive()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	-- Base branch picker
@@ -393,6 +412,89 @@ render_todo = function()
 	refresh_float_footer()
 end
 
+---Render the plain (non-interactive) rebase preview: a read-only list of the
+---commits that will be replayed onto the base branch.
+render_normal = function()
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Rebase", render_opts)
+
+	local commit_icon = icons.get("git_state", "commit")
+	local branch_icon = icons.get("branch", "current")
+	local base_icon = icons.get("branch", "remote")
+	local count = #M.state.entries
+	local current_branch = (M.state.current_branch
+		and M.state.current_branch ~= "")
+		and M.state.current_branch or "(unknown)"
+
+	-- Summary bar: commit count + current branch context.
+	B:push({
+		{ "  ", nil },
+		{ commit_icon .. "  ", "GitflowSectionIcon" },
+		{
+			("%d commit%s"):format(count, count == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     " .. branch_icon .. " ", "GitflowMetaKey" },
+		{ current_branch, "GitflowBranchCurrent" },
+	})
+
+	components.meta_row(B, "Base:", {
+		{ base_icon .. " ", "GitflowSectionIcon" },
+		{ M.state.base_ref or "(none)", "GitflowBranchCurrent" },
+	}, { width = 7 })
+	B:blank()
+
+	local line_entries = {}
+	components.section(B, commit_icon, ("Commits (%d)"):format(count))
+	if count == 0 then
+		components.empty(B, "no commits to replay onto base")
+	else
+		for _, entry in ipairs(M.state.entries) do
+			-- Line 1: sha + subject.
+			local line1 = B:push({
+				{ " ", nil },
+				{ commit_icon .. " ", "GitflowRebaseHash" },
+				{ entry.short_sha, "GitflowRebaseHash" },
+				{ "  " .. (entry.subject or ""), "GitflowCardTitle" },
+			})
+			line_entries[line1] = entry
+
+			-- Line 2: author + relative time, dimmed.
+			local line2 = B:push({
+				{ "     ", nil },
+				{ entry.author or "", "GitflowMeta" },
+				{ " · ", "GitflowMetaKey" },
+				{ entry.relative_time or "", "GitflowMeta" },
+			})
+			line_entries[line2] = entry
+		end
+	end
+
+	B:blank()
+	B:push({
+		{ "  ", nil },
+		{ "i", "GitflowMetaKey" },
+		{ " switches to interactive rebase", "GitflowMeta" },
+	})
+
+	components.split_hint_bar(B, render_opts, NORMAL_HINTS)
+
+	ui.buffer.update("rebase", B.lines)
+	M.state.line_entries = line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
+	components.cursorline(M.state.winid, true)
+	refresh_float_footer()
+end
+
 ---Find the index in M.state.entries for the entry under the cursor.
 ---@return integer|nil
 local function entry_index_under_cursor()
@@ -471,7 +573,7 @@ end
 ---Toggle the diff-preview float for the focused commit (item 9).
 ---Opens a side float showing `git show <sha>`; pressing P again closes it.
 function M.toggle_preview()
-	if M.state.stage ~= "todo" then
+	if M.state.stage ~= "todo" and M.state.stage ~= "normal" then
 		return
 	end
 	if M.state.preview_winid
@@ -553,8 +655,14 @@ refresh_float_footer = function()
 	if not win_cfg.relative or win_cfg.relative == "" then
 		return
 	end
-	local footer = M.state.stage == "base"
-		and BASE_FLOAT_FOOTER or REBASE_FLOAT_FOOTER
+	local footer
+	if M.state.stage == "base" then
+		footer = BASE_FLOAT_FOOTER
+	elseif M.state.stage == "normal" then
+		footer = NORMAL_FLOAT_FOOTER
+	else
+		footer = REBASE_FLOAT_FOOTER
+	end
 	pcall(vim.api.nvim_win_set_config, winid, {
 		footer = footer,
 		footer_pos = win_cfg.footer_pos or "center",
@@ -645,8 +753,18 @@ function M.select_base_branch()
 	end
 	next_picker_request_id()
 	M.state.base_ref = branch.name
-	M.state.stage = "todo"
+	M.state.stage = "normal"
 	M.refresh()
+end
+
+---Switch from the plain rebase preview into the interactive editor, reusing the
+---commits already loaded for the current base.
+function M.switch_to_interactive()
+	if M.state.stage ~= "normal" then
+		return
+	end
+	M.state.stage = "todo"
+	render_todo()
 end
 
 ---@param cfg GitflowConfig
@@ -731,9 +849,40 @@ function M.refresh()
 				end
 				M.state.current_branch = current_branch
 				M.state.entries = entries or {}
-				render_todo()
+				if M.state.stage == "todo" then
+					render_todo()
+				else
+					render_normal()
+				end
 			end
 		)
+	end)
+end
+
+---Prompt for a new commit message when an entry is marked `reword`, storing it
+---on the entry (and updating the displayed subject). Without a captured message
+---a reword would silently reuse the original message, so this makes `r` do what
+---the user expects. Cancelling reverts the action to `pick`.
+---@param idx integer
+local function prompt_reword_message(idx)
+	local entry = M.state.entries[idx]
+	if not entry then
+		return
+	end
+	ui.input.prompt({
+		prompt = "Reword: ",
+		default = entry.message or entry.subject or "",
+	}, function(value)
+		local trimmed = vim.trim(value or "")
+		if trimmed == "" then
+			entry.action = "pick"
+			entry.message = nil
+		else
+			entry.action = "reword"
+			entry.message = trimmed
+			entry.subject = trimmed
+		end
+		render_todo()
 	end)
 end
 
@@ -749,9 +898,13 @@ function M.cycle_action()
 		)
 		return
 	end
-	M.state.entries[idx].action = next_action(
-		M.state.entries[idx].action
-	)
+	local next = next_action(M.state.entries[idx].action)
+	M.state.entries[idx].action = next
+	if next == "reword" then
+		prompt_reword_message(idx)
+		return
+	end
+	M.state.entries[idx].message = nil
 	render_todo()
 end
 
@@ -769,6 +922,11 @@ function M.set_action(action)
 		return
 	end
 	M.state.entries[idx].action = action
+	if action == "reword" then
+		prompt_reword_message(idx)
+		return
+	end
+	M.state.entries[idx].message = nil
 	render_todo()
 end
 
@@ -817,16 +975,83 @@ function M.move_up()
 	end
 end
 
----Execute the interactive rebase with confirmation.
-function M.execute()
-	if M.state.stage ~= "todo" then
+---Shared handler for a failed rebase: route conflicts to the conflict panel,
+---otherwise surface the error.
+---@param cfg GitflowConfig
+---@param err string
+---@param result GitflowGitResult
+local function on_rebase_failure(cfg, err, result)
+	local output = git.output(result) or err
+	local parsed =
+		git_conflict.parse_conflicted_paths_from_output(output)
+	if #parsed > 0 then
 		utils.notify(
-			"Select a base branch first",
-			vim.log.levels.WARN
+			("Rebase has conflicts:\n%s"):format(
+				table.concat(parsed, "\n")
+			),
+			vim.log.levels.ERROR
+		)
+		local conflict_panel = require("gitflow.panels.conflict")
+		refresh_status_panel_if_open()
+		conflict_panel.open(cfg)
+	else
+		utils.notify(err, vim.log.levels.ERROR)
+	end
+end
+
+---Shared handler for a successful rebase.
+---@param result GitflowGitResult
+local function on_rebase_success(result)
+	local output = git.output(result)
+	if output == "" then
+		output = "Rebase completed successfully"
+	end
+	utils.notify(output, vim.log.levels.INFO)
+	refresh_status_panel_if_open()
+	emit_post_operation()
+	M.close()
+end
+
+---Execute a plain (non-interactive) rebase of the current branch onto the base.
+function M.execute_plain()
+	local cfg = M.state.cfg
+	if not cfg then
+		return
+	end
+
+	if #M.state.entries == 0 then
+		utils.notify(
+			"No commits to rebase", vim.log.levels.WARN
 		)
 		return
 	end
 
+	local current_branch = (M.state.current_branch
+		and M.state.current_branch ~= "")
+		and M.state.current_branch or "current branch"
+	local confirm_msg = ("Rebase %s onto %s?"):format(
+		current_branch, M.state.base_ref
+	)
+	if not ui.input.confirm(confirm_msg) then
+		return
+	end
+
+	utils.notify(
+		("Rebasing onto %s..."):format(M.state.base_ref),
+		vim.log.levels.INFO
+	)
+
+	git_rebase.start(M.state.base_ref, {}, function(err, result)
+		if err then
+			on_rebase_failure(cfg, err, result)
+			return
+		end
+		on_rebase_success(result)
+	end)
+end
+
+---Execute the interactive rebase with confirmation.
+function M.execute_interactive()
 	local cfg = M.state.cfg
 	if not cfg then
 		return
@@ -861,42 +1086,29 @@ function M.execute()
 		{},
 		function(err, result)
 			if err then
-				local output = git.output(result) or err
-				local parsed =
-					git_conflict
-					.parse_conflicted_paths_from_output(
-						output
-					)
-				if #parsed > 0 then
-					utils.notify(
-						("Rebase has conflicts:\n%s")
-							:format(
-								table.concat(parsed, "\n")
-							),
-						vim.log.levels.ERROR
-					)
-					local conflict_panel =
-						require("gitflow.panels.conflict")
-					refresh_status_panel_if_open()
-					conflict_panel.open(cfg)
-				else
-					utils.notify(
-						err, vim.log.levels.ERROR
-					)
-				end
+				on_rebase_failure(cfg, err, result)
 				return
 			end
-
-			local output = git.output(result)
-			if output == "" then
-				output = "Rebase completed successfully"
-			end
-			utils.notify(output, vim.log.levels.INFO)
-			refresh_status_panel_if_open()
-			emit_post_operation()
-			M.close()
+			on_rebase_success(result)
 		end
 	)
+end
+
+---Execute the rebase, dispatching to the plain or interactive path based on the
+---current stage.
+function M.execute()
+	if M.state.stage == "normal" then
+		M.execute_plain()
+		return
+	end
+	if M.state.stage ~= "todo" then
+		utils.notify(
+			"Select a base branch first",
+			vim.log.levels.WARN
+		)
+		return
+	end
+	M.execute_interactive()
 end
 
 function M.close()
