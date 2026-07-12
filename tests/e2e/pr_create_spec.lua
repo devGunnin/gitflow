@@ -1009,6 +1009,384 @@ T.run_suite("E2E: PR Creation Flow", {
 
 		T.cleanup_panels()
 	end,
+
+	-- ── Base branch prefilled with default (#395) ─────────────────────
+
+	["base branch field defaults to main when available"] = function()
+		local base_default = nil
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = require("gitflow.git.branch"),
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {
+						{ name = "feature", is_remote = false },
+						{ name = "main", is_remote = false },
+					})
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					for _, f in ipairs(opts.fields or {}) do
+						if f.key == "base" then
+							base_default = f.default
+						end
+					end
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_equals(
+				base_default,
+				"main",
+				"base branch should default to main when it exists"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	-- ── Issues picker field present (#395) ────────────────────────────
+
+	["create form has an issues field"] = function()
+		local has_issues = false
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					for _, f in ipairs(opts.fields or {}) do
+						if f.key == "issues" then
+							has_issues = true
+						end
+					end
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				has_issues,
+				"form should have an issues field for linking"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	-- ── Issue fetch requests all open issues (#395) ───────────────────
+
+	["issue fetch requests all open issues with a high limit"] = function()
+		local captured_params = nil
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = require("gitflow.gh.issues"),
+				key = "list",
+				value = function(params, _, cb)
+					captured_params = params
+					cb(nil, {})
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				captured_params ~= nil,
+				"gh_issues.list should be called"
+			)
+			T.assert_equals(
+				captured_params.state,
+				"open",
+				"only open issues should be requested"
+			)
+			T.assert_true(
+				(tonumber(captured_params.limit) or 0) >= 1000,
+				"a high limit should be requested so all issues load"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	-- ── Issue picker lists all issues, newest first (#395) ────────────
+
+	["issue picker lists all open issues sorted newest first"] = function()
+		local picker_items = nil
+		local list_picker = require("gitflow.ui.list_picker")
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = require("gitflow.gh.issues"),
+				key = "list",
+				value = function(_, _, cb)
+					cb(nil, {
+						{ number = 7, title = "middle" },
+						{ number = 53, title = "newest" },
+						{ number = 2, title = "oldest" },
+					})
+				end,
+			},
+			{
+				table = list_picker,
+				key = "open",
+				value = function(opts)
+					picker_items = opts.items
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					for _, f in ipairs(opts.fields or {}) do
+						if f.key == "issues" and f.picker then
+							f.picker({
+								value = "",
+								set_value = function() end,
+							})
+						end
+					end
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				picker_items ~= nil and #picker_items == 3,
+				"picker should list every open issue"
+			)
+			T.assert_equals(
+				picker_items[1].name,
+				"#53",
+				"newest issue should be first"
+			)
+			T.assert_equals(
+				picker_items[2].name,
+				"#7",
+				"middle issue should be second"
+			)
+			T.assert_equals(
+				picker_items[3].name,
+				"#2",
+				"oldest issue should be last"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	-- ── Selected issues appended as closing keywords (#395) ───────────
+
+	["selected issues are linked via Closes keywords in body"] = function()
+		local create_input = nil
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = gh_prs,
+				key = "create",
+				value = function(inp, _, cb)
+					create_input = inp
+					cb(nil, { url = "https://example.com/pull/7" })
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					opts.on_submit({
+						title = "Linked PR",
+						body = "Implements the thing",
+						base = "main",
+						reviewers = "",
+						labels = "",
+						issues = "#12,#34",
+					})
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				create_input ~= nil,
+				"create input should not be nil"
+			)
+			T.assert_contains(
+				create_input.body,
+				"Implements the thing",
+				"original body should be preserved"
+			)
+			T.assert_contains(
+				create_input.body,
+				"Closes #12",
+				"body should link the first selected issue"
+			)
+			T.assert_contains(
+				create_input.body,
+				"Closes #34",
+				"body should link the second selected issue"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	-- ── Already-referenced issues are not duplicated (#395) ───────────
+
+	["issues already referenced in body are not duplicated"] = function()
+		local create_input = nil
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = gh_prs,
+				key = "create",
+				value = function(inp, _, cb)
+					create_input = inp
+					cb(nil, { url = "https://example.com/pull/8" })
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					opts.on_submit({
+						title = "Already linked",
+						body = "Fixes #12 already",
+						base = "main",
+						reviewers = "",
+						labels = "",
+						issues = "#12",
+					})
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				create_input ~= nil,
+				"create input should not be nil"
+			)
+			T.assert_equals(
+				create_input.body,
+				"Fixes #12 already",
+				"body should be unchanged when issue already referenced"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
 })
 
 print("E2E PR creation flow tests passed")

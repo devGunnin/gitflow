@@ -5,6 +5,7 @@ local ui_render = require("gitflow.ui.render")
 local form = require("gitflow.ui.form")
 local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
+local gh_issues = require("gitflow.gh.issues")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local label_picker = require("gitflow.ui.label_picker")
@@ -766,6 +767,90 @@ local function parse_label_patch(value)
 	return add, remove
 end
 
+---Pick the default base branch for a new PR: prefer `main`, then `master`.
+---Returns "" when neither is available so the field stays empty.
+---@param branch_names string[]
+---@return string
+local function default_base_branch(branch_names)
+	local seen = {}
+	for _, name in ipairs(branch_names or {}) do
+		seen[name] = true
+	end
+	if seen["main"] then
+		return "main"
+	end
+	if seen["master"] then
+		return "master"
+	end
+	return ""
+end
+
+---Build list-picker items for open issues, sorted newest-first (highest issue
+---number at the top): name is the `#<number>` token used as the stored value,
+---description carries the title for display + search.
+---@param issues table[]|nil
+---@return { name: string, description: string }[]
+local function build_issue_items(issues)
+	local sorted = {}
+	for _, issue in ipairs(issues or {}) do
+		if issue and issue.number ~= nil then
+			sorted[#sorted + 1] = issue
+		end
+	end
+	table.sort(sorted, function(left, right)
+		return tonumber(left.number) > tonumber(right.number)
+	end)
+
+	local items = {}
+	for _, issue in ipairs(sorted) do
+		items[#items + 1] = {
+			name = ("#%s"):format(tostring(issue.number)),
+			description = vim.trim(tostring(issue.title or "")),
+		}
+	end
+	return items
+end
+
+---Extract issue numbers from a CSV of `#<number>` tokens (as produced by the
+---issue picker), preserving order and dropping duplicates.
+---@param value string
+---@return string[]
+local function parse_issue_numbers(value)
+	local numbers = {}
+	local seen = {}
+	for _, token in ipairs(parse_csv_input(value)) do
+		local number = tostring(token):match("#?(%d+)")
+		if number and not seen[number] then
+			seen[number] = true
+			numbers[#numbers + 1] = number
+		end
+	end
+	return numbers
+end
+
+---Append `Closes #<n>` linking keywords to a PR body for each selected issue
+---that the body does not already reference. Returns the augmented body.
+---@param body string
+---@param issue_numbers string[]
+---@return string
+local function apply_issue_links(body, issue_numbers)
+	local text = body or ""
+	local additions = {}
+	for _, number in ipairs(issue_numbers) do
+		if not text:find("#" .. number .. "%f[%D]") then
+			additions[#additions + 1] = ("Closes #%s"):format(number)
+		end
+	end
+	if #additions == 0 then
+		return text
+	end
+	local closing = table.concat(additions, "\n")
+	if vim.trim(text) == "" then
+		return closing
+	end
+	return text .. "\n\n" .. closing
+end
+
 function M.create_interactive()
 	if not M.state.cfg then
 		return
@@ -784,7 +869,7 @@ function M.create_interactive()
 		end
 	end
 
-	local function open_form(available_labels, branch_items, assignee_items)
+	local function open_form(available_labels, branch_items, assignee_items, issue_items)
 		local label_names = {}
 		for _, label in ipairs(available_labels) do
 			if type(label) == "table" and label.name then
@@ -801,6 +886,12 @@ function M.create_interactive()
 		for _, item in ipairs(assignee_items) do
 			if type(item) == "table" and item.name then
 				reviewer_names[#reviewer_names + 1] = item.name
+			end
+		end
+		local issue_names = {}
+		for _, item in ipairs(issue_items) do
+			if type(item) == "table" and item.name then
+				issue_names[#issue_names + 1] = item.name
 			end
 		end
 
@@ -823,6 +914,7 @@ function M.create_interactive()
 				{
 					name = "Base branch",
 					key = "base",
+					default = default_base_branch(branch_names),
 					complete = names_completer(branch_names),
 					picker = function(ctx)
 						list_picker.open({
@@ -835,6 +927,24 @@ function M.create_interactive()
 								if #selected > 0 then
 									ctx.set_value(selected[1])
 								end
+							end,
+						})
+					end,
+				},
+				{
+					name = "Closes issues (comma-separated)",
+					key = "issues",
+					complete = names_completer(issue_names),
+					picker = function(ctx)
+						list_picker.open({
+							title = "Link Issues (Closes)",
+							items = issue_items,
+							selected = parse_csv_input(ctx.value),
+							multi_select = true,
+							on_submit = function(selected)
+								ctx.set_value(
+									table.concat(selected, ",")
+								)
 							end,
 						})
 					end,
@@ -876,9 +986,13 @@ function M.create_interactive()
 				},
 			},
 			on_submit = function(values)
+				local body = apply_issue_links(
+					values.body or "",
+					parse_issue_numbers(values.issues or "")
+				)
 				gh_prs.create({
 					title = values.title,
-					body = values.body,
+					body = body,
 					base = vim.trim(values.base or ""),
 					reviewers = parse_csv_input(values.reviewers),
 					labels = parse_csv_input(values.labels),
@@ -902,8 +1016,8 @@ function M.create_interactive()
 		})
 	end
 
-	local loaded = { labels = nil, branches = nil, assignees = nil }
-	local pending = 3
+	local loaded = { labels = nil, branches = nil, assignees = nil, issues = nil }
+	local pending = 4
 
 	local function try_open()
 		pending = pending - 1
@@ -914,7 +1028,8 @@ function M.create_interactive()
 			open_form(
 				loaded.labels or {},
 				loaded.branches or {},
-				loaded.assignees or {}
+				loaded.assignees or {},
+				loaded.issues or {}
 			)
 		end)
 	end
@@ -938,6 +1053,19 @@ function M.create_interactive()
 			)
 		end
 		loaded.branches = build_base_branch_items(entries)
+		try_open()
+	end)
+
+	gh_issues.list({ state = "open", limit = 1000 }, {}, function(err, issues)
+		if err then
+			utils.notify(
+				("Failed to load issues: %s"):format(err),
+				vim.log.levels.WARN
+			)
+		end
+		loaded.issues = build_issue_items(
+			type(issues) == "table" and issues or {}
+		)
 		try_open()
 	end)
 
