@@ -785,20 +785,28 @@ local function default_base_branch(branch_names)
 	return ""
 end
 
----Build list-picker items for open issues: name is the `#<number>` token used
----as the stored value, description carries the title for display + search.
+---Build list-picker items for open issues, sorted newest-first (highest issue
+---number at the top): name is the `#<number>` token used as the stored value,
+---description carries the title for display + search.
 ---@param issues table[]|nil
 ---@return { name: string, description: string }[]
 local function build_issue_items(issues)
-	local items = {}
+	local sorted = {}
 	for _, issue in ipairs(issues or {}) do
-		local number = issue and issue.number
-		if number ~= nil then
-			items[#items + 1] = {
-				name = ("#%s"):format(tostring(number)),
-				description = vim.trim(tostring(issue.title or "")),
-			}
+		if issue and issue.number ~= nil then
+			sorted[#sorted + 1] = issue
 		end
+	end
+	table.sort(sorted, function(left, right)
+		return tonumber(left.number) > tonumber(right.number)
+	end)
+
+	local items = {}
+	for _, issue in ipairs(sorted) do
+		items[#items + 1] = {
+			name = ("#%s"):format(tostring(issue.number)),
+			description = vim.trim(tostring(issue.title or "")),
+		}
 	end
 	return items
 end
@@ -1048,7 +1056,7 @@ function M.create_interactive()
 		try_open()
 	end)
 
-	gh_issues.list({ state = "open" }, {}, function(err, issues)
+	gh_issues.list({ state = "open", limit = 1000 }, {}, function(err, issues)
 		if err then
 			utils.notify(
 				("Failed to load issues: %s"):format(err),

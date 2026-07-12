@@ -1113,6 +1113,147 @@ T.run_suite("E2E: PR Creation Flow", {
 		T.cleanup_panels()
 	end,
 
+	-- ── Issue fetch requests all open issues (#395) ───────────────────
+
+	["issue fetch requests all open issues with a high limit"] = function()
+		local captured_params = nil
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = require("gitflow.gh.issues"),
+				key = "list",
+				value = function(params, _, cb)
+					captured_params = params
+					cb(nil, {})
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				captured_params ~= nil,
+				"gh_issues.list should be called"
+			)
+			T.assert_equals(
+				captured_params.state,
+				"open",
+				"only open issues should be requested"
+			)
+			T.assert_true(
+				(tonumber(captured_params.limit) or 0) >= 1000,
+				"a high limit should be requested so all issues load"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	-- ── Issue picker lists all issues, newest first (#395) ────────────
+
+	["issue picker lists all open issues sorted newest first"] = function()
+		local picker_items = nil
+		local list_picker = require("gitflow.ui.list_picker")
+
+		with_temporary_patches({
+			{
+				table = gh_labels,
+				key = "list",
+				value = function(_, cb)
+					cb(nil, {})
+				end,
+			},
+			{
+				table = require("gitflow.gh.issues"),
+				key = "list",
+				value = function(_, _, cb)
+					cb(nil, {
+						{ number = 7, title = "middle" },
+						{ number = 53, title = "newest" },
+						{ number = 2, title = "oldest" },
+					})
+				end,
+			},
+			{
+				table = list_picker,
+				key = "open",
+				value = function(opts)
+					picker_items = opts.items
+				end,
+			},
+			{
+				table = form,
+				key = "open",
+				value = function(opts)
+					for _, f in ipairs(opts.fields or {}) do
+						if f.key == "issues" and f.picker then
+							f.picker({
+								value = "",
+								set_value = function() end,
+							})
+						end
+					end
+					return {
+						bufnr = nil,
+						winid = nil,
+						fields = opts.fields or {},
+						field_lines = {},
+						on_submit = opts.on_submit,
+						active_field = 1,
+					}
+				end,
+			},
+		}, function()
+			prs_panel.state.cfg = cfg
+			prs_panel.create_interactive()
+			T.drain_jobs(3000)
+
+			T.assert_true(
+				picker_items ~= nil and #picker_items == 3,
+				"picker should list every open issue"
+			)
+			T.assert_equals(
+				picker_items[1].name,
+				"#53",
+				"newest issue should be first"
+			)
+			T.assert_equals(
+				picker_items[2].name,
+				"#7",
+				"middle issue should be second"
+			)
+			T.assert_equals(
+				picker_items[3].name,
+				"#2",
+				"oldest issue should be last"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
 	-- ── Selected issues appended as closing keywords (#395) ───────────
 
 	["selected issues are linked via Closes keywords in body"] = function()
