@@ -178,6 +178,69 @@ T.run_suite("Interactive Rebase Panel", {
 		)
 	end,
 
+	["build_todo emits pick + exec amend for reword with a message"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local todo = git_rebase.build_todo({
+			{
+				action = "reword",
+				sha = "abc",
+				short_sha = "abc",
+				subject = "new subject",
+				message = "new subject",
+			},
+		})
+		T.assert_contains(
+			todo, "pick abc new subject",
+			"reword should be emitted as a pick line"
+		)
+		T.assert_contains(
+			todo, "exec git commit --amend -m",
+			"reword should append an amend exec line"
+		)
+		T.assert_true(
+			todo:find("reword abc", 1, true) == nil,
+			"reword with a message should not emit a raw reword line"
+		)
+	end,
+
+	["build_todo keeps a raw reword line when no message is captured"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local todo = git_rebase.build_todo({
+			{
+				action = "reword",
+				sha = "abc",
+				short_sha = "abc",
+				subject = "keep me",
+			},
+		})
+		T.assert_contains(
+			todo, "reword abc keep me",
+			"reword without a message falls back to a raw reword line"
+		)
+		T.assert_true(
+			todo:find("exec git commit", 1, true) == nil,
+			"no amend exec line without a captured message"
+		)
+	end,
+
+	["build_todo shell-escapes reword messages with special characters"] = function()
+		local git_rebase = require("gitflow.git.rebase")
+		local todo = git_rebase.build_todo({
+			{
+				action = "reword",
+				sha = "abc",
+				short_sha = "abc",
+				subject = "x",
+				message = [[weird 'quote" ;rm]],
+			},
+		})
+		T.assert_contains(
+			todo,
+			"exec git commit --amend -m " .. vim.fn.shellescape([[weird 'quote" ;rm]]),
+			"message should be shell-escaped in the exec line"
+		)
+	end,
+
 	["build_todo uses full SHA when short SHA differs"] = function()
 		local git_rebase = require("gitflow.git.rebase")
 		local entries = {

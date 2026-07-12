@@ -859,6 +859,33 @@ function M.refresh()
 	end)
 end
 
+---Prompt for a new commit message when an entry is marked `reword`, storing it
+---on the entry (and updating the displayed subject). Without a captured message
+---a reword would silently reuse the original message, so this makes `r` do what
+---the user expects. Cancelling reverts the action to `pick`.
+---@param idx integer
+local function prompt_reword_message(idx)
+	local entry = M.state.entries[idx]
+	if not entry then
+		return
+	end
+	ui.input.prompt({
+		prompt = "Reword: ",
+		default = entry.message or entry.subject or "",
+	}, function(value)
+		local trimmed = vim.trim(value or "")
+		if trimmed == "" then
+			entry.action = "pick"
+			entry.message = nil
+		else
+			entry.action = "reword"
+			entry.message = trimmed
+			entry.subject = trimmed
+		end
+		render_todo()
+	end)
+end
+
 ---Cycle the action of the commit under the cursor.
 function M.cycle_action()
 	if M.state.stage ~= "todo" then
@@ -871,9 +898,13 @@ function M.cycle_action()
 		)
 		return
 	end
-	M.state.entries[idx].action = next_action(
-		M.state.entries[idx].action
-	)
+	local next = next_action(M.state.entries[idx].action)
+	M.state.entries[idx].action = next
+	if next == "reword" then
+		prompt_reword_message(idx)
+		return
+	end
+	M.state.entries[idx].message = nil
 	render_todo()
 end
 
@@ -891,6 +922,11 @@ function M.set_action(action)
 		return
 	end
 	M.state.entries[idx].action = action
+	if action == "reword" then
+		prompt_reword_message(idx)
+		return
+	end
+	M.state.entries[idx].message = nil
 	render_todo()
 end
 
