@@ -1961,10 +1961,10 @@ local function register_builtin_subcommands(cfg)
 	}
 
 	M.subcommands["rebase-interactive"] = {
-		description = "Open interactive rebase panel",
+		description = "Open rebase panel (normal rebase, press i for interactive)",
 		run = function()
 			rebase_panel.open(cfg)
-			return "Interactive rebase panel opened"
+			return "Rebase panel opened"
 		end,
 	}
 

@@ -131,6 +131,25 @@ function M.start_interactive(base_ref, entries, opts, cb)
 	)
 end
 
+---Execute a plain (non-interactive) rebase of the current branch onto base_ref.
+---Uses a non-interactive editor so a stopped rebase never blocks on $GIT_EDITOR.
+---@param base_ref string
+---@param opts table|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.start(base_ref, opts, cb)
+	git.git(
+		{ "rebase", base_ref },
+		git.with_noninteractive_editor(opts),
+		function(result)
+			if result.code ~= 0 then
+				cb(error_from_result(result, "rebase"), result)
+				return
+			end
+			cb(nil, result)
+		end
+	)
+end
+
 ---Abort an in-progress rebase.
 ---@param opts table|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)

@@ -22,6 +22,10 @@ T.run_suite("Interactive Rebase Panel", {
 			"start_interactive should be a function"
 		)
 		T.assert_true(
+			type(git_rebase.start) == "function",
+			"start (plain rebase) should be a function"
+		)
+		T.assert_true(
 			type(git_rebase.abort) == "function",
 			"abort should be a function"
 		)
@@ -69,6 +73,34 @@ T.run_suite("Interactive Rebase Panel", {
 			type(rb_panel.execute) == "function",
 			"execute should be a function"
 		)
+		T.assert_true(
+			type(rb_panel.execute_plain) == "function",
+			"execute_plain should be a function"
+		)
+		T.assert_true(
+			type(rb_panel.execute_interactive) == "function",
+			"execute_interactive should be a function"
+		)
+		T.assert_true(
+			type(rb_panel.switch_to_interactive) == "function",
+			"switch_to_interactive should be a function"
+		)
+	end,
+
+	["switch_to_interactive is a no-op outside the normal stage"] = function()
+		local rb_panel = require("gitflow.panels.rebase")
+		rb_panel.state.stage = "base"
+		rb_panel.switch_to_interactive()
+		T.assert_equals(
+			rb_panel.state.stage, "base",
+			"stage should be unchanged when not in normal stage"
+		)
+		rb_panel.state.stage = "todo"
+		rb_panel.switch_to_interactive()
+		T.assert_equals(
+			rb_panel.state.stage, "todo",
+			"stage should be unchanged when already in todo stage"
+		)
 	end,
 
 	["rebase-interactive subcommand is registered"] = function()
@@ -79,7 +111,7 @@ T.run_suite("Interactive Rebase Panel", {
 		)
 		T.assert_equals(
 			commands.subcommands["rebase-interactive"].description,
-			"Open interactive rebase panel",
+			"Open rebase panel (normal rebase, press i for interactive)",
 			"description should match"
 		)
 	end,
