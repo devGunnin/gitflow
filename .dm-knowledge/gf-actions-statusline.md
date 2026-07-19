@@ -1,0 +1,1 @@
+- **[pitfall]** gitflow's statusline has a refresh already in flight when a spec starts (plugin setup triggers one). A leftover in-flight refresh satisfies the next M.refresh(on_done) waiter WITHOUT spawning git, so any spec counting git invocations must T.drain_jobs() before resetting statusline.state.  _(2026-07-19T23:40:09Z)_
