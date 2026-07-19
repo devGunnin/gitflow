@@ -11,9 +11,18 @@ local cfg = _G.TestConfig
 local issues_panel = require("gitflow.panels.issues")
 local gh_issues = require("gitflow.gh.issues")
 local derive = require("gitflow.issues.derive")
+local views_store = require("gitflow.issues.views")
 local ui = require("gitflow.ui")
 
 local GH_LOG = vim.fn.tempname()
+
+-- Keep saved views out of the real nvim data dir.
+vim.env.XDG_DATA_HOME = vim.fn.tempname()
+
+---Start each saved-views test from an empty store.
+local function reset_views_store()
+	vim.fn.delete(views_store.path())
+end
 
 ---Reset the recorded `gh` invocation log. Drains first so a job left in
 ---flight by an earlier test cannot land in the fresh log.
@@ -620,6 +629,128 @@ T.run_suite("issues_panel_spec", {
 	["group keymaps are bound on the panel buffer"] = function()
 		local bufnr = open_and_wait()
 		for _, lhs in ipairs({ "s", "S", "G", "<Tab>" }) do
+			T.assert_true(
+				buf_map(bufnr, lhs) ~= nil,
+				("%s should be mapped on the issues buffer"):format(lhs)
+			)
+		end
+	end,
+
+	-- ── #389 saved views ───────────────────────────────────────────────
+
+	["a saved view round-trips through the JSON file"] = function()
+		reset_views_store()
+		local loaded, err = views_store.load()
+		T.assert_equals(err, nil, "a missing file should not be an error")
+		T.assert_deep_equals(loaded, {}, "a missing file should read as empty")
+
+		local view = {
+			name = "My open bugs",
+			filters = { state = "open", label = "bug" },
+			sort = { key = "number", direction = "asc" },
+		}
+		local ok, save_err = views_store.save(views_store.upsert(loaded, view))
+		T.assert_true(ok, "saving should succeed: " .. tostring(save_err))
+
+		-- Re-reading is what a restarted Neovim does.
+		local restored, restore_err = views_store.load()
+		T.assert_equals(restore_err, nil, "re-reading should not error")
+		T.assert_equals(#restored, 1, "the view should persist")
+		T.assert_equals(restored[1].name, "My open bugs", "name should persist")
+		T.assert_equals(restored[1].filters.label, "bug", "filters should persist")
+		T.assert_deep_equals(
+			restored[1].sort, { key = "number", direction = "asc" },
+			"sort should persist"
+		)
+	end,
+
+	["upsert replaces by name and remove drops one"] = function()
+		local first = { name = "A", filters = { state = "open" }, sort = {} }
+		local second = { name = "B", filters = { state = "all" }, sort = {} }
+		local list = views_store.upsert(views_store.upsert({}, first), second)
+		T.assert_equals(#list, 2, "two distinct names")
+
+		local replaced = views_store.upsert(list, {
+			name = "A", filters = { state = "closed" }, sort = {},
+		})
+		T.assert_equals(#replaced, 2, "replacing must not append")
+		T.assert_equals(
+			views_store.find(replaced, "A").filters.state, "closed",
+			"the stored view should be the new one"
+		)
+
+		local remaining, removed = views_store.remove(replaced, "A")
+		T.assert_true(removed, "remove should report the deletion")
+		T.assert_equals(#remaining, 1, "one view left")
+		T.assert_equals(remaining[1].name, "B", "the other view should survive")
+	end,
+
+	["a corrupt views file errors instead of discarding it"] = function()
+		reset_views_store()
+		local path = views_store.path()
+		vim.fn.writefile({ "{ not json" }, path)
+
+		local loaded, err = views_store.load()
+		T.assert_equals(loaded, nil, "a corrupt file must not read as empty")
+		T.assert_true(
+			err ~= nil and err:find("not valid JSON", 1, true) ~= nil,
+			"the error should name the problem: " .. tostring(err)
+		)
+
+		-- The panel action must surface the error and leave the file alone.
+		open_and_wait()
+		issues_panel.switch_view()
+		T.assert_deep_equals(
+			vim.fn.readfile(path), { "{ not json" },
+			"a failed load must not overwrite the user's file"
+		)
+	end,
+
+	["a views file with a nameless entry is reported, not silently dropped"] = function()
+		reset_views_store()
+		vim.fn.writefile(
+			{ vim.json.encode({ version = 1, views = { { filters = {} } } }) },
+			views_store.path()
+		)
+		local loaded, err = views_store.load()
+		T.assert_equals(loaded, nil, "a malformed entry must not be skipped")
+		T.assert_true(
+			err ~= nil and err:find("corrupt", 1, true) ~= nil,
+			"the error should say the file is corrupt: " .. tostring(err)
+		)
+	end,
+
+	["applying a view restores its filters and sort"] = function()
+		reset_views_store()
+		open_and_wait({ state = "all" })
+
+		issues_panel.apply_view({
+			name = "My open bugs",
+			filters = { state = "open", label = "bug" },
+			sort = { key = "number", direction = "asc" },
+		})
+
+		T.assert_equals(
+			issues_panel.state.filters.label, "bug", "the label filter should apply"
+		)
+		T.assert_deep_equals(
+			issues_panel.state.sort, { key = "number", direction = "asc" },
+			"the sort should apply"
+		)
+		local lines = panel_lines()
+		T.assert_true(
+			has_line(lines, "Fix rendering glitch"),
+			"the open bug should be listed"
+		)
+		T.assert_false(
+			has_line(lines, "Setup CI pipeline"),
+			"a non-bug issue should be filtered out"
+		)
+	end,
+
+	["view keymaps are bound on the panel buffer"] = function()
+		local bufnr = open_and_wait()
+		for _, lhs in ipairs({ "v", "V", "D" }) do
 			T.assert_true(
 				buf_map(bufnr, lhs) ~= nil,
 				("%s should be mapped on the issues buffer"):format(lhs)

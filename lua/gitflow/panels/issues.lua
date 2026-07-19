@@ -10,6 +10,7 @@ local assignee_completion = require("gitflow.completion.assignees")
 local label_picker = require("gitflow.ui.label_picker")
 local list_picker = require("gitflow.ui.list_picker")
 local derive = require("gitflow.issues.derive")
+local views_store = require("gitflow.issues.views")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
 
@@ -34,7 +35,8 @@ local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · x close · L labels"
 	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · G group · <Tab> fold group · r refresh · b back · q close "
+	.. " · G group · <Tab> fold group · v/V/D views"
+	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
@@ -153,6 +155,18 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "<Tab>", function()
 		M.toggle_group_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "v", function()
+		M.switch_view()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "V", function()
+		M.save_view()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "D", function()
+		M.delete_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -890,6 +904,140 @@ function M.toggle_group_under_cursor()
 	local id = collapse_id(key)
 	M.state.collapsed[id] = not M.state.collapsed[id] or nil
 	M.rerender()
+end
+
+-- ── Saved views (#389) ────────────────────────────────────────────────
+
+---@return GitflowIssueView[]|nil  nil when the saved-views file is unusable
+local function load_views()
+	local saved, err = views_store.load()
+	if not saved then
+		utils.notify(err, vim.log.levels.ERROR)
+		return nil
+	end
+	return saved
+end
+
+---@param view GitflowIssueView
+---@return string  one-line summary of what the view selects
+local function describe_view(view)
+	local parts = { view.filters.state or "open" }
+	for _, key in ipairs({ "label", "assignee", "milestone" }) do
+		if view.filters[key] then
+			parts[#parts + 1] = ("%s %s"):format(key, view.filters[key])
+		end
+	end
+	parts[#parts + 1] = ("sort %s %s"):format(view.sort.key, view.sort.direction)
+	return table.concat(parts, " · ")
+end
+
+---@param saved GitflowIssueView[]
+---@return table[]
+local function view_items(saved)
+	local items = {}
+	for _, view in ipairs(saved) do
+		items[#items + 1] = { name = view.name, description = describe_view(view) }
+	end
+	return items
+end
+
+---@param view GitflowIssueView
+function M.apply_view(view)
+	assert(type(view) == "table", "apply_view: view must be a table")
+	M.state.filters = vim.deepcopy(view.filters)
+	M.state.sort = vim.deepcopy(view.sort)
+	M.rerender()
+	focus_panel()
+	utils.notify(("Issue view '%s'"):format(view.name), vim.log.levels.INFO)
+end
+
+---Persist the current filters and sort under a name the user picks.
+function M.save_view()
+	local saved = load_views()
+	if not saved then
+		return
+	end
+
+	input.prompt({ prompt = "Save issue view as: " }, function(value)
+		local name = vim.trim(value or "")
+		if name == "" then
+			utils.notify("View name cannot be empty", vim.log.levels.WARN)
+			return
+		end
+
+		local view = {
+			name = name,
+			filters = vim.deepcopy(M.state.filters),
+			sort = vim.deepcopy(M.state.sort),
+		}
+		local ok, err = views_store.save(views_store.upsert(saved, view))
+		if not ok then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(("Saved issue view '%s'"):format(name), vim.log.levels.INFO)
+	end)
+end
+
+function M.switch_view()
+	local saved = load_views()
+	if not saved then
+		return
+	end
+	if #saved == 0 then
+		utils.notify("No saved issue views yet", vim.log.levels.WARN)
+		return
+	end
+
+	list_picker.open({
+		title = "Saved Issue Views",
+		items = view_items(saved),
+		multi_select = false,
+		on_submit = function(selected)
+			local view = views_store.find(saved, selected[1])
+			if not view then
+				focus_panel()
+				return
+			end
+			M.apply_view(view)
+		end,
+		on_cancel = focus_panel,
+	})
+end
+
+function M.delete_view()
+	local saved = load_views()
+	if not saved then
+		return
+	end
+	if #saved == 0 then
+		utils.notify("No saved issue views yet", vim.log.levels.WARN)
+		return
+	end
+
+	list_picker.open({
+		title = "Delete Saved View",
+		items = view_items(saved),
+		multi_select = false,
+		on_submit = function(selected)
+			local remaining, removed = views_store.remove(saved, selected[1])
+			if not removed then
+				focus_panel()
+				return
+			end
+			local ok, err = views_store.save(remaining)
+			focus_panel()
+			if not ok then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Deleted issue view '%s'"):format(selected[1]),
+				vim.log.levels.INFO
+			)
+		end,
+		on_cancel = focus_panel,
+	})
 end
 
 ---@return table[]  filter-menu entries with their current value as description
