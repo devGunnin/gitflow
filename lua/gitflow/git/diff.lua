@@ -1,4 +1,5 @@
 local git = require("gitflow.git")
+local git_path = require("gitflow.git.path")
 
 ---@class GitflowDiffHunk
 ---@field header string
@@ -31,7 +32,7 @@ function M.parse(output)
 
 	for _, line in ipairs(split_lines(output)) do
 		if vim.startswith(line, "diff --git ") then
-			local old_path, new_path = line:match("^diff %-%-git a/(.+) b/(.+)$")
+			local old_path, new_path = git_path.parse_diff_header(line)
 			current = {
 				header = line,
 				old_path = old_path,
@@ -135,8 +136,7 @@ function M.collect_markers(lines, start_line)
 
 	for index, line in ipairs(lines) do
 		local line_no = start_line + index - 1
-		local old_path, new_path =
-			line:match("^diff %-%-git a/(.+) b/(.+)$")
+		local old_path, new_path = git_path.parse_diff_header(line)
 		if old_path and new_path then
 			current_file = new_path
 			current_hunk = nil
