@@ -48,6 +48,7 @@ local utils = require("gitflow.utils")
 ---@field modified string
 ---@field deleted string
 ---@field conflict string
+---@field debounce integer
 
 ---@class GitflowIconsConfig
 ---@field enable boolean
@@ -154,6 +155,9 @@ function M.defaults()
 			modified = "~",
 			deleted = "−",
 			conflict = "!",
+			-- Debounce (ms) before refreshing signs after a write, so a burst
+			-- of rapid writes costs one git chain instead of one per write.
+			debounce = 300,
 		},
 		icons = {
 			enable = true,
@@ -370,6 +374,10 @@ local function validate_signs(config)
 
 	if type(config.signs.enable) ~= "boolean" then
 		error("gitflow config error: signs.enable must be a boolean", 3)
+	end
+
+	if type(config.signs.debounce) ~= "number" or config.signs.debounce < 0 then
+		error("gitflow config error: signs.debounce must be a non-negative number", 3)
 	end
 
 	local function validate_sign_text(name, value)
