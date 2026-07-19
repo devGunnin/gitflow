@@ -819,6 +819,91 @@ local function parse_csv(text)
 	return items
 end
 
+-- Accepted `key=value` edit tokens per subcommand: { key, field, csv }.
+local EDIT_TOKEN_SPECS = {
+	issue = {
+		{ "title", "title" },
+		{ "body", "body" },
+		{ "add", "add_labels", true },
+		{ "remove", "remove_labels", true },
+		{ "add_assignees", "add_assignees", true },
+		{ "remove_assignees", "remove_assignees", true },
+	},
+	pr = {
+		{ "add", "add_labels", true },
+		{ "remove", "remove_labels", true },
+		{ "add_assignees", "add_assignees", true },
+		{ "remove_assignees", "remove_assignees", true },
+		{ "reviewers", "reviewers", true },
+	},
+}
+
+---Parse `key=value` edit tokens for `issue edit` / `pr edit`.
+---A token whose key is unknown or whose value is empty is rejected outright, so
+---a typo can never be silently dropped into a no-op edit reported as success.
+---@param kind "issue"|"pr"
+---@param args string[]
+---@param start_index integer
+---@param usage string
+---@return table|nil options  nil when the request would edit nothing
+---@return string|nil err
+local function parse_edit_options(kind, args, start_index, usage)
+	local spec = EDIT_TOKEN_SPECS[kind]
+	if not spec then
+		error(("gitflow command error: no edit spec for %s"):format(tostring(kind)), 2)
+	end
+
+	local options = {}
+	local rejected = {}
+	for i = start_index, #args do
+		local token = args[i]
+		local field, value
+		for _, entry in ipairs(spec) do
+			local raw = token:match("^" .. entry[1] .. "=(.+)$")
+			if raw then
+				field = entry[2]
+				value = entry[3] and parse_csv(raw) or raw
+				break
+			end
+		end
+		-- an empty csv list carries no edit, so treat it like an unknown key
+		if field and (type(value) ~= "table" or #value > 0) then
+			options[field] = value
+		else
+			rejected[#rejected + 1] = token
+		end
+	end
+
+	if #rejected > 0 then
+		return nil,
+			("Unrecognized or empty edit option(s): %s\n%s"):format(
+				table.concat(rejected, " "),
+				usage
+			)
+	end
+	if next(options) == nil then
+		return nil, "No edits requested — supply at least one option.\n" .. usage
+	end
+	return options, nil
+end
+
+---Parse an optional stash index argument.
+---@param value string|nil
+---@return integer|nil index  nil when no index was given (means the latest entry)
+---@return string|nil err
+local function parse_stash_index(value)
+	local raw = trimmed_or_nil(value)
+	if raw == nil then
+		return nil, nil
+	end
+	local index = tonumber(raw)
+	if index == nil or index < 0 or index % 1 ~= 0 then
+		return nil,
+			("Invalid stash index: %s (expected a non-negative whole number)"):format(raw)
+	end
+	return index, nil
+end
+
 ---@param args string[]
 ---@param start_index integer
 ---@return table
@@ -1409,7 +1494,10 @@ local function register_builtin_subcommands(cfg)
 			end
 
 			if action == "pop" then
-				local index = tonumber(ctx.args[3])
+				local index, index_error = parse_stash_index(ctx.args[3])
+				if index_error then
+					return index_error
+				end
 				git_stash.pop({ index = index }, function(err, result)
 					if err then
 						show_error(err)
@@ -1425,7 +1513,10 @@ local function register_builtin_subcommands(cfg)
 				return "Running git stash pop..."
 			end
 			if action == "apply" then
-				local index = tonumber(ctx.args[3])
+				local index, index_error = parse_stash_index(ctx.args[3])
+				if index_error then
+					return index_error
+				end
 				git_stash.apply({ index = index }, function(err, result)
 					if err then
 						show_error(err)
@@ -1560,41 +1651,19 @@ local function register_builtin_subcommands(cfg)
 			end
 
 			if action == "edit" then
+				local usage = "Usage: :Gitflow issue edit <number>"
+					.. " [title=...] [body=...]"
+					.. " [add=...] [remove=...]"
+					.. " [add_assignees=...] [remove_assignees=...]"
 				local number = first_positional_from(ctx.args, 3)
 				if not number then
-					return "Usage: :Gitflow issue edit <number>"
-						.. " [title=...] [body=...]"
-						.. " [add=...] [remove=...]"
-						.. " [add_assignees=...] [remove_assignees=...]"
+					return usage
 				end
 
-				local edit_opts = {}
-				for i = 4, #ctx.args do
-					local token = ctx.args[i]
-					local title = token:match("^title=(.+)$")
-					if title then
-						edit_opts.title = title
-					end
-					local body = token:match("^body=(.+)$")
-					if body then
-						edit_opts.body = body
-					end
-					local add = token:match("^add=(.+)$")
-					if add then
-						edit_opts.add_labels = parse_csv(add)
-					end
-					local remove = token:match("^remove=(.+)$")
-					if remove then
-						edit_opts.remove_labels = parse_csv(remove)
-					end
-					local add_a = token:match("^add_assignees=(.+)$")
-					if add_a then
-						edit_opts.add_assignees = parse_csv(add_a)
-					end
-					local remove_a = token:match("^remove_assignees=(.+)$")
-					if remove_a then
-						edit_opts.remove_assignees = parse_csv(remove_a)
-					end
+				local edit_opts, edit_error =
+					parse_edit_options("issue", ctx.args, 4, usage)
+				if edit_error then
+					return edit_error
 				end
 
 				gh_issues.edit(number, edit_opts, {}, function(err, _result)
@@ -1858,37 +1927,19 @@ local function register_builtin_subcommands(cfg)
 			end
 
 			if action == "edit" then
+				local usage = "Usage: :Gitflow pr edit <number>"
+					.. " [add=...] [remove=...]"
+					.. " [add_assignees=...] [remove_assignees=...]"
+					.. " [reviewers=...]"
 				local number = first_positional_from(ctx.args, 3)
 				if not number then
-					return "Usage: :Gitflow pr edit <number>"
-						.. " [add=...] [remove=...]"
-						.. " [add_assignees=...] [remove_assignees=...]"
-						.. " [reviewers=...]"
+					return usage
 				end
 
-				local edit_opts = {}
-				for i = 4, #ctx.args do
-					local token = ctx.args[i]
-					local add = token:match("^add=(.+)$")
-					if add then
-						edit_opts.add_labels = parse_csv(add)
-					end
-					local remove = token:match("^remove=(.+)$")
-					if remove then
-						edit_opts.remove_labels = parse_csv(remove)
-					end
-					local add_a = token:match("^add_assignees=(.+)$")
-					if add_a then
-						edit_opts.add_assignees = parse_csv(add_a)
-					end
-					local remove_a = token:match("^remove_assignees=(.+)$")
-					if remove_a then
-						edit_opts.remove_assignees = parse_csv(remove_a)
-					end
-					local reviewers = token:match("^reviewers=(.+)$")
-					if reviewers then
-						edit_opts.reviewers = parse_csv(reviewers)
-					end
+				local edit_opts, edit_error =
+					parse_edit_options("pr", ctx.args, 4, usage)
+				if edit_error then
+					return edit_error
 				end
 
 				gh_prs.edit(number, edit_opts, {}, function(err, _result)
@@ -2086,20 +2137,27 @@ local function register_builtin_subcommands(cfg)
 					return "Usage: :Gitflow worktree add <path> [ref] [-b <branch>]"
 				end
 				local opts = {}
-				for i = 4, #ctx.args do
+				local i = 4
+				while i <= #ctx.args do
 					local token = ctx.args[i]
 					if token == "-b" or token == "--branch" then
-						opts.new_branch = trimmed_or_nil(ctx.args[i + 1])
+						local branch = trimmed_or_nil(ctx.args[i + 1])
+						if not branch or vim.startswith(branch, "-") then
+							return ("%s requires a branch name"):format(token)
+						end
+						opts.new_branch = branch
+						i = i + 2
 					elseif token == "--force" then
 						opts.force = true
+						i = i + 1
 					elseif token == "--detach" then
 						opts.detach = true
-					elseif
-						not vim.startswith(token, "-")
-						and ctx.args[i - 1] ~= "-b"
-						and ctx.args[i - 1] ~= "--branch"
-					then
+						i = i + 1
+					elseif not vim.startswith(token, "-") then
 						opts.ref = token
+						i = i + 1
+					else
+						return ("Unknown worktree add option: %s"):format(token)
 					end
 				end
 				git_worktree.add(path, opts, function(err)
@@ -2451,6 +2509,17 @@ local function complete_label(subaction, arglead)
 	return filter_candidates(arglead, { "list", "create", "delete" })
 end
 
+---xpcall handler: keep the original cause plus a traceback so a crash stays
+---reportable after dispatch turns it into a plain message.
+---@param err any
+---@return string
+local function handler_traceback(err)
+	if type(err) ~= "string" then
+		err = vim.inspect(err)
+	end
+	return debug.traceback(err, 2)
+end
+
 ---@param args string[]
 ---@param cfg GitflowConfig
 ---@return string
@@ -2469,10 +2538,18 @@ function M.dispatch(args, cfg)
 		return message
 	end
 
-	local result = subcommand.run({
+	local ok, result = xpcall(subcommand.run, handler_traceback, {
 		args = args,
 		config = cfg,
 	})
+	if not ok then
+		local message = ("Gitflow subcommand '%s' failed: %s"):format(
+			subcommand_name,
+			result
+		)
+		utils.notify(message, vim.log.levels.ERROR)
+		return message
+	end
 
 	if result and result ~= "" and subcommand_name ~= "help" then
 		show_info(result)
