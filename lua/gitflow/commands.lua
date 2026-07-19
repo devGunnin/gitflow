@@ -144,6 +144,11 @@ local function output_mentions_upstream_problem(output)
 	if normalized:find("no upstream", 1, true) then
 		return true
 	end
+	-- A branch created from another branch can inherit a differently-named
+	-- upstream; git refuses the push with this wording instead of "no upstream".
+	if normalized:find("upstream branch of your current branch does not match", 1, true) then
+		return true
+	end
 	return false
 end
 
@@ -251,8 +256,90 @@ local function open_commit_prompt(amend)
 	end)
 end
 
+---Read one git config value. An unset key (exit 1) is a normal outcome and
+---yields nil; any other failure is surfaced.
+---@param key string
+---@param cb fun(value: string|nil, err: string|nil)
+local function read_git_config(key, cb)
+	git.git({ "config", "--get", key }, {}, function(result)
+		if result.code ~= 0 and result.code ~= 1 then
+			cb(nil, result_message(result, ("git config --get %s failed"):format(key)))
+			return
+		end
+
+		local value = vim.trim(result.stdout or "")
+		if value == "" then
+			cb(nil, nil)
+			return
+		end
+		cb(value, nil)
+	end)
+end
+
+---Push-remote config keys in git's own precedence order: `pushRemote` and
+---`pushDefault` override the branch's tracking remote for pushes.
+---@param branch string
+---@return string[]
+local function push_remote_config_keys(branch)
+	return {
+		("branch.%s.pushRemote"):format(branch),
+		"remote.pushDefault",
+		("branch.%s.remote"):format(branch),
+	}
+end
+
+---@param keys string[]
+---@param index integer
+---@param cb fun(value: string|nil, err: string|nil)
+local function first_configured_value(keys, index, cb)
+	if index > #keys then
+		cb(nil, nil)
+		return
+	end
+
+	read_git_config(keys[index], function(value, err)
+		if err then
+			cb(nil, err)
+			return
+		end
+		if value then
+			cb(value, nil)
+			return
+		end
+		first_configured_value(keys, index + 1, cb)
+	end)
+end
+
+---Pick the push destination. Never guesses between several equally plausible
+---remotes: pushing to the wrong one is not recoverable from the user's side.
+---@param branch string
+---@param remotes string[]
+---@param configured string|nil  first push-remote config value that was set
+---@return string|nil remote, string|nil err
+local function select_push_remote(branch, remotes, configured)
+	-- "." is the local repository (branch.autoSetupMerge=always), not a remote.
+	if configured and configured ~= "." then
+		if not vim.tbl_contains(remotes, configured) then
+			return nil, ("Configured push remote '%s' is not a known remote (have: %s)")
+				:format(configured, table.concat(remotes, ", "))
+		end
+		return configured, nil
+	end
+
+	if #remotes == 1 then
+		return remotes[1], nil
+	end
+	if vim.tbl_contains(remotes, "origin") then
+		return "origin", nil
+	end
+
+	return nil, ("Ambiguous push remote for '%s': %s. Set one with 'git config branch.%s.pushRemote <remote>'")
+		:format(branch, table.concat(remotes, ", "), branch)
+end
+
+---@param branch string
 ---@param cb fun(remote: string|nil, err: string|nil)
-local function resolve_push_remote(cb)
+local function resolve_push_remote(branch, cb)
 	git.git({ "remote" }, {}, function(result)
 		if result.code ~= 0 then
 			cb(nil, result_message(result, "git remote failed"))
@@ -266,19 +353,13 @@ local function resolve_push_remote(cb)
 		end
 
 		local remotes = vim.split(output, "\n", { plain = true, trimempty = true })
-		if #remotes == 1 then
-			cb(remotes[1], nil)
-			return
-		end
-
-		for _, name in ipairs(remotes) do
-			if name == "origin" then
-				cb("origin", nil)
+		first_configured_value(push_remote_config_keys(branch), 1, function(configured, config_err)
+			if config_err then
+				cb(nil, config_err)
 				return
 			end
-		end
-
-		cb(remotes[1], nil)
+			cb(select_push_remote(branch, remotes, configured))
+		end)
 	end)
 end
 
@@ -302,7 +383,7 @@ local function push_with_upstream(on_done)
 			return
 		end
 
-		resolve_push_remote(function(remote, remote_err)
+		resolve_push_remote(branch, function(remote, remote_err)
 			if remote_err or not remote then
 				show_error(remote_err or "Could not determine remote")
 				if on_done then
@@ -311,6 +392,7 @@ local function push_with_upstream(on_done)
 				return
 			end
 
+			-- Push the branch to a same-named branch on the remote and track it.
 			git.git({ "push", "-u", remote, branch }, {}, function(push_result)
 				if push_result.code ~= 0 then
 					show_error(result_message(push_result, "git push -u failed"))
@@ -319,7 +401,10 @@ local function push_with_upstream(on_done)
 					end
 					return
 				end
-				show_info(result_message(push_result, "Pushed with upstream tracking"))
+				show_info(result_message(
+					push_result,
+					("Pushed '%s' to %s and set upstream"):format(branch, remote)
+				))
 				emit_post_operation()
 				if on_done then
 					on_done(true)
