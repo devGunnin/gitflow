@@ -18,6 +18,10 @@ local ui = require("gitflow.ui")
 local git = require("gitflow.git")
 local utils = require("gitflow.utils")
 local status_panel = require("gitflow.panels.status")
+local signs = require("gitflow.signs")
+local git_status = require("gitflow.git.status")
+local git_branch = require("gitflow.git.branch")
+local notifications = require("gitflow.notifications")
 local diff_panel = require("gitflow.panels.diff")
 local log_panel = require("gitflow.panels.log")
 local stash_panel = require("gitflow.panels.stash")
@@ -61,6 +65,40 @@ local function with_temp_git_log(fn)
 	if not ok then
 		error(err, 0)
 	end
+end
+
+--- Count recorded git invocations whose argument line contains `needle`.
+---@param log_path string
+---@param needle string
+---@return integer
+local function count_git_calls(log_path, needle)
+	if vim.fn.filereadable(log_path) == 0 then
+		return 0
+	end
+	local count = 0
+	for _, line in ipairs(vim.fn.readfile(log_path)) do
+		if line:find(needle, 1, true) then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+--- A `git status` grouping with one unstaged file, used to tell an old status
+--- response apart from a newer one.
+---@param path string
+---@return table
+local function grouped_with_unstaged(path)
+	return {
+		staged = {},
+		unstaged = { {
+			path = path,
+			index_status = " ",
+			worktree_status = "M",
+			untracked = false,
+		} },
+		untracked = {},
+	}
 end
 
 --- Snapshot the identities of every live libuv timer handle.
@@ -339,6 +377,189 @@ T.run_suite("E2E: Async Determinism", {
 			leaked == 0,
 			("async work should not leak timers (leaked=%d)"):format(leaked)
 		)
+	end,
+
+	-- ── Sign update debouncing (#283) ─────────────────────────────────
+
+	-- `rev-parse --show-toplevel` opens every sign update chain, so it counts
+	-- the git PROCESSES a write costs. (The later commands in the chain are
+	-- already collapsed by signs' own tick, so they cannot show the waste.)
+	-- statusline also hooks BufWritePost and runs the same command, so it is
+	-- stubbed out to leave signs as the only producer.
+	["rapid writes collapse into a single sign update"] = function()
+		T.assert_true(
+			cfg.signs.enable and type(cfg.signs.debounce) == "number",
+			"test config should enable signs and declare a debounce interval"
+		)
+
+		with_temporary_patches({
+			{ table = statusline, key = "refresh", value = function() end },
+		}, function()
+			with_temp_git_log(function(log_path)
+				local path = vim.fn.tempname()
+				vim.fn.writefile({ "one" }, path)
+				vim.cmd("edit " .. vim.fn.fnameescape(path))
+				local bufnr = vim.api.nvim_get_current_buf()
+
+				-- Settle the initial attach so its chain isn't counted below.
+				signs.attach(bufnr)
+				T.drain_jobs(3000)
+				local before = count_git_calls(log_path, "rev-parse --show-toplevel")
+
+				for _ = 1, 5 do
+					vim.api.nvim_exec_autocmds("BufWritePost", { buffer = bufnr })
+				end
+
+				-- Past the debounce window, then let the surviving chain finish.
+				vim.wait(cfg.signs.debounce + 400)
+				T.drain_jobs(3000)
+
+				local spawned = count_git_calls(log_path, "rev-parse --show-toplevel") - before
+				T.assert_equals(
+					spawned, 1,
+					"5 rapid writes should spawn exactly 1 sign update chain"
+				)
+
+				vim.cmd("bwipeout! " .. bufnr)
+				pcall(vim.fn.delete, path)
+			end)
+		end)
+	end,
+
+	["unloading a buffer cancels its pending sign update"] = function()
+		with_temporary_patches({
+			{ table = statusline, key = "refresh", value = function() end },
+		}, function()
+			with_temp_git_log(function(log_path)
+				local path = vim.fn.tempname()
+				vim.fn.writefile({ "one" }, path)
+				vim.cmd("edit " .. vim.fn.fnameescape(path))
+				local bufnr = vim.api.nvim_get_current_buf()
+
+				signs.attach(bufnr)
+				T.drain_jobs(3000)
+				local before = count_git_calls(log_path, "rev-parse --show-toplevel")
+
+				-- Queue an update, then wipe the buffer before the timer fires.
+				vim.api.nvim_exec_autocmds("BufWritePost", { buffer = bufnr })
+				vim.cmd("bwipeout! " .. bufnr)
+
+				vim.wait(cfg.signs.debounce + 400)
+				T.drain_jobs(3000)
+
+				T.assert_equals(
+					count_git_calls(log_path, "rev-parse --show-toplevel") - before, 0,
+					"a wiped buffer's pending sign update should not run"
+				)
+				T.assert_true(
+					signs.state.debounce_ticks[bufnr] == nil,
+					"detach should drop the buffer's debounce token"
+				)
+
+				pcall(vim.fn.delete, path)
+			end)
+		end)
+	end,
+
+	-- ── Stale status responses are cancelled (#283) ───────────────────
+
+	["a superseded status response does not overwrite newer state"] = function()
+		status_panel.open(cfg, {})
+		T.drain_jobs(3000)
+
+		local release_stale
+		local fetch_calls = 0
+
+		local function fake_fetch(_opts, cb)
+			fetch_calls = fetch_calls + 1
+			if fetch_calls == 1 then
+				-- Hold the first (older) chain's response.
+				release_stale = function()
+					cb(nil, {}, grouped_with_unstaged("stale-file.txt"))
+				end
+				return
+			end
+			cb(nil, {}, grouped_with_unstaged("fresh-file.txt"))
+		end
+
+		with_temporary_patches({
+			{
+				table = git_branch,
+				key = "current",
+				value = function(_opts, cb)
+					cb(nil, "main")
+				end,
+			},
+			{ table = git_status, key = "fetch", value = fake_fetch },
+		}, function()
+			status_panel.refresh() -- older chain, held at fetch
+			status_panel.refresh() -- newer chain, resolves immediately
+			T.drain_jobs(3000)
+
+			local bufnr = ui.buffer.get("status")
+			T.wait_until(function()
+				return T.find_line(T.buf_lines(bufnr), "fresh-file.txt") ~= nil
+			end, "newer status response should render", 3000)
+
+			-- Now let the old response land last.
+			T.assert_true(
+				release_stale ~= nil,
+				"first status fetch should have been captured"
+			)
+			release_stale()
+			T.drain_jobs(3000)
+
+			local lines = T.buf_lines(bufnr)
+			T.assert_true(
+				T.find_line(lines, "fresh-file.txt") ~= nil,
+				"newer state should survive a late stale response"
+			)
+			T.assert_true(
+				T.find_line(lines, "stale-file.txt") == nil,
+				"superseded response must not repaint the panel"
+			)
+		end)
+
+		T.cleanup_panels()
+	end,
+
+	["a git failure in the current generation still surfaces"] = function()
+		status_panel.open(cfg, {})
+		T.drain_jobs(3000)
+		notifications.clear()
+
+		with_temporary_patches({
+			{
+				table = git_branch,
+				key = "current",
+				value = function(_opts, cb)
+					cb(nil, "main")
+				end,
+			},
+			{
+				table = git_status,
+				key = "fetch",
+				value = function(_opts, cb)
+					cb("git status failed: boom", nil, nil)
+				end,
+			},
+		}, function()
+			status_panel.refresh()
+			T.drain_jobs(3000)
+
+			local found = false
+			for _, entry in ipairs(notifications.entries()) do
+				if entry.message:find("boom", 1, true) then
+					found = true
+				end
+			end
+			T.assert_true(
+				found,
+				"a failure in the current generation must reach the user"
+			)
+		end)
+
+		T.cleanup_panels()
 	end,
 
 	-- ── vim.schedule callback ordering ────────────────────────────────

@@ -214,6 +214,13 @@ DIFF
       echo "error: push failed" >&2
       exit 1
     fi
+    # GITFLOW_GIT_UPSTREAM_MISMATCH=1 models a branch whose upstream has a
+    # different name: bare `git push` is refused, explicit `push -u` succeeds.
+    if [ "${GITFLOW_GIT_UPSTREAM_MISMATCH:-}" = "1" ] && [ $# -eq 0 ]; then
+      echo "fatal: The upstream branch of your current branch does not match" >&2
+      echo "the name of your current branch." >&2
+      exit 128
+    fi
     printf 'Everything up-to-date\n'
     ;;
 
@@ -328,12 +335,29 @@ DIFF
 
   # ── config ────────────────────────────────────────────────────────────
   config)
-    # config is used internally; silently succeed
+    # `--get <key>` is answered from GITFLOW_GIT_CONFIG ("key=value;key=value");
+    # an unset key exits 1 like real git. Other config forms silently succeed.
+    if [ "${1:-}" = "--get" ] && [ -n "${2:-}" ]; then
+      config_value=""
+      config_oldifs="$IFS"
+      IFS=';'
+      for config_pair in ${GITFLOW_GIT_CONFIG:-}; do
+        case "$config_pair" in
+          "$2="*) config_value="${config_pair#"$2="}" ;;
+        esac
+      done
+      IFS="$config_oldifs"
+      if [ -z "$config_value" ]; then
+        exit 1
+      fi
+      printf '%s\n' "$config_value"
+    fi
     ;;
 
   # ── remote ────────────────────────────────────────────────────────────
   remote)
-    printf 'origin\n'
+    # GITFLOW_GIT_REMOTES is a space-separated list; default is a single origin.
+    printf '%s\n' "${GITFLOW_GIT_REMOTES:-origin}" | tr ' ' '\n'
     ;;
 
   # ── restore ───────────────────────────────────────────────────────────

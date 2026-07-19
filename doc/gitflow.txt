@@ -172,6 +172,21 @@ inline_blame ~
     delay           number      200             Debounce (ms) before blaming
     date_format     string      "%Y-%m-%d"      os.date() format for the date
 
+                                                  *gitflow-config-validation*
+validation ~
+
+    setup() rejects a config it cannot honour instead of ignoring it.
+
+    Unknown options raise an error naming the full path, with a suggestion
+    when the key looks like a typo.  For example: >
+        require("gitflow").setup({ inline_blame = { enalbe = false } })
+<   raises: >
+        unknown option 'inline_blame.enalbe' (did you mean 'enable'?)
+<   Highlight group names under `highlights` are free-form and never checked.
+
+    Duplicate keybindings raise an error naming the mapping and every action
+    bound to it, so a custom bind cannot silently shadow another feature.
+
 ==============================================================================
 6. COMMANDS                                                *gitflow-commands*
 

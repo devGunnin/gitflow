@@ -163,6 +163,17 @@ require("gitflow").setup({
 | `inline_blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
 | `inline_blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
 
+### Configuration Validation
+
+`setup()` rejects a config it cannot honour rather than silently ignoring it:
+
+- **Unknown options** raise an error naming the full path, with a suggestion
+  when the key looks like a typo — e.g. `inline_blame = { enalbe = false }`
+  reports `unknown option 'inline_blame.enalbe' (did you mean 'enable'?)`.
+  Highlight group names under `highlights` are free-form and never checked.
+- **Duplicate keybindings** raise an error naming the mapping and every action
+  bound to it, so a custom bind cannot silently shadow another feature.
+
 ## Commands
 
 All commands use the `:Gitflow` prefix.

@@ -4,6 +4,7 @@ local M = {}
 
 local SIGN_GROUP = "GitflowSigns"
 local EXTMARK_NAMESPACE = vim.api.nvim_create_namespace("gitflow_signs")
+local DEFAULT_DEBOUNCE_MS = 300
 
 M.sign_group = SIGN_GROUP
 M.extmark_namespace = EXTMARK_NAMESPACE
@@ -37,6 +38,7 @@ M.state = {
 	enabled = true,
 	attached = {},
 	update_ticks = {},
+	debounce_ticks = {},
 	next_sign_id = 1,
 	augroup = nil,
 }
@@ -369,6 +371,48 @@ function M.update_signs(bufnr)
 	end)
 end
 
+---@return integer
+local function debounce_ms()
+	local cfg = M.state.cfg
+	local value = cfg and cfg.signs and cfg.signs.debounce
+	if type(value) == "number" and value >= 0 then
+		return value
+	end
+	return DEFAULT_DEBOUNCE_MS
+end
+
+--- Debounced sign refresh: collapses a burst of writes into one git chain
+--- instead of spawning a process per write (#283). Per-buffer, so writing
+--- buffer A never cancels a pending update for buffer B. Cancellation is by
+--- token — a superseded or detached buffer leaves a stale token behind and
+--- its deferred callback does nothing.
+---@param bufnr integer
+function M.schedule_update(bufnr)
+	if not M.state.enabled then
+		return
+	end
+	if not is_normal_file_buffer(bufnr) or not buffer_path(bufnr) then
+		return
+	end
+
+	M.state.attached[bufnr] = true
+
+	local token = (M.state.debounce_ticks[bufnr] or 0) + 1
+	M.state.debounce_ticks[bufnr] = token
+
+	vim.defer_fn(function()
+		if M.state.debounce_ticks[bufnr] ~= token then
+			return
+		end
+		M.state.debounce_ticks[bufnr] = nil
+		if not vim.api.nvim_buf_is_valid(bufnr) then
+			M.detach(bufnr)
+			return
+		end
+		M.update_signs(bufnr)
+	end, debounce_ms())
+end
+
 ---@param bufnr integer
 function M.attach(bufnr)
 	if not M.state.enabled then
@@ -389,6 +433,8 @@ end
 function M.detach(bufnr)
 	M.state.attached[bufnr] = nil
 	M.state.update_ticks[bufnr] = nil
+	-- Drop the debounce token so a pending deferred update becomes a no-op.
+	M.state.debounce_ticks[bufnr] = nil
 	clear_signs(bufnr)
 end
 
@@ -433,8 +479,7 @@ function M.setup(cfg)
 	vim.api.nvim_create_autocmd("BufWritePost", {
 		group = M.state.augroup,
 		callback = function(args)
-			M.attach(args.buf)
-			M.update_signs(args.buf)
+			M.schedule_update(args.buf)
 		end,
 	})
 
