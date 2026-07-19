@@ -1,0 +1,1 @@
+- **[pitfall]** components.split_hint_bar() returns early under the float layout, so a panel's missing/nil *_HINTS table only crashes in the SPLIT layout. tests/minimal_init.lua sets default_layout=split, so the e2e suite catches this class of bug but manual float-layout use does not.  _(2026-07-19T22:51:57Z)_
