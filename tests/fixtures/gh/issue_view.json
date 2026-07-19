@@ -5,6 +5,7 @@
   "state": "OPEN",
   "labels": [{"name": "enhancement", "color": "a2eeef"}],
   "assignees": [{"login": "octocat"}],
+  "milestone": {"title": "v1.0"},
   "author": {"login": "devGunnin"},
   "comments": [
     {"body": "I can take this on.", "author": {"login": "octocat"}},
