@@ -9,6 +9,7 @@ local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local label_picker = require("gitflow.ui.label_picker")
 local list_picker = require("gitflow.ui.list_picker")
+local derive = require("gitflow.issues.derive")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
 
@@ -16,7 +17,9 @@ local highlights = require("gitflow.highlights")
 ---@field bufnr integer|nil
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
----@field filters table
+---@field fetch table  server-side query for the cached fetch
+---@field cache table[]|nil  raw issues from the last fetch
+---@field filters table  client-side predicate applied to the cache
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_issue_number integer|nil
@@ -28,11 +31,16 @@ local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · x close · L labels"
 	.. " · A assign · r refresh · b back · q close "
 
+--- Fetch broadly once so filter changes never need another `gh` round-trip.
+local DEFAULT_FETCH_LIMIT = 300
+
 ---@type GitflowIssuePanelState
 M.state = {
 	bufnr = nil,
 	winid = nil,
 	cfg = nil,
+	fetch = { state = "all", limit = DEFAULT_FETCH_LIMIT },
+	cache = nil,
 	filters = {},
 	line_entries = {},
 	mode = "list",
@@ -125,7 +133,7 @@ local function ensure_window(cfg)
 	vim.keymap.set("n", "b", function()
 		if M.state.mode == "view" then
 			M.state.mode = "list"
-			M.refresh()
+			M.rerender()
 		end
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -518,34 +526,61 @@ local function entry_under_cursor()
 	return M.state.line_entries[line]
 end
 
+---Split requested options into the server-side query and the client-side
+---predicate: only what the client cannot evaluate is sent to `gh`.
+---@param options table
+local function set_query(options)
+	M.state.fetch = {
+		state = "all",
+		limit = tonumber(options.limit) or DEFAULT_FETCH_LIMIT,
+		search = options.search,
+		assignee = derive.is_server_selector(options.assignee)
+			and options.assignee or nil,
+	}
+	M.state.filters = {
+		state = options.state or "open",
+		label = options.label,
+		assignee = options.assignee,
+		milestone = options.milestone,
+	}
+end
+
 ---@param cfg GitflowConfig
 ---@param filters table|nil
 function M.open(cfg, filters)
 	M.state.cfg = cfg
-	M.state.filters = vim.tbl_extend("force", {
-		state = "open",
-		label = nil,
-		assignee = nil,
-		limit = 100,
-	}, filters or {})
+	set_query(filters or {})
+	M.state.cache = nil
 
 	ensure_window(cfg)
 	M.refresh()
 end
 
+---Re-render from the cache. Filter, sort, and grouping changes go through
+---here so they cost no `gh` call.
+function M.rerender()
+	if not M.state.cache then
+		M.refresh()
+		return
+	end
+	render_list(derive.filter(M.state.cache, M.state.filters))
+end
+
+---Refetch from GitHub and re-render.
 function M.refresh()
 	if not M.state.cfg then
 		return
 	end
 
 	render_loading("Loading issues...")
-	gh_issues.list(M.state.filters, {}, function(err, issues)
+	gh_issues.list(M.state.fetch, {}, function(err, issues)
 		if err then
 			render_loading("Failed to load issues")
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		render_list(issues or {})
+		M.state.cache = issues or {}
+		render_list(derive.filter(M.state.cache, M.state.filters))
 	end)
 end
 
