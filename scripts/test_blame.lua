@@ -272,6 +272,8 @@ vim.cmd("edit " .. repo_dir .. "/test.txt")
 -- Open blame panel
 test("blame panel should open and show content", function()
 	commands.dispatch({ "blame" }, cfg)
+	-- Wait for real blame output, not the title: "Gitflow Blame" is present
+	-- while the panel still shows "Computing blame…".
 	wait_until(function()
 		return blame_panel.state.bufnr ~= nil
 			and vim.api.nvim_buf_is_valid(blame_panel.state.bufnr)
@@ -279,9 +281,9 @@ test("blame panel should open and show content", function()
 				vim.api.nvim_buf_get_lines(
 					blame_panel.state.bufnr, 0, -1, false
 				),
-				"Blame"
+				commit_sha
 			) ~= nil
-	end, "blame panel should open with title")
+	end, "blame panel should open with blame content")
 
 	local lines = vim.api.nvim_buf_get_lines(
 		blame_panel.state.bufnr, 0, -1, false

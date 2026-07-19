@@ -33,6 +33,26 @@ local function wait_until(predicate, message, timeout_ms)
 	assert_true(ok, message)
 end
 
+---Flatten a float window's footer (string or chunk list) into plain text.
+local function footer_text(winid)
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return ""
+	end
+	local footer = vim.api.nvim_win_get_config(winid).footer
+	if type(footer) == "string" then
+		return footer
+	end
+	if type(footer) ~= "table" then
+		return ""
+	end
+	local parts = {}
+	for _, part in ipairs(footer) do
+		parts[#parts + 1] = type(part) == "table"
+			and tostring(part[1]) or tostring(part)
+	end
+	return table.concat(parts)
+end
+
 local function find_line(lines, needle, start_line)
 	local from = start_line or 1
 	for i = from, #lines do
@@ -328,8 +348,13 @@ test("issue list shows assignees", function()
 	local issue_buf = buffer.get("issues")
 	assert_true(issue_buf ~= nil, "issue buf exists")
 	local lines = vim.api.nvim_buf_get_lines(issue_buf, 0, -1, false)
+	-- Assignees render as an icon + chip on the row's meta line, which
+	-- directly follows its title line.
+	local title = find_line(lines, "#10")
+	assert_true(title ~= nil, "issue #10 should be listed")
+	local meta = lines[title + 1] or ""
 	assert_true(
-		find_line(lines, "assignees: alice") ~= nil,
+		meta:find("alice", 1, true) ~= nil,
 		"list should show assignees"
 	)
 end)
@@ -346,14 +371,6 @@ test("issue view shows assignees", function()
 	end, "issue view should show assignees")
 end)
 
-test("issue view footer includes A: assign", function()
-	local issue_buf = buffer.get("issues")
-	local lines = vim.api.nvim_buf_get_lines(issue_buf, 0, -1, false)
-	assert_true(
-		find_line(lines, "A: assign") ~= nil,
-		"view footer should include A: assign"
-	)
-end)
 
 -- ── 4. Issue panel assign prompt flow ──
 
@@ -449,32 +466,36 @@ test("pr list shows assignees", function()
 	local pr_buf = buffer.get("prs")
 	assert_true(pr_buf ~= nil, "pr buf exists")
 	local lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
+	local title = find_line(lines, "#20")
+	assert_true(title ~= nil, "pr #20 should be listed")
+	local meta = lines[title + 1] or ""
 	assert_true(
-		find_line(lines, "assignees: bob") ~= nil,
+		meta:find("bob", 1, true) ~= nil,
 		"pr list should show assignees"
 	)
 end)
 
 test("pr view shows assignees", function()
 	commands.dispatch({ "pr", "view", "20" }, cfg)
+	-- Meta keys are padded to a per-panel width, so match key and value on
+	-- the same line rather than a fixed single space.
 	wait_until(function()
 		local bufnr = buffer.get("prs")
 		if not bufnr then
 			return false
 		end
 		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		return find_line(lines, "Assignees: bob") ~= nil
+		for _, line in ipairs(lines) do
+			if line:find("Assignees:", 1, true)
+				and line:find("bob", 1, true)
+			then
+				return true
+			end
+		end
+		return false
 	end, "pr view should show assignees")
 end)
 
-test("pr view footer includes A: assign", function()
-	local pr_buf = buffer.get("prs")
-	local lines = vim.api.nvim_buf_get_lines(pr_buf, 0, -1, false)
-	assert_true(
-		find_line(lines, "A: assign") ~= nil,
-		"pr view footer should include A: assign"
-	)
-end)
 
 -- ── 6. PR panel assign prompt flow ──
 
@@ -548,6 +569,51 @@ test("issue edit with remove_assignees= dispatches correctly", function()
 			gh_lines_before + 1
 		) ~= nil
 	end, "CLI issue edit remove_assignees= should pass to gh")
+end)
+
+-- ── Float footer hints ──
+-- The keybind hints live in the float window footer; the split layout has no
+-- in-buffer hint bar. These run last: they reopen the panels as floats, so
+-- they must not disturb the split-layout tests above.
+
+test("issue panel float footer includes assign hint", function()
+	local float_cfg = vim.deepcopy(cfg)
+	float_cfg.ui.default_layout = "float"
+	float_cfg.ui.float.footer = true
+
+	issues_panel.close()
+	issues_panel.open(float_cfg)
+	wait_until(function()
+		return issues_panel.state.winid ~= nil
+			and vim.api.nvim_win_is_valid(issues_panel.state.winid)
+	end, "issue float should open")
+
+	local footer = footer_text(issues_panel.state.winid)
+	issues_panel.close()
+	assert_true(
+		footer:find("A assign", 1, true) ~= nil,
+		"issue float footer should include the assign hint"
+	)
+end)
+
+test("pr panel float footer includes assign hint", function()
+	local float_cfg = vim.deepcopy(cfg)
+	float_cfg.ui.default_layout = "float"
+	float_cfg.ui.float.footer = true
+
+	pr_panel.close()
+	pr_panel.open(float_cfg)
+	wait_until(function()
+		return pr_panel.state.winid ~= nil
+			and vim.api.nvim_win_is_valid(pr_panel.state.winid)
+	end, "pr float should open")
+
+	local footer = footer_text(pr_panel.state.winid)
+	pr_panel.close()
+	assert_true(
+		footer:find("A assign", 1, true) ~= nil,
+		"pr float footer should include the assign hint"
+	)
 end)
 
 -- ── Cleanup ──
