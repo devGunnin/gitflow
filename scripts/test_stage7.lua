@@ -2,6 +2,7 @@ local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:append(project_root)
 dofile(project_root .. "/scripts/test_real_git.lua")
+local compose = dofile(project_root .. "/scripts/test_compose_form.lua")
 
 local function assert_true(condition, message)
 	if not condition then
@@ -139,12 +140,6 @@ local previous_cwd = vim.fn.getcwd()
 vim.fn.chdir(repo_dir)
 vim.env.GIT_EDITOR = ":"
 
-local original_input = vim.ui.input
-local prompt_values = { "stage7 quick commit", "stage7 quick push" }
-vim.ui.input = function(_, on_confirm)
-	on_confirm(table.remove(prompt_values, 1))
-end
-
 local gitflow = require("gitflow")
 local cfg = gitflow.setup({
 	ui = {
@@ -173,6 +168,7 @@ end
 
 write_file(repo_dir .. "/tracked.txt", { "base line", "quick commit line" })
 commands.dispatch({ "quick-commit" }, cfg)
+compose.submit("stage7 quick commit")
 wait_until(function()
 	local output = run_git(repo_dir, { "log", "--oneline", "-n", "1" })
 	return output:find("stage7 quick commit", 1, true) ~= nil
@@ -180,14 +176,13 @@ end, "quick-commit should create a commit")
 
 write_file(repo_dir .. "/tracked.txt", { "base line", "quick commit line", "quick push line" })
 commands.dispatch({ "quick-push" }, cfg)
+compose.submit("stage7 quick push")
 wait_until(function()
 	local ahead = vim.trim(run_git(repo_dir, { "rev-list", "--count", "@{upstream}..HEAD" }))
 	return ahead == "0"
 end, "quick-push should leave branch in sync with upstream")
 
 local git_mod = require("gitflow.git")
-prompt_values[#prompt_values + 1] = "unused quick push prompt"
-local prompt_count_before = #prompt_values
 cfg = gitflow.setup({
 	quick_actions = {
 		quick_push = { "push" },
@@ -221,9 +216,8 @@ assert_true(
 	status_output:find("tracked.txt", 1, true) ~= nil,
 	"custom quick-push sequence should leave tracked changes uncommitted"
 )
-assert_equals(
-	#prompt_values,
-	prompt_count_before,
+assert_true(
+	not compose.is_open(),
 	"custom quick-push sequence should not prompt for a commit message"
 )
 
@@ -446,7 +440,6 @@ assert_true(
 assert_true(not palette_panel.is_open(), "palette should close after selection")
 
 palette_panel.close()
-vim.ui.input = original_input
 vim.fn.chdir(previous_cwd)
 
 print("Stage 7 smoke tests passed")
