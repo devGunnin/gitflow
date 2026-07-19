@@ -488,6 +488,8 @@ end
 ---@field old_line integer|nil
 ---@field pending boolean
 ---@field count integer|nil  number of comments in this thread (for label)
+---@field expanded boolean|nil  thread is folded out (#360)
+---@field replies { author: string|nil, body: string }[]|nil  when expanded
 
 local BOX_MAX_WIDTH = 72
 local BOX_MIN_WIDTH = 28
@@ -546,39 +548,79 @@ local function wrap_text(text, width)
 	return out
 end
 
+--- Title shown in the top border of a comment box.
+---@param c GitflowReviewInlineComment
+---@return string
+local function box_header(c)
+	local author = (c.author and c.author ~= "") and c.author or "unknown"
+	local count = c.count or 1
+	local header = ("%s · %s"):format(c.pending and "draft" or "thread", author)
+	if count > 1 then
+		header = header .. (" · %d repl%s"):format(
+			count - 1, (count - 1) == 1 and "y" or "ies")
+		-- Advertise the fold-out: the replies are invisible otherwise (#360).
+		if not c.expanded then
+			header = header .. " · <leader>t"
+		end
+	end
+	local line_no = c.new_line or c.old_line
+	if line_no then
+		header = header .. (" · L%d"):format(line_no)
+	end
+	return header
+end
+
+--- Wrapped reply blocks for a folded-out thread (#360); empty when collapsed.
+---@param c GitflowReviewInlineComment
+---@return { author: string, lines: string[] }[]
+local function box_reply_blocks(c)
+	local blocks = {}
+	for _, r in ipairs(c.replies or {}) do
+		local who = (r.author and r.author ~= "") and r.author or "unknown"
+		blocks[#blocks + 1] = {
+			author = ("@%s"):format(who),
+			lines = wrap_text(r.body or "", BOX_MAX_WIDTH),
+		}
+	end
+	return blocks
+end
+
+--- Widest content row, clamped to the box's min/max, excluding the borders.
+---@param header string
+---@param body_lines string[]
+---@param replies { author: string, lines: string[] }[]
+---@return integer
+local function box_inner_width(header, body_lines, replies)
+	local inner = disp_width(header) + 2
+	for _, bl in ipairs(body_lines) do
+		inner = math.max(inner, disp_width(bl))
+	end
+	for _, reply in ipairs(replies) do
+		inner = math.max(inner, disp_width(reply.author) + 2)
+		for _, bl in ipairs(reply.lines) do
+			inner = math.max(inner, disp_width(bl))
+		end
+	end
+	return math.max(BOX_MIN_WIDTH, math.min(inner, BOX_MAX_WIDTH))
+end
+
 --- Build the virt_lines for a single comment, drawn as a rounded box:
 ---
 ---   ╭─ draft · you ─────────╮
 ---   │ the comment body      │
 ---   ╰───────────────────────╯
 ---
+--- A folded-out thread appends each reply under its own author rule (#360).
 ---@param c GitflowReviewInlineComment
 ---@return table[]  list of virt_line chunk-lists
 local function build_comment_box(c)
-	local is_draft = c.pending
-	local border_hl = is_draft
+	local border_hl = c.pending
 		and "GitflowReviewDraftBox" or "GitflowReviewCommentBox"
-	local kind = is_draft and "draft" or "thread"
-	local author = (c.author and c.author ~= "") and c.author or "unknown"
-	local count = c.count or 1
-	local header = ("%s · %s"):format(kind, author)
-	if count > 1 then
-		header = header .. (" · %d repl%s"):format(
-			count - 1, (count - 1) == 1 and "y" or "ies")
-	end
-	local line_no = c.new_line or c.old_line
-	if line_no then
-		header = header .. (" · L%d"):format(line_no)
-	end
-
+	local header = box_header(c)
 	local body_lines = wrap_text(c.body or "", BOX_MAX_WIDTH)
+	local replies = box_reply_blocks(c)
 
-	-- Inner content width: widest of header (+ "─ " " " framing) or body.
-	local inner = disp_width(header) + 2
-	for _, bl in ipairs(body_lines) do
-		inner = math.max(inner, disp_width(bl))
-	end
-	inner = math.max(BOX_MIN_WIDTH, math.min(inner, BOX_MAX_WIDTH))
+	local inner = box_inner_width(header, body_lines, replies)
 	local span = inner + 2 -- cells between the two corner glyphs
 
 	local function pad(s)
@@ -601,14 +643,29 @@ local function build_comment_box(c)
 		{ " " .. string.rep("─", dashes) .. "╮", border_hl },
 	}
 
-	-- Body rows.
-	for _, bl in ipairs(body_lines) do
+	local function push_body_rows(rows)
+		for _, bl in ipairs(rows) do
+			virt_lines[#virt_lines + 1] = {
+				{ BOX_INDENT, "GitflowReviewCommentBox" },
+				{ "│ ", border_hl },
+				{ pad(bl), "GitflowReviewCommentBody" },
+				{ " │", border_hl },
+			}
+		end
+	end
+
+	push_body_rows(body_lines)
+
+	for _, reply in ipairs(replies) do
+		local seg_w = 2 + disp_width(reply.author) + 1 -- "─ " + author + " "
 		virt_lines[#virt_lines + 1] = {
 			{ BOX_INDENT, "GitflowReviewCommentBox" },
-			{ "│ ", border_hl },
-			{ pad(bl), "GitflowReviewCommentBody" },
-			{ " │", border_hl },
+			{ "├─ ", border_hl },
+			{ reply.author, "GitflowReviewAuthor" },
+			{ " " .. string.rep("─", math.max(0, span - seg_w)) .. "┤",
+				border_hl },
 		}
+		push_body_rows(reply.lines)
 	end
 
 	-- Bottom border.
