@@ -436,6 +436,106 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		)
 	end,
 
+	["view records a failing --log-failed instead of reporting clean success"] = function()
+		local run_result = nil
+		local err_result = nil
+		with_temporary_patches({
+			{
+				table = gh,
+				key = "json",
+				value = function(_, _, cb)
+					cb(nil, {
+						databaseId = 777,
+						name = "CI",
+						headBranch = "main",
+						status = "completed",
+						conclusion = "failure",
+						event = "push",
+						url = "https://example.invalid/actions/runs/777",
+						displayTitle = "CI",
+						jobs = {
+							{
+								databaseId = 1,
+								name = "linux",
+								status = "completed",
+								conclusion = "failure",
+								steps = {
+									{
+										name = "Run tests",
+										status = "completed",
+										conclusion = "failure",
+										number = 1,
+									},
+								},
+							},
+						},
+					})
+				end,
+			},
+			{
+				table = gh,
+				key = "run",
+				value = function(_, _, cb)
+					cb({
+						code = 1,
+						signal = 0,
+						stdout = "",
+						stderr = "failed to fetch logs: HTTP 503",
+						cmd = { "gh" },
+					})
+				end,
+			},
+		}, function()
+			T.wait_async(function(done)
+				gh_actions.view(777, nil, function(err, run)
+					err_result = err
+					run_result = run
+					done()
+				end)
+			end)
+		end)
+
+		-- The run itself loaded, so it is still delivered; only the optional
+		-- log enrichment failed, and that failure must not vanish.
+		T.assert_true(
+			err_result == nil,
+			"run data loaded, so view should not fail outright: "
+				.. tostring(err_result)
+		)
+		T.assert_true(run_result ~= nil, "view should still return the run")
+		T.assert_true(
+			type(run_result.log_error) == "string" and run_result.log_error ~= "",
+			"a non-zero --log-failed exit must be recorded on the run"
+		)
+		T.assert_true(
+			run_result.log_error:find("503", 1, true) ~= nil,
+			"log_error should carry the gh output: "
+				.. tostring(run_result.log_error)
+		)
+		T.assert_true(
+			run_result.jobs[1].steps[1].log_snippet == nil,
+			"no snippet should be attached when the log fetch failed"
+		)
+	end,
+
+	["view leaves log_error unset when --log-failed succeeds"] = function()
+		local run_result = nil
+
+		T.wait_async(function(done)
+			gh_actions.view(12345, nil, function(_, run)
+				run_result = run
+				done()
+			end)
+		end)
+
+		T.assert_true(run_result ~= nil, "view should return a run")
+		T.assert_true(
+			run_result.log_error == nil,
+			"a successful log fetch should not record an error: "
+				.. tostring(run_result.log_error)
+		)
+	end,
+
 	["status_icon returns correct icons for each state"] = function()
 		T.assert_equals(
 			gh_actions.status_icon({ conclusion = "success", status = "" }),
