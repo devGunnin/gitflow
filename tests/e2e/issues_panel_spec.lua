@@ -401,6 +401,98 @@ T.run_suite("issues_panel_spec", {
 		)
 	end,
 
+	-- ── #387 client-side sorting ───────────────────────────────────────
+
+	["sort orders by each supported key"] = function()
+		local all = { state = "all" }
+		T.assert_deep_equals(
+			numbers_of(derive.apply(ALL_ISSUES, all, { key = "number", direction = "asc" })),
+			{ 1, 2, 3 },
+			"number ascending"
+		)
+		T.assert_deep_equals(
+			numbers_of(derive.apply(ALL_ISSUES, all, { key = "number", direction = "desc" })),
+			{ 3, 2, 1 },
+			"number descending"
+		)
+		T.assert_deep_equals(
+			numbers_of(derive.apply(ALL_ISSUES, all, { key = "updated", direction = "desc" })),
+			{ 1, 2, 3 },
+			"most recently updated first"
+		)
+		T.assert_deep_equals(
+			numbers_of(derive.apply(ALL_ISSUES, all, { key = "title", direction = "asc" })),
+			{ 2, 1, 3 },
+			"title ascending: Fix, Setup, Update"
+		)
+	end,
+
+	["issues without a milestone sort last ascending"] = function()
+		T.assert_deep_equals(
+			numbers_of(derive.apply(
+				ALL_ISSUES, { state = "all" }, { key = "milestone", direction = "asc" }
+			)),
+			{ 1, 3, 2 },
+			"the unmilestoned issue should trail the v1.0 ones"
+		)
+	end,
+
+	["an unknown sort key falls back to the default"] = function()
+		T.assert_deep_equals(
+			numbers_of(derive.apply(ALL_ISSUES, { state = "all" }, { key = "bogus" })),
+			numbers_of(derive.apply(ALL_ISSUES, { state = "all" }, nil)),
+			"an unknown key should behave like the default sort"
+		)
+	end,
+
+	["s cycles the sort and S flips direction, in place"] = function()
+		reset_gh_log()
+		open_and_wait({ state = "all" })
+		issues_panel.state.sort = { key = "updated", direction = "desc" }
+		issues_panel.rerender()
+
+		T.assert_contains(
+			panel_lines()[T.find_line(panel_lines(), "issue")],
+			"sort updated desc",
+			"summary bar should show the active sort"
+		)
+
+		issues_panel.cycle_sort()
+		T.assert_equals(issues_panel.state.sort.key, "number", "updated -> number")
+
+		issues_panel.toggle_sort_direction()
+		T.assert_equals(issues_panel.state.sort.direction, "asc", "desc -> asc")
+
+		local lines = panel_lines()
+		local first = T.find_line(lines, "Setup CI pipeline")
+		local last = T.find_line(lines, "Update README")
+		T.assert_true(
+			first ~= nil and last ~= nil and first < last,
+			"number ascending should list #1 before #3"
+		)
+		T.assert_equals(
+			gh_call_count("issue list"), 1,
+			"sorting must not refetch"
+		)
+	end,
+
+	["sort survives a refresh"] = function()
+		open_and_wait({ state = "all" })
+		issues_panel.state.sort = { key = "title", direction = "asc" }
+		issues_panel.rerender()
+
+		issues_panel.refresh()
+		T.wait_until(function()
+			return T.find_line(panel_lines(), "Setup CI pipeline") ~= nil
+		end, "refresh should re-render the list", 5000)
+		T.drain_jobs()
+
+		T.assert_deep_equals(
+			issues_panel.state.sort, { key = "title", direction = "asc" },
+			"a refetch should not reset the session sort"
+		)
+	end,
+
 	["refresh refetches from GitHub"] = function()
 		reset_gh_log()
 		open_and_wait()

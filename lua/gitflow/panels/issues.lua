@@ -20,6 +20,7 @@ local highlights = require("gitflow.highlights")
 ---@field fetch table  server-side query for the cached fetch
 ---@field cache table[]|nil  raw issues from the last fetch
 ---@field filters table  client-side predicate applied to the cache
+---@field sort table  { key, direction }, kept across refreshes in a session
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_issue_number integer|nil
@@ -29,7 +30,8 @@ local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · x close · L labels"
-	.. " · A assign · f filter · X clear · r refresh · b back · q close "
+	.. " · A assign · f filter · X clear · s sort · S sort dir"
+	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
@@ -42,6 +44,7 @@ M.state = {
 	fetch = { state = "all", limit = DEFAULT_FETCH_LIMIT },
 	cache = nil,
 	filters = {},
+	sort = { key = "updated", direction = "desc" },
 	line_entries = {},
 	mode = "list",
 	active_issue_number = nil,
@@ -128,6 +131,14 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "X", function()
 		M.clear_filters()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "s", function()
+		M.cycle_sort()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "S", function()
+		M.toggle_sort_direction()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -336,6 +347,11 @@ local function summary_chunks(count)
 			chunks[#chunks + 1] = { maybe_text(value), "GitflowMeta" }
 		end
 	end
+	chunks[#chunks + 1] = { "   sort ", "GitflowMetaKey" }
+	chunks[#chunks + 1] = {
+		("%s %s"):format(M.state.sort.key, M.state.sort.direction),
+		"GitflowMeta",
+	}
 	return chunks
 end
 
@@ -591,7 +607,7 @@ function M.rerender()
 		M.refresh()
 		return
 	end
-	render_list(derive.filter(M.state.cache, M.state.filters))
+	render_list(derive.apply(M.state.cache, M.state.filters, M.state.sort))
 end
 
 ---Refetch from GitHub and re-render.
@@ -608,7 +624,7 @@ function M.refresh()
 			return
 		end
 		M.state.cache = issues or {}
-		render_list(derive.filter(M.state.cache, M.state.filters))
+		render_list(derive.apply(M.state.cache, M.state.filters, M.state.sort))
 	end)
 end
 
@@ -748,6 +764,24 @@ function M.clear_filters()
 	M.state.filters = { state = "open" }
 	M.rerender()
 	utils.notify("Cleared issue filters", vim.log.levels.INFO)
+end
+
+-- ── Sorting (#387) ────────────────────────────────────────────────────
+
+---Advance the sort key through updated -> number -> title -> milestone.
+function M.cycle_sort()
+	M.state.sort.key = derive.cycle(derive.SORT_KEYS, M.state.sort.key)
+	M.rerender()
+	utils.notify(
+		("Sorting issues by %s (%s)"):format(M.state.sort.key, M.state.sort.direction),
+		vim.log.levels.INFO
+	)
+end
+
+function M.toggle_sort_direction()
+	M.state.sort.direction =
+		M.state.sort.direction == "asc" and "desc" or "asc"
+	M.rerender()
 end
 
 ---@return table[]  filter-menu entries with their current value as description

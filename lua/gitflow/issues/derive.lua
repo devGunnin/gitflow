@@ -143,6 +143,87 @@ function M.filter(issues, filters)
 	return kept
 end
 
+M.SORT_KEYS = { "updated", "number", "title", "milestone" }
+M.SORT_DIRECTIONS = { "desc", "asc" }
+
+--- Sorts after every real milestone title, so unmilestoned issues trail the
+--- ascending order instead of leading it.
+local NO_MILESTONE_RANK = "\255"
+
+---Ordering value for an issue under a sort key. All issues must yield the
+---same Lua type for a key so `table.sort` sees a total order.
+---@param key string
+---@param issue table
+---@return number|string
+local function rank_of(key, issue)
+	if key == "number" then
+		return tonumber(issue.number) or 0
+	end
+	if key == "title" then
+		return text_of(issue.title):lower()
+	end
+	if key == "milestone" then
+		local title = M.milestone_title(issue)
+		return title ~= "" and title:lower() or NO_MILESTONE_RANK
+	end
+	return text_of(issue.updatedAt)
+end
+
+---@param sort table|nil  { key, direction }
+---@return string key, boolean descending
+local function normalize_sort(sort)
+	sort = sort or {}
+	local key = text_of(sort.key)
+	if not vim.tbl_contains(M.SORT_KEYS, key) then
+		key = M.SORT_KEYS[1]
+	end
+	return key, text_of(sort.direction):lower() ~= "asc"
+end
+
+---Sort a list without mutating it. Ties break on issue number so the order is
+---stable regardless of the incoming sequence.
+---@param issues table[]
+---@param sort table|nil
+---@return table[]
+function M.sort(issues, sort)
+	assert(type(issues) == "table", "derive.sort: issues must be a list")
+	local key, descending = normalize_sort(sort)
+
+	local ranked = {}
+	for index, issue in ipairs(issues) do
+		ranked[index] = {
+			issue = issue,
+			rank = rank_of(key, issue),
+			number = tonumber(issue.number) or 0,
+		}
+	end
+
+	table.sort(ranked, function(left, right)
+		if left.rank ~= right.rank then
+			if descending then
+				return left.rank > right.rank
+			end
+			return left.rank < right.rank
+		end
+		return left.number < right.number
+	end)
+
+	local sorted = {}
+	for index, entry in ipairs(ranked) do
+		sorted[index] = entry.issue
+	end
+	return sorted
+end
+
+---Filter then sort — the full list derivation from the fetched cache.
+---@param issues table[]
+---@param filters table|nil
+---@param sort table|nil
+---@return table[]
+function M.apply(issues, filters, sort)
+	return M.sort(M.filter(issues, filters), sort)
+end
+
 ---Distinct values of a field across the cache, sorted, for the filter pickers.
 ---@param issues table[]
 ---@param field "label"|"assignee"|"milestone"
