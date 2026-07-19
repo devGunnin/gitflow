@@ -16,6 +16,7 @@ local utils = require("gitflow.utils")
 local review_panel = require("gitflow.panels.review")
 local cache = require("gitflow.review.cache")
 local inline = require("gitflow.review.inline")
+local list_picker = require("gitflow.ui.list_picker")
 
 ---@param patches table[]
 ---@param fn fun()
@@ -1027,6 +1028,37 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["next_file and prev_file walk the file list and wrap"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 1
+		end, "at least two files should be populated after open")
+
+		local files = review_panel.state.files
+		review_panel.open_file(files[1].path)
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_file_idx, 1,
+			"opening the first file should make it active")
+
+		review_panel.next_file()
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, files[2].path,
+			"]f should open the next file in the list")
+
+		review_panel.prev_file()
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, files[1].path,
+			"[f should go back to the previous file")
+
+		review_panel.prev_file()
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, files[#files].path,
+			"[f on the first file should wrap to the last")
+
+		cleanup_panels()
+	end,
+
 	-- ── #357: toggle the diff overlay on/off ───────────────────────────
 
 	["toggle_diff_view hides and restores diff annotations"] = function()
@@ -1061,6 +1093,274 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			"show_diff should be true after toggling back on")
 		T.assert_true(diff_mark_count() > 0,
 			"diff annotations should be restored when toggled back on")
+
+		cleanup_panels()
+	end,
+
+	["file list names the active view layer while the diff is hidden"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local function file_list_text()
+			return table.concat(
+				T.buf_lines(review_panel.state.file_list_bufnr), "\n")
+		end
+
+		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
+			"the diff view is the default and needs no marker")
+
+		review_panel.toggle_diff_view()
+		T.drain_jobs(1000)
+		T.assert_contains(file_list_text(), "view: full file",
+			"the file list should name the full-file layer while it is active")
+
+		review_panel.toggle_diff_view()
+		T.drain_jobs(1000)
+		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
+			"the marker should disappear when the diff view comes back")
+
+		cleanup_panels()
+	end,
+
+	-- ── #366: review mode tears itself down completely ─────────────────
+
+	["close restores the winbar it replaced and drops review keymaps"] = function()
+		local outside_win = vim.api.nvim_get_current_win()
+		vim.api.nvim_set_option_value("winbar", "USER BAR",
+			{ win = outside_win })
+
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local diff_winid = review_panel.state.diff_winid
+		local bufnr = review_panel.state.active_bufnr
+		T.assert_contains(
+			vim.api.nvim_get_option_value("winbar", { win = diff_winid }),
+			"PR REVIEW", "the diff pane should carry the review banner")
+		T.assert_keymaps(bufnr, { "c", "]f", "]C" })
+
+		review_panel.close()
+		T.drain_jobs(500)
+
+		T.assert_false(vim.api.nvim_win_is_valid(diff_winid),
+			"the review windows should be gone after close")
+		T.assert_equals(#vim.api.nvim_buf_get_keymap(bufnr, "n"), 0,
+			"review keymaps must not outlive review mode")
+		T.assert_equals(
+			vim.api.nvim_get_option_value("winbar", { win = outside_win }),
+			"USER BAR",
+			"review mode must not clobber the user's own winbar")
+
+		vim.api.nvim_set_option_value("winbar", "", { win = outside_win })
+		T.cleanup_panels()
+	end,
+
+	["closing the file list window directly ends review mode"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local diff_winid = review_panel.state.diff_winid
+		local bufnr = review_panel.state.active_bufnr
+
+		-- Abnormal exit: the user closes a review window by hand (:q) instead
+		-- of pressing q in the file list.
+		pcall(vim.api.nvim_win_close, review_panel.state.file_list_winid, true)
+		T.wait_until(function()
+			return not review_panel.is_open()
+		end, "review mode should end when its layout is dismantled")
+
+		T.assert_equals(
+			vim.api.nvim_get_option_value("winbar", { win = diff_winid }), "",
+			"the review title bar must not survive review mode (#366)")
+		T.assert_equals(#vim.api.nvim_buf_get_keymap(bufnr, "n"), 0,
+			"review keymaps must not survive an abnormal close")
+		T.assert_equals(review_panel.state.pr_number, nil,
+			"review state should be reset after an abnormal close")
+
+		pcall(vim.api.nvim_win_close, diff_winid, true)
+		T.cleanup_panels()
+	end,
+
+	-- ── #360: whole comment threads, not just the first comment ────────
+
+	["review comment replies are grouped into a single thread"] = function()
+		with_temporary_patches({
+			{ table = gh_prs, key = "review_comments",
+				value = function(_, _, cb)
+					cb(nil, {
+						{ id = 1, path = "lua/gitflow/highlights.lua", line = 13,
+							body = "root", user = { login = "alice" } },
+						{ id = 2, path = "lua/gitflow/highlights.lua", line = 13,
+							body = "reply to root", in_reply_to_id = 1,
+							user = { login = "bob" } },
+						-- GitHub can point a reply at another reply; it still
+						-- belongs to the same discussion.
+						{ id = 3, path = "lua/gitflow/highlights.lua", line = 13,
+							body = "reply to reply", in_reply_to_id = 2,
+							user = { login = "carol" } },
+					}, { code = 0, signal = 0, stdout = "", stderr = "", cmd = {} })
+				end },
+		}, function()
+			review_panel.open(cfg, 42)
+			T.drain_jobs(5000)
+			T.wait_until(function()
+				return #review_panel.state.comment_threads > 0
+			end, "comment threads should be built from the review comments")
+		end)
+
+		T.assert_equals(#review_panel.state.comment_threads, 1,
+			"chained replies should not spawn extra threads")
+		T.assert_equals(#review_panel.state.comment_threads[1].comments, 3,
+			"the thread should hold the root comment and both replies")
+
+		cleanup_panels()
+	end,
+
+	["toggle_thread folds the replies out under the first comment"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local path = "lua/gitflow/highlights.lua"
+		review_panel.state.comment_threads = {
+			{ id = 7, path = path, line = 13, collapsed = false, comments = {
+				{ id = 7, path = path, line = 13,
+					body = "root comment", user = "alice" },
+				{ id = 8, path = path, line = 13,
+					body = "a follow up reply", user = "bob" },
+			} },
+		}
+		review_panel.open_file(path)
+		T.drain_jobs(1000)
+
+		local bufnr = review_panel.state.active_bufnr
+		local function comment_box_text()
+			local marks = vim.api.nvim_buf_get_extmarks(
+				bufnr, inline.COMMENT_NS, 0, -1, { details = true })
+			local out = {}
+			for _, mark in ipairs(marks) do
+				for _, virt_line in ipairs(mark[4].virt_lines or {}) do
+					for _, chunk in ipairs(virt_line) do
+						out[#out + 1] = chunk[1]
+					end
+				end
+			end
+			return table.concat(out, "")
+		end
+
+		T.assert_contains(comment_box_text(), "root comment",
+			"the first comment should render inline")
+		T.assert_false(
+			comment_box_text():find("a follow up reply", 1, true) ~= nil,
+			"replies stay hidden until the thread is folded out")
+
+		vim.api.nvim_win_set_cursor(review_panel.state.diff_winid, { 13, 0 })
+		review_panel.toggle_thread()
+		T.drain_jobs(500)
+
+		T.assert_true(review_panel.state.expanded_threads[7] == true,
+			"toggle_thread should mark the thread expanded")
+		T.assert_contains(comment_box_text(), "a follow up reply",
+			"the reply should render inline once the thread is folded out")
+		T.assert_contains(comment_box_text(), "@bob",
+			"each folded-out reply should be attributed to its author")
+
+		review_panel.toggle_thread()
+		T.drain_jobs(500)
+		T.assert_false(
+			comment_box_text():find("a follow up reply", 1, true) ~= nil,
+			"toggling again should fold the thread back up")
+
+		cleanup_panels()
+	end,
+
+	-- ── #382: jump to next comment + overview of all comments ──────────
+
+	["diff pane has ]C/[C and the comments overview keybind"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- Keymaps are recorded with <leader> already expanded.
+		local overview = (vim.g.mapleader or "\\") .. "c"
+		T.assert_keymaps(review_panel.state.active_bufnr,
+			{ "]C", "[C", overview })
+		T.assert_keymaps(review_panel.state.file_list_bufnr,
+			{ "]C", "[C", overview })
+
+		cleanup_panels()
+	end,
+
+	["comments_overview lists every comment and jumps to the chosen one"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local path = "lua/gitflow/highlights.lua"
+		review_panel.state.comment_threads = {
+			{ id = 7, path = path, line = 13, collapsed = false, comments = {
+				{ id = 7, path = path, line = 13,
+					body = "please rename this", user = "alice" },
+			} },
+		}
+		review_panel.state.pending_comments = {
+			{ id = 1, path = path, body = "my own note", new_line = 14 },
+		}
+
+		local opened
+		with_temporary_patches({
+			{ table = list_picker, key = "open",
+				value = function(opts)
+					opened = opts
+					return {}
+				end },
+		}, function()
+			review_panel.comments_overview()
+		end)
+
+		T.assert_true(opened ~= nil, "the overview should open a picker")
+		T.assert_equals(#opened.items, 2,
+			"the overview should list the remote thread and the draft")
+		T.assert_contains(opened.items[1].description, "please rename this",
+			"each row should preview its comment")
+		T.assert_false(opened.multi_select,
+			"the overview picks a single comment to jump to")
+
+		-- Selecting a row jumps the diff pane to that comment.
+		opened.on_submit({ opened.items[2].name })
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, path,
+			"selecting a comment should open its file")
+		T.assert_equals(
+			vim.api.nvim_win_get_cursor(review_panel.state.diff_winid)[1], 14,
+			"selecting a comment should put the cursor on its line")
 
 		cleanup_panels()
 	end,
