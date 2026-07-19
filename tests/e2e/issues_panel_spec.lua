@@ -758,6 +758,64 @@ T.run_suite("issues_panel_spec", {
 		end
 	end,
 
+	-- ── #381 branch from an issue ──────────────────────────────────────
+
+	["the suggested branch name derives from number and title"] = function()
+		T.assert_equals(
+			issues_panel.suggested_branch_name(ISSUE_A),
+			"1-setup-ci-pipeline",
+			"number and slugified title"
+		)
+		T.assert_equals(
+			issues_panel.suggested_branch_name({ number = 7, title = "Fix: A/B — test!" }),
+			"7-fix-a-b-test",
+			"punctuation should collapse into single dashes"
+		)
+		T.assert_equals(
+			issues_panel.suggested_branch_name({ number = 9, title = "***" }),
+			"9",
+			"a title with nothing usable should leave just the number"
+		)
+		local long = issues_panel.suggested_branch_name({
+			number = 12,
+			title = "a very long issue title that keeps going and going and going well past any reasonable branch length",
+		})
+		T.assert_true(#long <= 55, "long titles should be truncated: " .. long)
+		T.assert_true(
+			long:sub(-1) ~= "-", "truncation should not leave a trailing dash"
+		)
+	end,
+
+	["B creates a branch for the issue under the cursor"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		T.assert_true(buf_map(bufnr, "B") ~= nil, "B should be mapped")
+
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		T.assert_true(card ~= nil, "the card should render")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		-- Accept the prefilled suggestion.
+		local prompted = nil
+		local original_input = vim.ui.input
+		vim.ui.input = function(opts, on_confirm)
+			prompted = opts.default
+			on_confirm(opts.default)
+		end
+		local ok, err = T.pcall_message(function()
+			issues_panel.create_branch_under_cursor()
+		end)
+		vim.ui.input = original_input
+
+		T.assert_true(ok, "creating a branch should not raise: " .. tostring(err))
+		T.assert_equals(
+			prompted, "1-setup-ci-pipeline",
+			"the prompt should be prefilled with the suggested name"
+		)
+		T.drain_jobs()
+	end,
+
 	["refresh refetches from GitHub"] = function()
 		reset_gh_log()
 		open_and_wait()

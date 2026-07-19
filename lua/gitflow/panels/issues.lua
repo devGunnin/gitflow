@@ -11,6 +11,7 @@ local label_picker = require("gitflow.ui.label_picker")
 local list_picker = require("gitflow.ui.list_picker")
 local derive = require("gitflow.issues.derive")
 local views_store = require("gitflow.issues.views")
+local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local highlights = require("gitflow.highlights")
 
@@ -35,7 +36,7 @@ local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · x close · L labels"
 	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · G group · <Tab> fold group · v/V/D views"
+	.. " · G group · <Tab> fold group · v/V/D views · B branch"
 	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
@@ -167,6 +168,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "D", function()
 		M.delete_view()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "B", function()
+		M.create_branch_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -906,6 +911,80 @@ function M.toggle_group_under_cursor()
 	M.rerender()
 end
 
+-- ── Branch from issue (#381) ──────────────────────────────────────────
+
+--- Keeps a generated branch name shell- and ref-friendly.
+local MAX_BRANCH_SLUG = 48
+
+---Suggested branch name for an issue, e.g. "381-create-branch-from-issue".
+---@param issue table
+---@return string
+function M.suggested_branch_name(issue)
+	assert(type(issue) == "table", "suggested_branch_name: issue must be a table")
+	local number = vim.trim(tostring(issue.number or ""))
+	assert(number ~= "", "suggested_branch_name: issue must have a number")
+
+	local slug = maybe_text(issue.title):lower()
+	slug = (slug:gsub("[^%w]+", "-"))
+	slug = (slug:gsub("^%-+", ""):gsub("%-+$", ""))
+	if #slug > MAX_BRANCH_SLUG then
+		slug = (slug:sub(1, MAX_BRANCH_SLUG):gsub("%-+[^-]*$", ""))
+	end
+	if slug == "" then
+		return number
+	end
+	return ("%s-%s"):format(number, slug)
+end
+
+---The issue the user is acting on, in either list or detail mode.
+---@return table|nil
+local function selected_issue()
+	if M.state.mode ~= "view" then
+		return entry_under_cursor()
+	end
+
+	local number = M.state.active_issue_number
+	for _, issue in ipairs(M.state.cache or {}) do
+		if tonumber(issue.number) == number then
+			return issue
+		end
+	end
+	return nil
+end
+
+---Create a branch for the selected issue, prefilled with a suggested name.
+function M.create_branch_under_cursor()
+	local issue = selected_issue()
+	if not issue then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+
+	input.prompt({
+		prompt = "New branch: ",
+		default = M.suggested_branch_name(issue),
+	}, function(value)
+		local name = vim.trim(value or "")
+		if name == "" then
+			utils.notify("Branch name cannot be empty", vim.log.levels.WARN)
+			return
+		end
+
+		git_branch.create(name, nil, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Created branch %s for issue #%s"):format(
+					name, tostring(issue.number)
+				),
+				vim.log.levels.INFO
+			)
+		end)
+	end)
+end
+
 -- ── Saved views (#389) ────────────────────────────────────────────────
 
 ---@return GitflowIssueView[]|nil  nil when the saved-views file is unusable
@@ -944,8 +1023,14 @@ end
 ---@param view GitflowIssueView
 function M.apply_view(view)
 	assert(type(view) == "table", "apply_view: view must be a table")
+	assert(type(view.filters) == "table", "apply_view: view must carry filters")
+
 	M.state.filters = vim.deepcopy(view.filters)
-	M.state.sort = vim.deepcopy(view.sort)
+	M.state.filters.state = M.state.filters.state or "open"
+	M.state.sort = vim.tbl_extend(
+		"force", { key = "updated", direction = "desc" },
+		vim.deepcopy(view.sort or {})
+	)
 	M.rerender()
 	focus_panel()
 	utils.notify(("Issue view '%s'"):format(view.name), vim.log.levels.INFO)
