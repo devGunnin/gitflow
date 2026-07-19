@@ -121,6 +121,9 @@ M.state = {
 	-- When set, the review is scoped to a git commit range instead of the
 	-- whole PR diff: { base = <rev>, head = <rev>, label = <string> }.
 	commit_scope = nil,
+	-- Monotonic stamp for in-flight PR loads; never reset, so a response from
+	-- a closed or superseded load can never match the current one.
+	request_id = 0,
 	-- Legacy compat shape (kept so :Gitflow pr submit-review / external
 	-- callers that read state.* don't crash).
 	file_markers = {},
@@ -783,7 +786,14 @@ local function render_file_list()
 
 		for idx, pc in ipairs(pending) do
 			local in_scope = draft_in_scope(pc)
-			local marker = in_scope and "●" or "✗"
+			-- ✓ = already on the PR (a partially-failed submit); it will not
+			-- be posted again.
+			local marker = "●"
+			if pc.posted then
+				marker = "✓"
+			elseif not in_scope then
+				marker = "✗"
+			end
 			local name = vim.fn.fnamemodify(pc.path or "?", ":t")
 			local preview = vim.trim((pc.body or ""):gsub("%s+", " "))
 			local locator
@@ -1755,11 +1765,28 @@ local function build_commit_scope_diffs(base, head, cb)
 	)
 end
 
+---@return integer
+local function next_request_id()
+	M.state.request_id = (M.state.request_id or 0) + 1
+	return M.state.request_id
+end
+
+--- Is this async response still the one the view is waiting for?  Switching
+--- PRs (or closing review mode) mid-load must not splice the old PR's files
+--- and comment threads into the new view.
+---@param request_id integer
+---@param number integer
+---@return boolean
+local function is_active_request(request_id, number)
+	return M.state.request_id == request_id and M.state.pr_number == number
+end
+
 function M.refresh()
 	if not M.state.cfg or not M.state.pr_number then
 		return
 	end
 	local number = M.state.pr_number
+	local request_id = next_request_id()
 
 	M.state.files_error = nil
 	M.state.pr_title = M.state.pr_title or "(loading)"
@@ -1769,6 +1796,9 @@ function M.refresh()
 	-- whole-PR and commit-scoped paths.
 	local function load_comments_and_finish()
 		gh_prs.review_comments(number, {}, function(rc_err, comments)
+			if not is_active_request(request_id, number) then
+				return
+			end
 			if not rc_err and comments then
 				M.state.comment_threads = build_comment_threads(comments)
 			end
@@ -1792,6 +1822,9 @@ function M.refresh()
 	end
 
 	gh_prs.view(number, {}, function(view_err, pr)
+		if not is_active_request(request_id, number) then
+			return
+		end
 		if view_err then
 			notify_error(view_err)
 		else
@@ -1804,6 +1837,9 @@ function M.refresh()
 		if M.state.commit_scope then
 			local s = M.state.commit_scope
 			build_commit_scope_diffs(s.base, s.head, function(derr)
+				if not is_active_request(request_id, number) then
+					return
+				end
 				if derr then
 					M.state.files_loaded = true
 					M.state.files_error = derr
@@ -1815,6 +1851,9 @@ function M.refresh()
 		end
 
 		gh_prs.list_files(number, {}, function(files_err, files_data)
+			if not is_active_request(request_id, number) then
+				return
+			end
 			if files_err then
 				M.state.files_loaded = true
 				M.state.files_error = files_err
@@ -1929,7 +1968,12 @@ function M.apply_commit_scope(base, head, label)
 	M.state.active_path = nil
 	M.state.active_bufnr = nil
 	M.state.active_file_idx = nil
+	local number = M.state.pr_number
+	local request_id = next_request_id()
 	build_commit_scope_diffs(base, head, function(err)
+		if not is_active_request(request_id, number) then
+			return
+		end
 		if err then
 			notify_error(err)
 			M.state.commit_scope = nil
@@ -2752,7 +2796,7 @@ end
 --- the reviews API rejects any comment without a line (→ 422); they're posted
 --- via the review-comments API with subject_type=file instead (#361).
 ---@return table[]|nil  line/range comments for the reviews API
----@return table[]  file-level comments ({ path, body })
+---@return table[]  file-level comments ({ path, body, draft })
 ---@return string|nil  error message if any draft can't be resolved
 local function collect_api_comments()
 	local api = {}
@@ -2762,10 +2806,17 @@ local function collect_api_comments()
 		-- File-level comments (#361): posted separately, never in the
 		-- reviews batch payload.
 		if pc.file_level then
+			-- Each file comment is its own API call, so a submit that fails
+			-- part-way leaves some already on the PR.  Skipping those is what
+			-- stops a retry from posting them a second time.
+			if pc.posted then
+				goto continue
+			end
 			if pc.path and pc.path ~= "" then
 				file_comments[#file_comments + 1] = {
 					path = pc.path,
 					body = pc.body,
+					draft = pc,
 				}
 			else
 				unresolved[#unresolved + 1] = tostring(pc.id or "?")
@@ -2917,9 +2968,16 @@ local function submit_review_with_pending(mode, body, on_success_message)
 			number, commit_id, fc.path, fc.body, {},
 			function(err)
 				if err then
-					notify_error("File comment failed: " .. err)
+					notify_error(("File comment on %s failed: %s\n"
+						.. "(%d of %d already posted; retrying will not "
+						.. "repost them.)"):format(
+						fc.path, err, idx - 1, #file_comments))
 					return
 				end
+				-- Record the post before moving on, and persist it, so a
+				-- crash or a retry can't duplicate it on the PR.
+				fc.draft.posted = true
+				persist_pending()
 				post_next()
 			end
 		)

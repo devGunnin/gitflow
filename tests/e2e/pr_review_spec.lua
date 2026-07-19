@@ -1199,6 +1199,131 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.cleanup_panels()
 	end,
 
+	-- ── Stale-response and retry safety ────────────────────────────────
+
+	["a superseded PR load never writes into the current review"] = function()
+		local deferred = {}
+		local ok_result =
+			{ code = 0, signal = 0, stdout = "", stderr = "", cmd = {} }
+
+		with_temporary_patches({
+			{ table = gh_prs, key = "view",
+				value = function(number, _, cb)
+					deferred[#deferred + 1] = function()
+						cb(nil, {
+							title = "PR " .. number,
+							author = { login = "octocat" },
+							headRefName = "head", baseRefName = "main",
+						}, ok_result)
+					end
+				end },
+			{ table = gh_prs, key = "list_files",
+				value = function(number, _, cb)
+					deferred[#deferred + 1] = function()
+						cb(nil, { {
+							filename = ("pr_%s.lua"):format(number),
+							status = "modified", additions = 1, deletions = 0,
+							patch = "@@ -1 +1 @@\n-a\n+b",
+						} }, ok_result)
+					end
+				end },
+			{ table = gh_prs, key = "review_comments",
+				value = function(number, _, cb)
+					deferred[#deferred + 1] = function()
+						cb(nil, { {
+							id = number, path = ("pr_%s.lua"):format(number),
+							line = 1, body = ("comment from PR %s"):format(number),
+							user = { login = "someone" },
+						} }, ok_result)
+					end
+				end },
+		}, function()
+			local function run_next()
+				local fn = table.remove(deferred, 1)
+				T.assert_true(fn ~= nil, "a deferred gh response should exist")
+				fn()
+			end
+
+			-- PR 42's metadata and files land, its comments are still in flight.
+			review_panel.open(cfg, 42)
+			run_next()
+			run_next()
+			local stale_comments = table.remove(deferred, 1)
+			T.assert_true(stale_comments ~= nil,
+				"PR 42's comment request should be in flight")
+
+			-- The user switches to PR 99 before PR 42 finishes loading.
+			review_panel.open(cfg, 99)
+			while #deferred > 0 do
+				run_next()
+			end
+			T.assert_equals(review_panel.state.pr_number, 99,
+				"the review should now be showing PR 99")
+			T.assert_equals(#review_panel.state.comment_threads, 1,
+				"PR 99's own comments should have loaded")
+
+			-- PR 42's response finally arrives; it must be discarded.
+			stale_comments()
+
+			T.assert_equals(
+				review_panel.state.comment_threads[1].comments[1].body,
+				"comment from PR 99",
+				"a superseded PR's comments must not be spliced into the view")
+		end)
+
+		cleanup_panels()
+	end,
+
+	["retrying a failed submit does not repost file comments"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local path = "lua/gitflow/highlights.lua"
+		review_panel.state.pr_head_sha = "deadbeef"
+		review_panel.state.pending_comments = {
+			{ id = 1, path = path, body = "file note A", file_level = true },
+			{ id = 2, path = path, body = "file note B", file_level = true },
+		}
+
+		local posted = {}
+		local submit_fails = true
+		local function failing_submit(...)
+			local cb = select(select("#", ...), ...)
+			cb(submit_fails and "submit failed" or nil)
+		end
+
+		with_temporary_patches({
+			{ table = gh_prs, key = "create_file_comment",
+				value = function(_, _, _, body, _, cb)
+					posted[#posted + 1] = body
+					cb(nil, { code = 0 })
+				end },
+			{ table = gh_prs, key = "review", value = failing_submit },
+			{ table = gh_prs, key = "submit_review", value = failing_submit },
+		}, function()
+			review_panel.submit_review_direct("comment", "please look")
+			T.drain_jobs(1000)
+
+			T.assert_equals(#posted, 2,
+				"both file comments should reach GitHub before the failure")
+			T.assert_equals(#review_panel.state.pending_comments, 2,
+				"a failed submit must not discard the drafts")
+
+			-- The user retries once the cause is fixed.
+			submit_fails = false
+			review_panel.submit_review_direct("comment", "please look")
+			T.drain_jobs(1000)
+
+			T.assert_equals(#posted, 2,
+				"a retry must not post the file comments a second time")
+		end)
+
+		cleanup_panels()
+	end,
+
 	-- ── #360: whole comment threads, not just the first comment ────────
 
 	["review comment replies are grouped into a single thread"] = function()
