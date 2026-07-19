@@ -218,6 +218,16 @@ local function join_assignee_names(issue)
 	return table.concat(names, ", ")
 end
 
+---@param issue table
+---@return string  the milestone title, or "-" when the issue has none
+local function milestone_text(issue)
+	local title = derive.milestone_title(issue)
+	if title == "" then
+		return "-"
+	end
+	return title
+end
+
 ---@param text string
 ---@return string[]
 local function split_lines(text)
@@ -379,6 +389,8 @@ local function render_list(issues)
 				meta[#meta + 1] = { "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
 				meta[#meta + 1] = { assignees, "GitflowChip" }
 			end
+			meta[#meta + 1] = { "    milestone: ", "GitflowMetaKey" }
+			meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
 			local meta_line = B:push(meta)
 
 			line_entries[title_line] = issue
@@ -457,6 +469,9 @@ local function render_view(issue)
 	meta_row(B, "Labels:", label_chunks(issue))
 	meta_row(B, "Assignees:", {
 		{ join_assignee_names(issue), "GitflowChip" },
+	})
+	meta_row(B, "Milestone:", {
+		{ milestone_text(issue), "GitflowChip" },
 	})
 	B:blank()
 

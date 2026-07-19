@@ -9,6 +9,7 @@ local T = _G.T
 local cfg = _G.TestConfig
 
 local issues_panel = require("gitflow.panels.issues")
+local gh_issues = require("gitflow.gh.issues")
 local derive = require("gitflow.issues.derive")
 local ui = require("gitflow.ui")
 
@@ -243,6 +244,70 @@ T.run_suite("issues_panel_spec", {
 		T.assert_equals(
 			gh_call_count("issue list"), 1,
 			"deriving from the cache must not refetch"
+		)
+	end,
+
+	-- ── #385 milestone data ────────────────────────────────────────────
+
+	["gh list requests milestone and forwards the flag"] = function()
+		reset_gh_log()
+		local err = T.wait_async(function(done)
+			gh_issues.list({ milestone = "v1.0" }, {}, function(list_err)
+				done(list_err)
+			end)
+		end)
+		T.assert_equals(err, nil, "gh issue list should succeed")
+
+		local call = gh_calls()[1]
+		T.assert_contains(call, "milestone", "the json field set should ask for milestone")
+		T.assert_contains(call, "--milestone v1.0", "the milestone flag should be forwarded")
+	end,
+
+	["cards and detail view show the milestone"] = function()
+		reset_gh_log()
+		open_and_wait({ state = "all" })
+
+		local lines = panel_lines()
+		local card = T.find_line(lines, "Setup CI pipeline")
+		T.assert_true(card ~= nil, "the milestoned issue should render")
+		T.assert_contains(
+			lines[card + 1], "milestone: v1.0",
+			"the card meta line should carry the milestone title"
+		)
+
+		local without = T.find_line(lines, "Fix rendering glitch")
+		T.assert_true(without ~= nil, "the issue without a milestone should render")
+		T.assert_contains(
+			lines[without + 1], "milestone: -",
+			"a missing milestone should render as -"
+		)
+
+		issues_panel.open_view(1, cfg)
+		T.wait_until(function()
+			return T.find_line(panel_lines(), "Milestone:") ~= nil
+		end, "detail view should show a Milestone row", 5000)
+		local detail = panel_lines()
+		T.assert_contains(
+			detail[T.find_line(detail, "Milestone:")], "v1.0",
+			"the detail view should carry the milestone title"
+		)
+		T.drain_jobs()
+	end,
+
+	["milestone filter derives from the cache"] = function()
+		T.assert_deep_equals(
+			numbers_of(derive.filter(
+				ALL_ISSUES, { state = "all", milestone = "v1.0" }
+			)),
+			{ 1, 3 },
+			"milestone filter should keep only issues in that milestone"
+		)
+		T.assert_deep_equals(
+			numbers_of(derive.filter(
+				ALL_ISSUES, { state = "all", milestone = "v2.0" }
+			)),
+			{},
+			"an unmatched milestone should keep nothing"
 		)
 	end,
 
