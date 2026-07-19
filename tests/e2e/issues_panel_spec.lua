@@ -48,7 +48,12 @@ end
 ---@return integer bufnr
 local function open_and_wait(filters)
 	T.cleanup_panels()
+	-- Sort and grouping persist for the session by design; reset them so each
+	-- test starts from the documented defaults regardless of run order.
 	issues_panel.state.cache = nil
+	issues_panel.state.sort = { key = "updated", direction = "desc" }
+	issues_panel.state.group_by = "none"
+	issues_panel.state.collapsed = {}
 	issues_panel.open(cfg, filters)
 	T.wait_until(function()
 		local bufnr = ui.buffer.get("issues")
@@ -491,6 +496,135 @@ T.run_suite("issues_panel_spec", {
 			issues_panel.state.sort, { key = "title", direction = "asc" },
 			"a refetch should not reset the session sort"
 		)
+	end,
+
+	-- ── #390 grouped rendering ─────────────────────────────────────────
+
+	["grouping buckets issues and trails the empty group"] = function()
+		local sorted = derive.apply(
+			ALL_ISSUES, { state = "all" }, { key = "number", direction = "asc" }
+		)
+		local groups = derive.group(sorted, "milestone")
+
+		T.assert_equals(#groups, 2, "v1.0 and the milestone-less bucket")
+		T.assert_equals(groups[1].key, "v1.0", "named group first")
+		T.assert_deep_equals(
+			numbers_of(groups[1].issues), { 1, 3 }, "v1.0 holds #1 and #3"
+		)
+		T.assert_equals(groups[2].key, "", "the empty bucket comes last")
+		T.assert_deep_equals(
+			numbers_of(groups[2].issues), { 2 }, "#2 has no milestone"
+		)
+		T.assert_equals(
+			derive.empty_group_label("milestone"), "No milestone",
+			"the empty milestone bucket should be labelled"
+		)
+		T.assert_equals(
+			derive.empty_group_label("assignee"), "Unassigned",
+			"the empty assignee bucket should read Unassigned"
+		)
+	end,
+
+	["an issue with several labels appears in each label group"] = function()
+		local groups = derive.group(
+			derive.filter(ALL_ISSUES, { state = "all" }), "label"
+		)
+		local by_key = {}
+		for _, group in ipairs(groups) do
+			by_key[group.key] = numbers_of(group.issues)
+		end
+		T.assert_deep_equals(by_key.bug, { 2, 3 }, "bug covers #2 and #3")
+		T.assert_deep_equals(by_key.documentation, { 3 }, "documentation covers #3")
+		T.assert_deep_equals(by_key.enhancement, { 1 }, "enhancement covers #1")
+	end,
+
+	["grouping renders headers with counts and composes with filters"] = function()
+		reset_gh_log()
+		open_and_wait({ state = "all" })
+		issues_panel.state.group_by = "none"
+		issues_panel.state.collapsed = {}
+		issues_panel.cycle_group_by()
+
+		T.assert_equals(
+			issues_panel.state.group_by, "milestone", "none -> milestone"
+		)
+		local lines = panel_lines()
+		T.assert_true(
+			has_line(lines, "v1.0 (2)"),
+			"the milestone section header should carry its count"
+		)
+		T.assert_true(
+			has_line(lines, "No milestone (1)"),
+			"the empty bucket should render with its count"
+		)
+		T.assert_contains(
+			lines[T.find_line(lines, "issue")], "group milestone",
+			"summary bar should show the grouping"
+		)
+
+		-- Grouping must compose with an active filter.
+		issues_panel.state.filters.state = "open"
+		issues_panel.rerender()
+		local open_lines = panel_lines()
+		T.assert_true(
+			has_line(open_lines, "v1.0 (1)"),
+			"filtering to open issues should shrink the v1.0 group to #1"
+		)
+		T.assert_false(
+			has_line(open_lines, "Update README"),
+			"the closed issue should be filtered out of its group"
+		)
+		T.assert_equals(
+			gh_call_count("issue list"), 1, "grouping must not refetch"
+		)
+	end,
+
+	["collapsing a group hides its cards"] = function()
+		open_and_wait({ state = "all" })
+		issues_panel.state.group_by = "milestone"
+		issues_panel.state.collapsed = {}
+		issues_panel.rerender()
+		T.assert_true(
+			has_line(panel_lines(), "Setup CI pipeline"),
+			"the group should start expanded"
+		)
+
+		local bufnr = ui.buffer.get("issues")
+		local header = T.find_line(T.buf_lines(bufnr), "v1.0 (")
+		T.assert_true(header ~= nil, "the v1.0 header should render")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { header, 0 })
+		issues_panel.toggle_group_under_cursor()
+
+		local collapsed = panel_lines()
+		T.assert_true(
+			has_line(collapsed, "v1.0 ("),
+			"the header should survive collapsing"
+		)
+		T.assert_false(
+			has_line(collapsed, "Setup CI pipeline"),
+			"collapsing should hide the group's cards"
+		)
+
+		vim.api.nvim_win_set_cursor(0, { T.find_line(collapsed, "v1.0 ("), 0 })
+		issues_panel.toggle_group_under_cursor()
+		T.assert_true(
+			has_line(panel_lines(), "Setup CI pipeline"),
+			"toggling again should expand the group"
+		)
+
+		issues_panel.state.group_by = "none"
+		issues_panel.rerender()
+	end,
+
+	["group keymaps are bound on the panel buffer"] = function()
+		local bufnr = open_and_wait()
+		for _, lhs in ipairs({ "s", "S", "G", "<Tab>" }) do
+			T.assert_true(
+				buf_map(bufnr, lhs) ~= nil,
+				("%s should be mapped on the issues buffer"):format(lhs)
+			)
+		end
 	end,
 
 	["refresh refetches from GitHub"] = function()

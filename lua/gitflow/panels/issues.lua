@@ -21,6 +21,9 @@ local highlights = require("gitflow.highlights")
 ---@field cache table[]|nil  raw issues from the last fetch
 ---@field filters table  client-side predicate applied to the cache
 ---@field sort table  { key, direction }, kept across refreshes in a session
+---@field group_by "none"|"milestone"|"assignee"|"label"
+---@field collapsed table<string, boolean>  collapsed group ids
+---@field line_groups table<integer, string>  header line -> group key
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_issue_number integer|nil
@@ -31,7 +34,7 @@ local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · x close · L labels"
 	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · r refresh · b back · q close "
+	.. " · G group · <Tab> fold group · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
@@ -45,7 +48,10 @@ M.state = {
 	cache = nil,
 	filters = {},
 	sort = { key = "updated", direction = "desc" },
+	group_by = "none",
+	collapsed = {},
 	line_entries = {},
+	line_groups = {},
 	mode = "list",
 	active_issue_number = nil,
 }
@@ -139,6 +145,14 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "S", function()
 		M.toggle_sort_direction()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "G", function()
+		M.cycle_group_by()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "<Tab>", function()
+		M.toggle_group_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -288,8 +302,9 @@ end
 ---@param B GitflowRenderBuilder
 ---@param icon string
 ---@param title string
+---@return integer  the header line number
 local function section_header(B, icon, title)
-	B:push({
+	local line_no = B:push({
 		{ " ", nil },
 		{ icon .. "  ", "GitflowSectionIcon" },
 		{ title, "GitflowSectionTitle" },
@@ -298,6 +313,7 @@ local function section_header(B, icon, title)
 		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
 		"GitflowSeparator"
 	)
+	return line_no
 end
 
 ---@param B GitflowRenderBuilder
@@ -323,6 +339,7 @@ local function render_loading(message)
 	})
 	ui.buffer.update("issues", B.lines)
 	M.state.line_entries = {}
+	M.state.line_groups = {}
 	B:apply(M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
@@ -352,11 +369,90 @@ local function summary_chunks(count)
 		("%s %s"):format(M.state.sort.key, M.state.sort.direction),
 		"GitflowMeta",
 	}
+	if M.state.group_by ~= "none" then
+		chunks[#chunks + 1] = { "   group ", "GitflowMetaKey" }
+		chunks[#chunks + 1] = { M.state.group_by, "GitflowMeta" }
+	end
 	return chunks
 end
 
----@param issues table[]
-local function render_list(issues)
+---Render one issue card and register its lines as selectable.
+---@param B GitflowRenderBuilder
+---@param issue table
+---@param width integer
+---@param line_entries table<integer, table>
+local function push_issue_card(B, issue, width, line_entries)
+	local number = tostring(issue.number or "?")
+	local state = issue_state(issue)
+	local state_icon = icons.get("github", "issue_" .. state)
+	local title = maybe_text(issue.title)
+	local time = ui_render.relative_time(issue.updatedAt)
+	local left = (" %s  #%s  "):format(state_icon, number)
+	local left_w = vim.fn.strdisplaywidth(left)
+	local time_w = vim.fn.strdisplaywidth(time)
+	local title_max = math.max(8, width - left_w - time_w - 2)
+	title = ui_render.truncate(title, title_max)
+	local gap = math.max(
+		2, width - left_w - vim.fn.strdisplaywidth(title) - time_w
+	)
+	local title_group = state == "closed"
+		and "GitflowCardTitleDim" or "GitflowCardTitle"
+	local title_line = B:push({
+		{ " ", nil },
+		{ state_icon .. "  ", issue_highlight_group(state) },
+		{ "#" .. number, "GitflowNumber" },
+		{ "  ", nil },
+		{ title, title_group },
+		{ string.rep(" ", gap), nil },
+		{ time, "GitflowRelTime" },
+	})
+
+	local meta = {
+		{ "     ", nil },
+		{ icons.get("ui", "author") .. " ", "GitflowMeta" },
+		{
+			issue.author and maybe_text(issue.author.login) or "\u{2014}",
+			"GitflowAuthor",
+		},
+		{ "    labels: ", "GitflowMetaKey" },
+	}
+	for _, chunk in ipairs(label_chunks(issue)) do
+		meta[#meta + 1] = chunk
+	end
+	local assignees = join_assignee_names(issue)
+	if assignees ~= "-" then
+		meta[#meta + 1] = { "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
+		meta[#meta + 1] = { assignees, "GitflowChip" }
+	end
+	meta[#meta + 1] = { "    milestone: ", "GitflowMetaKey" }
+	meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
+	local meta_line = B:push(meta)
+
+	line_entries[title_line] = issue
+	line_entries[meta_line] = issue
+	B:blank()
+end
+
+---Stable identity for a group's collapsed state, scoped to the grouping mode
+---so switching modes never inherits another mode's collapsed keys.
+---@param key string
+---@return string
+local function collapse_id(key)
+	return ("%s:%s"):format(M.state.group_by, key)
+end
+
+---@param key string
+---@return string  the section heading for a group
+local function group_heading(key)
+	if key == "" then
+		return derive.empty_group_label(M.state.group_by)
+	end
+	return key
+end
+
+---@param groups table[]
+---@param total integer
+local function render_list(groups, total)
 	local render_opts = {
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
@@ -364,72 +460,42 @@ local function render_list(issues)
 	local B = ui_render.builder()
 	push_header(B, "Gitflow Issues", render_opts)
 
-	B:push(summary_chunks(#issues))
+	B:push(summary_chunks(total))
 	B:blank()
 
 	local line_entries = {}
-	if #issues == 0 then
+	local line_groups = {}
+	local width = ui_render.content_width(render_opts)
+	local grouped = M.state.group_by ~= "none"
+
+	if total == 0 then
 		B:push({
 			{ "   ", nil },
 			{ "No issues match these filters.", "GitflowMeta" },
 		})
-	else
-		local width = ui_render.content_width(render_opts)
-		for _, issue in ipairs(issues) do
-			local number = tostring(issue.number or "?")
-			local state = issue_state(issue)
-			local state_icon = icons.get("github", "issue_" .. state)
-			local title = maybe_text(issue.title)
-			local time = ui_render.relative_time(issue.updatedAt)
-			local left = (" %s  #%s  "):format(state_icon, number)
-			local left_w = vim.fn.strdisplaywidth(left)
-			local time_w = vim.fn.strdisplaywidth(time)
-			local title_max = math.max(8, width - left_w - time_w - 2)
-			title = ui_render.truncate(title, title_max)
-			local gap = math.max(
-				2, width - left_w - vim.fn.strdisplaywidth(title) - time_w
-			)
-			local title_group = state == "closed"
-				and "GitflowCardTitleDim" or "GitflowCardTitle"
-			local title_line = B:push({
-				{ " ", nil },
-				{ state_icon .. "  ", issue_highlight_group(state) },
-				{ "#" .. number, "GitflowNumber" },
-				{ "  ", nil },
-				{ title, title_group },
-				{ string.rep(" ", gap), nil },
-				{ time, "GitflowRelTime" },
-			})
+	end
 
-			local meta = {
-				{ "     ", nil },
-				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
-				{
-					issue.author and maybe_text(issue.author.login) or "\u{2014}",
-					"GitflowAuthor",
-				},
-				{ "    labels: ", "GitflowMetaKey" },
-			}
-			for _, chunk in ipairs(label_chunks(issue)) do
-				meta[#meta + 1] = chunk
+	for _, group in ipairs(groups) do
+		local collapsed = grouped and M.state.collapsed[collapse_id(group.key)] or false
+		if grouped then
+			local heading = ("%s (%d)"):format(group_heading(group.key), #group.issues)
+			local icon = collapsed and icons.get("ui", "chevron")
+				or icons.get("ui", "dot")
+			line_groups[section_header(B, icon, heading)] = group.key
+		end
+		if not collapsed then
+			for _, issue in ipairs(group.issues) do
+				push_issue_card(B, issue, width, line_entries)
 			end
-			local assignees = join_assignee_names(issue)
-			if assignees ~= "-" then
-				meta[#meta + 1] = { "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
-				meta[#meta + 1] = { assignees, "GitflowChip" }
-			end
-			meta[#meta + 1] = { "    milestone: ", "GitflowMetaKey" }
-			meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
-			local meta_line = B:push(meta)
-
-			line_entries[title_line] = issue
-			line_entries[meta_line] = issue
+		end
+		if grouped then
 			B:blank()
 		end
 	end
 
 	ui.buffer.update("issues", B.lines)
 	M.state.line_entries = line_entries
+	M.state.line_groups = line_groups
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
 
@@ -543,6 +609,7 @@ local function render_view(issue)
 
 	ui.buffer.update("issues", B.lines)
 	M.state.line_entries = {}
+	M.state.line_groups = {}
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
 
@@ -568,6 +635,12 @@ local function entry_under_cursor()
 
 	local line = vim.api.nvim_win_get_cursor(0)[1]
 	return M.state.line_entries[line]
+end
+
+---Run the full derivation — filter, sort, group — and render it.
+local function render_derived()
+	local issues = derive.apply(M.state.cache or {}, M.state.filters, M.state.sort)
+	render_list(derive.group(issues, M.state.group_by), #issues)
 end
 
 ---Split requested options into the server-side query and the client-side
@@ -607,7 +680,7 @@ function M.rerender()
 		M.refresh()
 		return
 	end
-	render_list(derive.apply(M.state.cache, M.state.filters, M.state.sort))
+	render_derived()
 end
 
 ---Refetch from GitHub and re-render.
@@ -624,7 +697,7 @@ function M.refresh()
 			return
 		end
 		M.state.cache = issues or {}
-		render_list(derive.apply(M.state.cache, M.state.filters, M.state.sort))
+		render_derived()
 	end)
 end
 
@@ -781,6 +854,41 @@ end
 function M.toggle_sort_direction()
 	M.state.sort.direction =
 		M.state.sort.direction == "asc" and "desc" or "asc"
+	M.rerender()
+end
+
+-- ── Grouping (#390) ───────────────────────────────────────────────────
+
+---Advance the grouping through none -> milestone -> assignee -> label.
+function M.cycle_group_by()
+	M.state.group_by = derive.cycle(derive.GROUP_KEYS, M.state.group_by)
+	M.rerender()
+	utils.notify(
+		M.state.group_by == "none" and "Issue grouping off"
+			or ("Grouping issues by %s"):format(M.state.group_by),
+		vim.log.levels.INFO
+	)
+end
+
+---Collapse or expand the group whose header the cursor is on.
+function M.toggle_group_under_cursor()
+	if M.state.group_by == "none" then
+		utils.notify("Issues are not grouped", vim.log.levels.WARN)
+		return
+	end
+	if not M.state.bufnr or vim.api.nvim_get_current_buf() ~= M.state.bufnr then
+		return
+	end
+
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	local key = M.state.line_groups[line]
+	if key == nil then
+		utils.notify("Move the cursor onto a group header", vim.log.levels.WARN)
+		return
+	end
+
+	local id = collapse_id(key)
+	M.state.collapsed[id] = not M.state.collapsed[id] or nil
 	M.rerender()
 end
 
@@ -1223,6 +1331,7 @@ function M.close()
 	M.state.bufnr = nil
 	M.state.winid = nil
 	M.state.line_entries = {}
+	M.state.line_groups = {}
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
 end

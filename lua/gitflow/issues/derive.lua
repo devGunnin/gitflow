@@ -224,6 +224,80 @@ function M.apply(issues, filters, sort)
 	return M.sort(M.filter(issues, filters), sort)
 end
 
+M.GROUP_KEYS = { "none", "milestone", "assignee", "label" }
+
+--- Bucket key for issues that carry no value for the grouping field. Empty so
+--- it can never collide with a real milestone/assignee/label name.
+local NO_GROUP_KEY = ""
+
+local GROUP_EXTRACTORS = {
+	milestone = function(issue)
+		local title = M.milestone_title(issue)
+		return title ~= "" and { title } or {}
+	end,
+	assignee = function(issue)
+		return M.assignee_logins(issue)
+	end,
+	label = function(issue)
+		return M.label_names(issue)
+	end,
+}
+
+---@param group_by string
+---@return string  heading for the bucket of issues with no such value
+function M.empty_group_label(group_by)
+	if group_by == "assignee" then
+		return "Unassigned"
+	end
+	return ("No %s"):format(group_by)
+end
+
+---Bucket an already filtered and sorted list. Issues with several labels or
+---assignees appear under each of them. Named groups come first alphabetically,
+---the empty bucket last; issue order inside a group is preserved.
+---@param issues table[]
+---@param group_by string|nil  nil or "none" yields one unnamed group
+---@return table[]  { { key = string, issues = table[] }, ... }
+function M.group(issues, group_by)
+	assert(type(issues) == "table", "derive.group: issues must be a list")
+
+	if group_by == nil or group_by == "none" then
+		return { { key = NO_GROUP_KEY, issues = issues } }
+	end
+
+	local collect = GROUP_EXTRACTORS[group_by]
+	assert(collect, ("derive.group: unknown group key %q"):format(group_by))
+
+	local buckets, keys = {}, {}
+	for _, issue in ipairs(issues) do
+		local values = collect(issue)
+		if #values == 0 then
+			values = { NO_GROUP_KEY }
+		end
+		for _, value in ipairs(values) do
+			if not buckets[value] then
+				buckets[value] = {}
+				keys[#keys + 1] = value
+			end
+			local bucket = buckets[value]
+			bucket[#bucket + 1] = issue
+		end
+	end
+
+	table.sort(keys, function(left, right)
+		if (left == NO_GROUP_KEY) ~= (right == NO_GROUP_KEY) then
+			return right == NO_GROUP_KEY
+		end
+		return left < right
+	end)
+
+	local groups = {}
+	for index, key in ipairs(keys) do
+		groups[index] = { key = key, issues = buckets[key] }
+	end
+	return groups
+end
+
 ---Distinct values of a field across the cache, sorted, for the filter pickers.
 ---@param issues table[]
 ---@param field "label"|"assignee"|"milestone"
