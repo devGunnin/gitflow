@@ -29,7 +29,7 @@ local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · x close · L labels"
-	.. " · A assign · r refresh · b back · q close "
+	.. " · A assign · f filter · X clear · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
@@ -120,6 +120,14 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "A", function()
 		M.edit_assignees_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "f", function()
+		M.open_filter_menu()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", "X", function()
+		M.clear_filters()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "r", function()
@@ -307,6 +315,30 @@ local function render_loading(message)
 	B:apply(M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
+---Summary bar: the rendered count plus every active filter.
+---@param count integer
+---@return table[]
+local function summary_chunks(count)
+	local chunks = {
+		{ "  ", nil },
+		{ icons.get("github", "issue_open") .. "  ", "GitflowSectionIcon" },
+		{
+			("%d issue%s"):format(count, count == 1 and "" or "s"),
+			"GitflowSectionTitle",
+		},
+		{ "     state ", "GitflowMetaKey" },
+		{ maybe_text(M.state.filters.state), "GitflowMeta" },
+	}
+	for _, key in ipairs({ "label", "assignee", "milestone" }) do
+		local value = M.state.filters[key]
+		if value and vim.trim(tostring(value)) ~= "" then
+			chunks[#chunks + 1] = { ("   %s "):format(key), "GitflowMetaKey" }
+			chunks[#chunks + 1] = { maybe_text(value), "GitflowMeta" }
+		end
+	end
+	return chunks
+end
+
 ---@param issues table[]
 local function render_list(issues)
 	local render_opts = {
@@ -316,26 +348,7 @@ local function render_list(issues)
 	local B = ui_render.builder()
 	push_header(B, "Gitflow Issues", render_opts)
 
-	-- Summary / filter bar
-	local summary = {
-		{ "  ", nil },
-		{ icons.get("github", "issue_open") .. "  ", "GitflowSectionIcon" },
-		{
-			("%d issue%s"):format(#issues, #issues == 1 and "" or "s"),
-			"GitflowSectionTitle",
-		},
-		{ "     state ", "GitflowMetaKey" },
-		{ maybe_text(M.state.filters.state), "GitflowMeta" },
-	}
-	if M.state.filters.label then
-		summary[#summary + 1] = { "   label ", "GitflowMetaKey" }
-		summary[#summary + 1] = { maybe_text(M.state.filters.label), "GitflowMeta" }
-	end
-	if M.state.filters.assignee then
-		summary[#summary + 1] = { "   assignee ", "GitflowMetaKey" }
-		summary[#summary + 1] = { maybe_text(M.state.filters.assignee), "GitflowMeta" }
-	end
-	B:push(summary)
+	B:push(summary_chunks(#issues))
 	B:blank()
 
 	local line_entries = {}
@@ -630,6 +643,8 @@ function M.view_under_cursor()
 	M.open_view(entry.number)
 end
 
+---@param value string|nil
+---@return string[]
 local function parse_csv_input(value)
 	local items = {}
 	for _, part in ipairs(vim.split(value or "", ",", { trimempty = true })) do
@@ -639,6 +654,149 @@ local function parse_csv_input(value)
 		end
 	end
 	return items
+end
+
+-- ── Filters (#386) ────────────────────────────────────────────────────
+
+local FILTER_STATES = { "open", "closed", "all" }
+--- Offered by every single-value filter picker to clear that filter.
+local ANY_VALUE = "(any)"
+
+---Return the panel to the foreground after a picker closes.
+local function focus_panel()
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		vim.api.nvim_set_current_win(M.state.winid)
+	end
+end
+
+---@param key "label"|"assignee"|"milestone"|"state"
+---@param value string|nil  nil or "" clears the filter
+local function set_filter(key, value)
+	local trimmed = value and vim.trim(tostring(value)) or ""
+	M.state.filters[key] = trimmed ~= "" and trimmed or nil
+	M.rerender()
+	focus_panel()
+end
+
+---Distinct label objects across the cache, keeping gh's colors for the picker.
+---@return table[]
+local function cached_labels()
+	local seen, labels = {}, {}
+	for _, issue in ipairs(M.state.cache or {}) do
+		for _, label in ipairs(issue.labels or {}) do
+			local name = type(label) == "table" and vim.trim(tostring(label.name or ""))
+			if name and name ~= "" and not seen[name] then
+				seen[name] = true
+				labels[#labels + 1] = { name = name, color = label.color }
+			end
+		end
+	end
+	table.sort(labels, function(a, b)
+		return a.name < b.name
+	end)
+	return labels
+end
+
+---@param field "assignee"|"milestone"
+---@return table[]  list_picker items, "(any)" first so the filter can be cleared
+local function value_items(field)
+	local items = { { name = ANY_VALUE, description = "no filter" } }
+	for _, value in ipairs(derive.distinct_values(M.state.cache or {}, field)) do
+		items[#items + 1] = { name = value }
+	end
+	return items
+end
+
+---@param field "assignee"|"milestone"
+local function pick_value(field)
+	list_picker.open({
+		title = ("Filter by %s"):format(field),
+		items = value_items(field),
+		selected = M.state.filters[field] and { M.state.filters[field] } or {},
+		multi_select = false,
+		on_submit = function(selected)
+			local value = selected[1]
+			set_filter(field, value ~= ANY_VALUE and value or nil)
+		end,
+		on_cancel = focus_panel,
+	})
+end
+
+local function pick_labels()
+	local labels = cached_labels()
+	if #labels == 0 then
+		utils.notify("No labels on the fetched issues", vim.log.levels.WARN)
+		return
+	end
+	label_picker.open({
+		title = "Filter by labels",
+		labels = labels,
+		selected = parse_csv_input(M.state.filters.label),
+		on_submit = function(selected)
+			set_filter("label", table.concat(selected, ","))
+		end,
+		on_cancel = focus_panel,
+	})
+end
+
+---Advance the state filter through open -> closed -> all.
+function M.cycle_state()
+	set_filter("state", derive.cycle(FILTER_STATES, M.state.filters.state))
+end
+
+function M.clear_filters()
+	M.state.filters = { state = "open" }
+	M.rerender()
+	utils.notify("Cleared issue filters", vim.log.levels.INFO)
+end
+
+---@return table[]  filter-menu entries with their current value as description
+local function filter_menu_items()
+	local function current(key)
+		local value = M.state.filters[key]
+		if not value or vim.trim(tostring(value)) == "" then
+			return "any"
+		end
+		return tostring(value)
+	end
+	return {
+		{ name = "State", description = current("state") .. "  (cycles)" },
+		{ name = "Labels", description = current("label") },
+		{ name = "Assignee", description = current("assignee") },
+		{ name = "Milestone", description = current("milestone") },
+		{ name = "Clear all filters", description = "" },
+	}
+end
+
+function M.open_filter_menu()
+	if not M.state.cache then
+		utils.notify("Issues are still loading", vim.log.levels.WARN)
+		return
+	end
+
+	local actions = {
+		State = M.cycle_state,
+		Labels = pick_labels,
+		Assignee = function() pick_value("assignee") end,
+		Milestone = function() pick_value("milestone") end,
+		["Clear all filters"] = M.clear_filters,
+	}
+
+	list_picker.open({
+		title = "Issue Filters",
+		items = filter_menu_items(),
+		multi_select = false,
+		on_submit = function(selected)
+			local action = actions[selected[1]]
+			if not action then
+				focus_panel()
+				return
+			end
+			-- Sub-pickers must open after this one has finished closing.
+			vim.schedule(action)
+		end,
+		on_cancel = focus_panel,
+	})
 end
 
 function M.create_interactive()

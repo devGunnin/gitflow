@@ -78,6 +78,19 @@ local function has_line(lines, needle)
 	return T.find_line(lines, needle) ~= nil
 end
 
+---@param bufnr integer
+---@param lhs string
+---@return table|nil
+local function buf_map(bufnr, lhs)
+	local target = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+		if vim.api.nvim_replace_termcodes(map.lhs, true, true, true) == target then
+			return map
+		end
+	end
+	return nil
+end
+
 -- Fixture shorthand for the pure-derivation tests.
 local ISSUE_A = {
 	number = 1,
@@ -308,6 +321,83 @@ T.run_suite("issues_panel_spec", {
 			)),
 			{},
 			"an unmatched milestone should keep nothing"
+		)
+	end,
+
+	-- ── #386 interactive filter bar ────────────────────────────────────
+
+	["filter keymaps are bound on the panel buffer"] = function()
+		local bufnr = open_and_wait()
+		for _, lhs in ipairs({ "f", "X" }) do
+			T.assert_true(
+				buf_map(bufnr, lhs) ~= nil,
+				("%s should be mapped on the issues buffer"):format(lhs)
+			)
+		end
+	end,
+
+	["state cycles open -> closed -> all without refetching"] = function()
+		reset_gh_log()
+		open_and_wait()
+		T.assert_equals(
+			issues_panel.state.filters.state, "open", "should start on open"
+		)
+
+		issues_panel.cycle_state()
+		T.assert_equals(issues_panel.state.filters.state, "closed", "open -> closed")
+		T.assert_true(
+			has_line(panel_lines(), "Update README"),
+			"the closed issue should now be listed"
+		)
+
+		issues_panel.cycle_state()
+		T.assert_equals(issues_panel.state.filters.state, "all", "closed -> all")
+		issues_panel.cycle_state()
+		T.assert_equals(issues_panel.state.filters.state, "open", "all -> open")
+
+		T.assert_equals(
+			gh_call_count("issue list"), 1,
+			"cycling the state filter must not refetch"
+		)
+	end,
+
+	["summary bar reflects every active filter"] = function()
+		open_and_wait({ state = "all" })
+		issues_panel.state.filters.label = "bug"
+		issues_panel.state.filters.assignee = "octocat"
+		issues_panel.state.filters.milestone = "v1.0"
+		issues_panel.rerender()
+
+		local lines = panel_lines()
+		local bar = T.find_line(lines, "issue")
+		T.assert_true(bar ~= nil, "the summary bar should render")
+		for _, needle in ipairs({
+			"state all", "label bug", "assignee octocat", "milestone v1.0",
+		}) do
+			T.assert_contains(lines[bar], needle, "summary bar should show " .. needle)
+		end
+	end,
+
+	["clearing filters resets to open issues"] = function()
+		open_and_wait({ state = "all" })
+		issues_panel.state.filters.label = "bug"
+		issues_panel.state.filters.milestone = "v1.0"
+		issues_panel.rerender()
+
+		issues_panel.clear_filters()
+
+		T.assert_deep_equals(
+			issues_panel.state.filters, { state = "open" },
+			"clearing should leave only the default open state"
+		)
+		local lines = panel_lines()
+		T.assert_true(
+			has_line(lines, "Setup CI pipeline"),
+			"open issues should be listed again"
+		)
+		T.assert_false(
+			has_line(lines, "Update README"),
+			"the closed issue should be hidden again"
 		)
 	end,
 
