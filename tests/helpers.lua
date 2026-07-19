@@ -239,6 +239,46 @@ end
 
 -- ── Deterministic job synchronization ──────────────────────────────────
 
+--- Async `vim.system` calls whose completion callback has not finished yet.
+---
+--- Nvim specifies no ordering between libuv handle lifecycle and a completion
+--- callback: the process handle can disappear before the callback runs, and
+--- can still be alive after it. So no handle count can bracket completion —
+--- the harness keeps an exact count of its own instead.
+local pending_system_calls = 0
+
+--- Wrap `vim.system` so every async call is accounted for.
+--- Call sites resolve `vim.system` at call time, so the wrapper is what they
+--- get. Wrapping twice would still balance, so no install guard is needed.
+local function track_system_calls()
+	local real_system = vim.system
+	if not real_system then
+		return
+	end
+
+	vim.system = function(cmd, opts, on_exit)
+		if type(opts) == "function" and on_exit == nil then
+			opts, on_exit = nil, opts
+		end
+		if type(on_exit) ~= "function" then
+			return real_system(cmd, opts) -- synchronous `:wait()` form
+		end
+
+		pending_system_calls = pending_system_calls + 1
+		return real_system(cmd, opts, function(...)
+			local ok, err = pcall(on_exit, ...)
+			-- Settle before re-raising, or a failing callback would also
+			-- deadlock every later drain_jobs and hide the real error.
+			pending_system_calls = pending_system_calls - 1
+			if not ok then
+				error(err, 0)
+			end
+		end)
+	end
+end
+
+track_system_calls()
+
 --- Count currently active async process jobs.
 ---@return integer
 local function active_job_count()
@@ -275,26 +315,80 @@ local function active_job_count()
 	return count
 end
 
+--- Milliseconds left until a monotonic deadline (never negative).
+---@param deadline_ns integer  vim.uv.hrtime() value
+---@return number
+local function ms_until(deadline_ns)
+	local uv = vim.uv or vim.loop
+	local remaining_ms = (deadline_ns - uv.hrtime()) / 1e6
+	return remaining_ms > 0 and remaining_ms or 0
+end
+
+--- Flush one generation of the main event-loop callback queue.
+---
+--- Rests on two documented guarantees: `vim.schedule` appends to the main
+--- loop's queue, and `vim.wait` processes events while waiting. So every
+--- callback queued before our sentinel runs before it, and observing the
+--- sentinel proves that whole generation has executed. Work those callbacks
+--- themselves queue lands *behind* the sentinel and needs another generation.
+---@param deadline_ns integer
+---@return boolean  false only if the deadline expired first
+local function flush_scheduled(deadline_ns)
+	local flushed = false
+	vim.schedule(function()
+		flushed = true
+	end)
+	return vim.wait(ms_until(deadline_ns), function()
+		return flushed
+	end, 1)
+end
+
+--- Consecutive flushed generations required before the loop counts as quiet.
+--- Each generation is a proven flush, so this bounds callback-cascade depth —
+--- a structural property of the code under test, not a timing guess.
+local QUIESCENT_GENERATIONS = 8
+
+--- Whether every async call has completed and no job handle is still live.
+---@return boolean
+local function jobs_settled()
+	return pending_system_calls == 0 and active_job_count() == 0
+end
+
 --- Block until async jobs are drained (useful after git/gh calls).
+---
+--- Returns only once every `vim.system` completion callback has run to
+--- completion, no job handle is live, and the callbacks' own scheduled work has
+--- been flushed — so state written during completion has landed.
 ---@param timeout_ms? integer  default 3000
 function M.drain_jobs(timeout_ms)
 	local timeout = timeout_ms or 3000
-	local stable_idle_polls = 0
+	local uv = vim.uv or vim.loop
+	local deadline_ns = uv.hrtime() + timeout * 1e6
 
-	local ok = vim.wait(timeout, function()
-		if active_job_count() == 0 then
-			stable_idle_polls = stable_idle_polls + 1
-		else
-			stable_idle_polls = 0
+	local quiet_generations = 0
+	while quiet_generations < QUIESCENT_GENERATIONS do
+		if not jobs_settled() then
+			if not vim.wait(ms_until(deadline_ns), jobs_settled, 5) then
+				break
+			end
+			-- Flushed work may have spawned a further job; recount from zero.
+			quiet_generations = 0
 		end
-		-- Require two idle polls so queued callbacks can run.
-		return stable_idle_polls >= 2
-	end, 20)
+
+		if not flush_scheduled(deadline_ns) then
+			break
+		end
+		quiet_generations = quiet_generations + 1
+	end
 
 	M.assert_true(
-		ok,
-		("timed out waiting for jobs to drain (%d active)"):format(
-			active_job_count()
+		quiet_generations >= QUIESCENT_GENERATIONS,
+		("timed out waiting for jobs to drain (%d pending vim.system, %d active handles, %d/%d quiet generations, timeout=%dms)"):format(
+			pending_system_calls,
+			active_job_count(),
+			quiet_generations,
+			QUIESCENT_GENERATIONS,
+			timeout
 		)
 	)
 end
