@@ -2,6 +2,7 @@ local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:append(project_root)
 dofile(project_root .. "/scripts/test_real_git.lua")
+local compose = dofile(project_root .. "/scripts/test_compose_form.lua")
 
 local function assert_true(condition, message)
 	if not condition then
@@ -287,23 +288,19 @@ local stage_all_err = wait_async(function(done)
 end)
 assert_equals(stage_all_err, nil, "stage_all should succeed")
 
-local original_input = vim.ui.input
 local original_confirm = vim.fn.confirm
-vim.ui.input = function(_, on_confirm)
-	on_confirm("stage2 automated commit")
-end
 vim.fn.confirm = function()
 	return 1
 end
 
 commands.dispatch({ "commit" }, cfg)
+compose.submit("stage2 automated commit")
 local commit_seen = vim.wait(5000, function()
 	local log_output = run_git(repo_dir, { "log", "--oneline", "-n", "1" })
 	return log_output:find("stage2 automated commit", 1, true) ~= nil
 end, 25)
 assert_true(commit_seen, "commit command should create a commit")
 
-vim.ui.input = original_input
 vim.fn.confirm = original_confirm
 
 write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "delta" })
@@ -613,16 +610,12 @@ assert_true(#log_entries >= 1, "log should contain at least one commit")
 
 write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "stash-change" })
 
-local stash_input = vim.ui.input
-vim.ui.input = function(_, on_confirm)
-	on_confirm("stage2 stash")
-end
 commands.dispatch({ "stash", "push" }, cfg)
+compose.submit("stage2 stash")
 local stash_push_seen = vim.wait(5000, function()
 	local output = run_git(repo_dir, { "stash", "list", "-n", "1" })
 	return output:find("stage2 stash", 1, true) ~= nil
 end, 25)
-vim.ui.input = stash_input
 assert_true(stash_push_seen, "stash push command should support prompted message")
 
 local stash_list_err, stash_entries = wait_async(function(done)
