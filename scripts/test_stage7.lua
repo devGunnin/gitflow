@@ -84,7 +84,7 @@ end
 
 local config = require("gitflow.config")
 local defaults = config.defaults()
-assert_equals(defaults.sync.pull_strategy, "merge", "default pull strategy should be merge")
+assert_equals(defaults.sync.pull_strategy, "rebase", "default pull strategy should be rebase")
 assert_equals(
 	defaults.keybindings.palette,
 	"gP",

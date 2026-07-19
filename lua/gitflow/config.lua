@@ -141,7 +141,7 @@ function M.defaults()
 			},
 		},
 		sync = {
-			pull_strategy = "merge",
+			pull_strategy = "rebase",
 		},
 		quick_actions = {
 			quick_commit = { "commit" },
@@ -178,6 +178,42 @@ end
 ---@type GitflowConfig
 M.current = M.defaults()
 
+--- Config paths whose keys are free-form, so unknown-key checking must stop
+--- there: highlight group names are arbitrary and user-defined.
+local OPEN_CONFIG_PATHS = {
+	highlights = true,
+}
+
+---Two actions bound to the same keys means one silently shadows the other,
+---so report every collision instead of letting the loser vanish.
+---@param keybindings table<string, string>
+local function validate_keybinding_collisions(keybindings)
+	local actions_by_mapping = {}
+	for _, action in ipairs(utils.sorted_keys(keybindings)) do
+		local mapping = keybindings[action]
+		actions_by_mapping[mapping] = actions_by_mapping[mapping] or {}
+		table.insert(actions_by_mapping[mapping], action)
+	end
+
+	local collisions = {}
+	for _, mapping in ipairs(utils.sorted_keys(actions_by_mapping)) do
+		local actions = actions_by_mapping[mapping]
+		if #actions > 1 then
+			collisions[#collisions + 1] =
+				("'%s' is bound to %s"):format(mapping, table.concat(actions, ", "))
+		end
+	end
+
+	if #collisions > 0 then
+		error(
+			("gitflow config error: duplicate keybindings — %s"):format(
+				table.concat(collisions, "; ")
+			),
+			3
+		)
+	end
+end
+
 ---@param config GitflowConfig
 local function validate_keybindings(config)
 	if type(config.keybindings) ~= "table" then
@@ -192,6 +228,33 @@ local function validate_keybindings(config)
 			error(("gitflow config error: keybinding '%s' must be a non-empty string"):format(action), 3)
 		end
 	end
+
+	validate_keybinding_collisions(config.keybindings)
+end
+
+---Reject options that no longer reach anything — a typo like
+---`inline_blame = { enalbe = false }` otherwise silently keeps the default.
+---@param opts table|nil  raw user options, before merging with defaults
+local function validate_known_keys(opts)
+	local unknown = utils.unknown_keys(M.defaults(), opts, OPEN_CONFIG_PATHS)
+	if #unknown == 0 then
+		return
+	end
+
+	local messages = {}
+	for _, entry in ipairs(unknown) do
+		if entry.suggestion then
+			messages[#messages + 1] =
+				("'%s' (did you mean '%s'?)"):format(entry.path, entry.suggestion)
+		else
+			messages[#messages + 1] = ("'%s'"):format(entry.path)
+		end
+	end
+
+	error(
+		("gitflow config error: unknown option %s"):format(table.concat(messages, ", ")),
+		3
+	)
 end
 
 ---@param config GitflowConfig
@@ -447,6 +510,8 @@ end
 ---@param opts table|nil
 ---@return GitflowConfig
 function M.setup(opts)
+	-- Checked against raw opts: the merged table always has every default key.
+	validate_known_keys(opts)
 	local merged = utils.deep_merge(M.defaults(), opts or {})
 	M.validate(merged)
 	M.current = merged
