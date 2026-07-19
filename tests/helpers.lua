@@ -549,7 +549,16 @@ function M.run_suite(name, tests)
 
 	print(("=== %s ==="):format(name))
 
-	for test_name, test_fn in pairs(tests) do
+	-- Sorted, not `pairs`: table order varies run to run, which made a failure
+	-- depend on which tests happened to run before it.
+	local test_names = {}
+	for test_name in pairs(tests) do
+		test_names[#test_names + 1] = test_name
+	end
+	table.sort(test_names)
+
+	for _, test_name in ipairs(test_names) do
+		local test_fn = tests[test_name]
 		local ok, err = pcall(test_fn)
 		if ok then
 			passed = passed + 1
