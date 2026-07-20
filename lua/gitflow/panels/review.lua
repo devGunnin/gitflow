@@ -868,7 +868,7 @@ local function render_file_list()
 	hint_keys({ { "]C/[C", "comment" }, { "<leader>c", "all comments" } })
 
 	hint_label("REVIEW")
-	hint_keys({ { "c", "comment" }, { "R", "reply" } })
+	hint_keys({ { "c", "comment" }, { "s", "suggest" }, { "R", "reply" } })
 	hint_keys({ { "S", "submit" }, { "C", "scope" } })
 	hint_keys({ { "<leader>e", "edit" }, { "<leader>x", "delete" } })
 	hint_keys({ { "<CR>/<leader>t", "thread" } })
@@ -1026,6 +1026,8 @@ end
 local REVIEW_BUFFER_KEYMAPS = {
 	{ "n", "c", function() M.inline_comment() end },
 	{ "v", "c", function() M.inline_comment_visual() end },
+	{ "n", "s", function() M.inline_suggestion() end },
+	{ "v", "s", function() M.inline_suggestion_visual() end },
 	{ "n", "S", function() M.submit_pending_review() end },
 	{ "n", "R", function() M.reply_to_thread() end },
 	{ "n", "<CR>", function() M.view_thread_at_cursor() end },
@@ -2502,13 +2504,17 @@ end
 
 --- Prompt for a body and queue a draft against the chosen anchor target.
 ---@param path string
----@param target table  { hunk, new_line, old_line, desc }
-local function queue_target_comment(path, target)
+---@param target table  { hunk, new_line, old_line, start_new_line, start_old_line, desc }
+---@param opts table|nil  { kind, title, noun, default }  compose overrides
+local function queue_target_comment(path, target, opts)
+	opts = opts or {}
+	local kind = opts.kind or "inline"
 	input.prompt({
 		multiline = true,
-		title = "Inline comment",
-		draft_key = ("review:%s:inline:%s:%s:%s"):format(
-			tostring(M.state.pr_number), path,
+		title = opts.title or "Inline comment",
+		default = opts.default,
+		draft_key = ("review:%s:%s:%s:%s:%s"):format(
+			tostring(M.state.pr_number), kind, path,
 			tostring(target.new_line), tostring(target.old_line)
 		),
 	}, function(text)
@@ -2525,13 +2531,15 @@ local function queue_target_comment(path, target)
 			-- Anchor to the diff's own line numbers, not the raw cursor.
 			new_line = target.new_line,
 			old_line = target.old_line,
+			start_new_line = target.start_new_line,
+			start_old_line = target.start_old_line,
 			created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		}
 		M.state.pending_comments[#M.state.pending_comments + 1] = pending
 		persist_pending()
 		notify_info(
-			("Comment queued on %s (#%d) — press S to submit"):
-				format(target.desc, pending.id))
+			("%s queued on %s (#%d) — press S to submit"):
+				format(opts.noun or "Comment", target.desc, pending.id))
 		render_file_list()
 		refresh_comments_for_active()
 	end)
@@ -2654,24 +2662,20 @@ function M.file_comment_under_cursor()
 	M.file_comment(file.path)
 end
 
-function M.inline_comment_visual()
+--- Resolve the file + ordered line range of the current visual selection and
+--- leave visual mode.  The path comes from the buffer the selection is in, so
+--- the comment can't be misattributed to a previously-active file.
+---@return { path: string, start_line: integer, end_line: integer }|nil
+local function require_visual_diff_range()
 	if not M.state.diff_winid
 		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
-		return
+		return nil
 	end
-	-- Resolve the path from the buffer the visual selection is in, so the
-	-- comment can't be misattributed to a previously-active file.
 	local buf = vim.api.nvim_get_current_buf()
 	local path = buf_repo_relative(buf)
 	if not path or not M.state.file_diffs[path] then
 		path = M.state.active_path
 	end
-	if not path then
-		notify_warn("Open a file from the PR file list first")
-		return
-	end
-	M.state.active_path = path
-	M.state.active_bufnr = buf
 
 	local start_line = vim.fn.line("v")
 	local end_line = vim.fn.line(".")
@@ -2679,52 +2683,124 @@ function M.inline_comment_visual()
 		vim.api.nvim_replace_termcodes("<Esc>", true, false, true),
 		"nx", false
 	)
+
+	if not path then
+		notify_warn("Open a file from the PR file list first")
+		return nil
+	end
+	M.state.active_path = path
+	M.state.active_bufnr = buf
+
 	if start_line > end_line then
 		start_line, end_line = end_line, start_line
 	end
+	return { path = path, start_line = start_line, end_line = end_line }
+end
+
+function M.inline_comment_visual()
+	local sel = require_visual_diff_range()
+	if not sel then
+		return
+	end
 
 	-- Both ends of the range must be diff lines, or GitHub can't resolve it.
-	local end_hunk, hunk_header = find_hunk_line_for(path, end_line)
-	local start_hunk = find_hunk_line_for(path, start_line)
+	local end_hunk, hunk_header = find_hunk_line_for(sel.path, sel.end_line)
+	local start_hunk = find_hunk_line_for(sel.path, sel.start_line)
 	if not end_hunk or not start_hunk then
 		notify_warn(OFF_DIFF_HINT)
 		return
 	end
 
-	input.prompt(
-		{
-			multiline = true,
-			title = "Inline range comment",
-			draft_key = ("review:%s:range:%s:%d:%d"):format(
-				tostring(M.state.pr_number), path, start_line, end_line
-			),
-		},
-		function(text)
-			local body = vim.trim(text or "")
-			if body == "" then
-				notify_warn("Comment cannot be empty")
-				return
-			end
-			local pending = {
-				id = next_pending_id(),
-				path = path,
-				body = body,
-				hunk = hunk_header,
-				new_line = end_hunk.new_line,
-				old_line = end_hunk.old_line,
-				start_new_line = start_hunk.new_line,
-				start_old_line = start_hunk.old_line,
-				created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-			}
-			M.state.pending_comments[#M.state.pending_comments + 1] = pending
-			persist_pending()
-			notify_info(
-				("Range comment queued (#%d, lines %d-%d) — press S to submit"):
-					format(pending.id, start_line, end_line))
-			render_file_list()
-			refresh_comments_for_active()
-		end
-	)
+	queue_target_comment(sel.path, {
+		hunk = hunk_header,
+		new_line = end_hunk.new_line,
+		old_line = end_hunk.old_line,
+		start_new_line = start_hunk.new_line,
+		start_old_line = start_hunk.old_line,
+		desc = ("lines %d-%d"):format(sel.start_line, sel.end_line),
+	}, { kind = "range", title = "Inline range comment" })
+end
+
+-- ── Suggested changes (#367) ────────────────────────────────────────────
+
+local SUGGESTION_SIDE_HINT =
+	"A suggestion replaces lines in the PR's new file, so it can only be "
+	.. "started on added or context lines of the diff (not removed lines)."
+
+--- Resolve what a suggestion anchored on buffer rows `start_row`..`end_row`
+--- would replace: the new-side line numbers, and those lines' exact text from
+--- the PR diff.  The diff is the source of truth, not the buffer, so a locally
+--- modified working tree can never leak into the proposal.
+---@param path string
+---@param start_row integer
+---@param end_row integer
+---@return table|nil, string|nil  { hunk, start_new, end_new, lines }
+local function resolve_suggestion_range(path, start_row, end_row)
+	local start_hunk, hunk_header = find_hunk_line_for(path, start_row)
+	local end_hunk = find_hunk_line_for(path, end_row)
+	if not start_hunk or not end_hunk
+		or not start_hunk.new_line or not end_hunk.new_line then
+		return nil, SUGGESTION_SIDE_HINT
+	end
+
+	local lines, err = inline.new_side_lines(
+		M.state.file_diffs[path], start_hunk.new_line, end_hunk.new_line)
+	if not lines then
+		return nil, ("Cannot suggest here: %s"):format(err or "unknown reason")
+	end
+	return {
+		hunk = hunk_header,
+		start_new = start_hunk.new_line,
+		end_new = end_hunk.new_line,
+		lines = lines,
+	}, nil
+end
+
+--- Queue a draft prefilled with a ```suggestion block holding the anchored
+--- lines verbatim, so the reviewer edits the proposal instead of retyping it.
+---@param path string
+---@param start_row integer
+---@param end_row integer
+local function queue_suggestion(path, start_row, end_row)
+	local range, err = resolve_suggestion_range(path, start_row, end_row)
+	if not range then
+		notify_warn(err)
+		return
+	end
+
+	local multi = range.start_new ~= range.end_new
+	queue_target_comment(path, {
+		hunk = range.hunk,
+		-- The comment anchors at the range end; GitHub replaces start..end.
+		new_line = range.end_new,
+		start_new_line = multi and range.start_new or nil,
+		desc = multi
+			and ("lines %d-%d"):format(range.start_new, range.end_new)
+			or ("line %d"):format(range.end_new),
+	}, {
+		kind = "suggest",
+		title = "Suggested change",
+		noun = "Suggestion",
+		default = inline.suggestion_block(range.lines),
+	})
+end
+
+--- Propose an edit to the line under the cursor (#367).
+function M.inline_suggestion()
+	local ctx = require_active_diff_line()
+	if not ctx then
+		return
+	end
+	queue_suggestion(ctx.path, ctx.line, ctx.line)
+end
+
+--- Propose an edit spanning the visual selection (#367).
+function M.inline_suggestion_visual()
+	local sel = require_visual_diff_range()
+	if not sel then
+		return
+	end
+	queue_suggestion(sel.path, sel.start_line, sel.end_line)
 end
 
 function M.toggle_inline_comments()

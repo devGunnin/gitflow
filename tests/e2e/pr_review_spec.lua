@@ -73,6 +73,17 @@ local function decode_logged_stdin_payload(lines)
 	return nil
 end
 
+-- #367 fixtures. The hunk `@@ -10,7 +10,9 @@` on lua/gitflow/highlights.lua
+-- gives new-side lines 13/14/15 as the three added lines below. The real
+-- working-tree file has different text at those rows, so asserting on these
+-- strings proves a suggestion is built from the PR diff, not from the buffer.
+local SUGGEST_PATH = "lua/gitflow/highlights.lua"
+local SUGGEST_LINES = {
+	[13] = '  GitflowModified = { link = "DiffText" },',
+	[14] = '  GitflowDarkBg = { bg = "#1e1e2e" },',
+	[15] = '  GitflowDarkFg = { fg = "#cdd6f4" },',
+}
+
 local function cleanup_panels()
 	review_panel.close()
 	T.cleanup_panels()
@@ -1725,6 +1736,229 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
 		cleanup_panels()
+	end,
+
+	-- ── #367: suggested code changes ───────────────────────────────────
+
+	["starting a suggestion prefills the anchored diff line"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file(SUGGEST_PATH)
+		T.drain_jobs(1000)
+
+		local prefill
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(opts, on_confirm)
+					prefill = opts.default
+					on_confirm(opts.default)
+				end },
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(review_panel.state.diff_winid, { 13, 0 })
+			review_panel.inline_suggestion()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(prefill,
+			"```suggestion\n" .. SUGGEST_LINES[13] .. "\n```",
+			"suggestion should be prefilled with the anchored diff line")
+
+		-- The buffer holds the real file, whose line 13 is different text;
+		-- the proposal must come from the diff, never from the buffer.
+		local buf_line = vim.api.nvim_buf_get_lines(
+			review_panel.state.active_bufnr, 12, 13, false)[1]
+		T.assert_true(buf_line ~= SUGGEST_LINES[13],
+			"fixture precondition: buffer line 13 differs from the diff line")
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"a suggestion should queue exactly one draft")
+		local pc = review_panel.state.pending_comments[1]
+		T.assert_equals(pc.new_line, 13, "suggestion should anchor on line 13")
+		T.assert_true(pc.start_new_line == nil,
+			"a single-line suggestion carries no range start")
+		T.assert_true(inline.has_suggestion(pc.body),
+			"the queued body should hold a suggestion block")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["a multi-line suggestion spans the selected range"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file(SUGGEST_PATH)
+		T.drain_jobs(1000)
+
+		local prefill
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(opts, on_confirm)
+					prefill = opts.default
+					on_confirm(opts.default)
+				end },
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(review_panel.state.diff_winid, { 13, 0 })
+			vim.cmd("normal! V2j")
+			review_panel.inline_suggestion_visual()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(prefill, table.concat({
+			"```suggestion",
+			SUGGEST_LINES[13],
+			SUGGEST_LINES[14],
+			SUGGEST_LINES[15],
+			"```",
+		}, "\n"), "a range suggestion should prefill every anchored line")
+
+		local pc = review_panel.state.pending_comments[1]
+		T.assert_true(pc ~= nil, "the range suggestion should be queued")
+		T.assert_equals(pc.start_new_line, 13,
+			"range suggestion should start at the selection's first line")
+		T.assert_equals(pc.new_line, 15,
+			"range suggestion should end at the selection's last line")
+
+		-- The body must survive to the reviews API unchanged: a suggestion is
+		-- an ordinary comment, so no separate API path may be involved.
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{ table = input, key = "prompt",
+					value = function(_, on_confirm) on_confirm("") end },
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
+
+			local payload = decode_logged_stdin_payload(T.read_file(log_path))
+			T.assert_true(payload ~= nil and type(payload.comments) == "table"
+				and #payload.comments == 1,
+				"the suggestion should be batched into the reviews payload")
+			local sent = payload.comments[1]
+			T.assert_equals(sent.body, prefill,
+				"the suggestion body must reach the API intact")
+			T.assert_equals(sent.start_line, 13, "start_line should be 13")
+			T.assert_equals(sent.line, 15, "line should be 15")
+			T.assert_equals(sent.side, "RIGHT",
+				"a suggestion replaces new-side lines")
+			T.assert_equals(sent.start_side, "RIGHT",
+				"the range start must be on the new side too")
+		end)
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["a suggestion is refused when a line in the range is off-diff"] = function()
+		local fd = { hunks = { { lines = {
+			{ kind = "ctx", text = "keep", new_line = 10 },
+			{ kind = "del", text = "gone", old_line = 11 },
+			{ kind = "add", text = "added", new_line = 12 },
+		} } } }
+
+		local ok_lines = inline.new_side_lines(fd, 10, 10)
+		T.assert_true(ok_lines ~= nil and #ok_lines == 1,
+			"a covered range should resolve")
+
+		local gapped, err = inline.new_side_lines(fd, 10, 12)
+		T.assert_true(gapped == nil,
+			"line 11 has no new side, so the range must not resolve")
+		T.assert_true(err ~= nil and err:find("11", 1, true) ~= nil,
+			"the error should name the line that is missing from the diff")
+	end,
+
+	["received suggestions render distinguishably from prose"] = function()
+		local function box_rows(body)
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "a", "b", "c" })
+			inline.apply_comments(bufnr, {
+				{ author = "octocat", body = body, new_line = 2 },
+			}, { show_body = true })
+
+			local marks = vim.api.nvim_buf_get_extmarks(
+				bufnr, inline.COMMENT_NS, 0, -1, { details = true })
+			T.assert_equals(#marks, 1, "one comment should be drawn")
+
+			local rows = {}
+			for _, vline in ipairs(marks[1][4].virt_lines or {}) do
+				local text, groups = "", {}
+				for _, chunk in ipairs(vline) do
+					text = text .. chunk[1]
+					groups[#groups + 1] = tostring(chunk[2])
+				end
+				rows[#rows + 1] = { text = text, groups = groups }
+			end
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			return rows
+		end
+
+		local suggested = box_rows("Rename it:\n```suggestion\nlocal renamed = 1\n```")
+		local header, code_row = nil, nil
+		for _, row in ipairs(suggested) do
+			if row.text:find("suggestion", 1, true) then
+				header = row
+			end
+			if row.text:find("local renamed = 1", 1, true) then
+				code_row = row
+			end
+		end
+		T.assert_true(header ~= nil,
+			"a comment carrying a suggestion should say so in its header")
+		T.assert_true(code_row ~= nil,
+			"the proposed line should be rendered in the box")
+		T.assert_true(
+			vim.tbl_contains(code_row.groups, "GitflowAdded"),
+			"proposed lines should be highlighted as additions, not prose")
+		T.assert_true(code_row.text:find("+", 1, true) ~= nil,
+			"proposed lines should carry an addition marker")
+
+		local prose = box_rows("Rename it: local renamed = 1")
+		for _, row in ipairs(prose) do
+			T.assert_true(not vim.tbl_contains(row.groups, "GitflowAdded"),
+				"a prose comment must not render as a suggestion")
+			T.assert_true(row.text:find("suggested change", 1, true) == nil,
+				"a prose comment must not claim to be a suggestion")
+		end
+	end,
+
+	["repo_slug resolves once across repeated comment loads"] = function()
+		cache.invalidate_repo_slug()
+
+		with_temp_gh_log(function(log_path)
+			for _ = 1, 3 do
+				cache.load(4242)
+				cache.save(4242, { comments = {} })
+			end
+
+			-- A cwd change can mean a different repo, so it must re-resolve.
+			local original_cwd = vim.fn.getcwd()
+			local elsewhere = vim.fn.tempname()
+			vim.fn.mkdir(elsewhere, "p")
+			vim.cmd.cd(elsewhere)
+			cache.repo_slug()
+			vim.cmd.cd(original_cwd)
+			pcall(vim.fn.delete, elsewhere, "rf")
+
+			local resolves = 0
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("repo view", 1, true) then
+					resolves = resolves + 1
+				end
+			end
+			T.assert_equals(resolves, 2,
+				"the slug should resolve once per cwd, not per load/save")
+		end)
+
+		cache.clear(4242)
 	end,
 
 	-- ── #363: scope review to a commit range via a local git diff ───────
