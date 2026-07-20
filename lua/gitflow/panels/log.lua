@@ -19,6 +19,13 @@ local components = require("gitflow.ui.components")
 local M = {}
 local LOG_FLOAT_TITLE = "  Gitflow Log  "
 local LOG_FLOAT_FOOTER = " <CR> review commit · V range select · r refresh · q close "
+-- Split-layout counterpart of LOG_FLOAT_FOOTER; keep the two in sync.
+local LOG_HINTS = {
+	{ "<CR>", "review commit" },
+	{ "V", "range select" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
@@ -159,7 +166,10 @@ local function render(entries, current_branch)
 		end
 	end
 
-	B:blank()
+	-- In-buffer hints for split layout (floats advertise the same keys in
+	-- their window footer). Kept above the branch footer so the final line
+	-- stays the exact "Current branch: <branch>" string tests rely on.
+	components.split_hint_bar(B, render_opts, LOG_HINTS)
 	components.branch_footer(B, current_branch)
 
 	ui.buffer.update("log", B.lines)

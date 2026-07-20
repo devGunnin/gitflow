@@ -45,7 +45,7 @@ local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 local STATUS_FLOAT_TITLE = "  Gitflow Status  "
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
 local STATUS_FLOAT_FOOTER = " s/u stage · V then s/u batch · a/A all · cc commit"
-	.. " · dd diff · cx conflict · p push · r refresh · q close "
+	.. " · dd diff · cx conflict · X discard changes · p push · r refresh · q close "
 -- Compact in-buffer hints for split layout (floats use the footer above).
 local STATUS_HINTS = {
 	{ "s/u", "stage/unstage" },
@@ -53,6 +53,7 @@ local STATUS_HINTS = {
 	{ "<CR>", "open" },
 	{ "cc", "commit" },
 	{ "dd", "diff" },
+	{ "X", "discard changes" },
 	{ "p", "push" },
 	{ "r", "refresh" },
 	{ "q", "close" },
