@@ -182,8 +182,11 @@ local cfg = gitflow.setup({
 	},
 })
 
+-- gh is probed on the first GitHub command, never at setup (startup must not
+-- pay `gh auth status`), so drive the probe explicitly here.
 local gh = require("gitflow.gh")
-assert_true(gh.state.checked, "gh should be checked")
+assert_true(not gh.state.checked, "setup should not probe gh")
+assert_true(gh.ensure_prerequisites(), "gh stub should satisfy prerequisites")
 assert_true(gh.state.authenticated, "gh should be authenticated")
 
 local commands = require("gitflow.commands")

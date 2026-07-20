@@ -481,6 +481,149 @@ function M.apply_annotations(bufnr, file_diff)
 	return result
 end
 
+-- ── Suggested changes (GitHub ```suggestion blocks) ─────────────────────
+--
+-- A suggestion is not a separate API object: it is a fenced block inside an
+-- ordinary review-comment body, applied to the new-side lines the comment
+-- anchors to.  These helpers build and parse that block.
+
+--- The new-file lines `start_new`..`end_new` exactly as the PR diff has them.
+--- Every line in the range must be present (added or context) — a gap returns
+--- an error rather than a guess, because a suggestion assembled from the wrong
+--- lines would silently rewrite the author's file.
+---@param file_diff GitflowReviewFileDiff|nil
+---@param start_new integer
+---@param end_new integer
+---@return string[]|nil, string|nil
+function M.new_side_lines(file_diff, start_new, end_new)
+	if type(start_new) ~= "number" or type(end_new) ~= "number"
+		or start_new < 1 or end_new < start_new then
+		return nil, "invalid line range"
+	end
+	if not file_diff or type(file_diff.hunks) ~= "table" then
+		return nil, "this file has no parsed PR diff"
+	end
+
+	local by_line = {}
+	for _, hunk in ipairs(file_diff.hunks) do
+		for _, l in ipairs(hunk.lines) do
+			-- Deleted lines carry no new_line, so they can never shadow a
+			-- new-side line here.
+			if l.new_line and l.new_line >= start_new
+				and l.new_line <= end_new then
+				by_line[l.new_line] = l.text or ""
+			end
+		end
+	end
+
+	local out = {}
+	for n = start_new, end_new do
+		if by_line[n] == nil then
+			return nil, ("line %d is not part of the PR diff"):format(n)
+		end
+		out[#out + 1] = by_line[n]
+	end
+	assert(#out == end_new - start_new + 1,
+		"suggestion source must cover the whole range")
+	return out, nil
+end
+
+---@param lines string[]
+---@return integer
+local function longest_backtick_run(lines)
+	local longest = 0
+	for _, line in ipairs(lines) do
+		for run in tostring(line):gmatch("`+") do
+			if #run > longest then
+				longest = #run
+			end
+		end
+	end
+	return longest
+end
+
+--- Wrap `lines` in a ```suggestion fence. The fence outgrows any backtick run
+--- in the content, so suggesting on fenced markdown does not break the block.
+---@param lines string[]
+---@return string
+function M.suggestion_block(lines)
+	assert(type(lines) == "table", "suggestion lines must be a table")
+	local fence = string.rep("`", math.max(3, longest_backtick_run(lines) + 1))
+	local out = { fence .. "suggestion" }
+	for _, l in ipairs(lines) do
+		out[#out + 1] = tostring(l)
+	end
+	out[#out + 1] = fence
+	return table.concat(out, "\n")
+end
+
+---@param lines string[]
+---@param from integer
+---@param fence string
+---@return integer|nil  index of the closing fence line
+local function find_fence_close(lines, from, fence)
+	for i = from, #lines do
+		local run = lines[i]:match("^%s*(`+)%s*$")
+		if run and #run >= #fence then
+			return i
+		end
+	end
+	return nil
+end
+
+---@class GitflowReviewBodySegment
+---@field kind "text"|"suggestion"
+---@field lines string[]
+
+--- Split a comment body into prose and suggestion blocks so a reviewer can
+--- tell a proposed edit from prose. An unterminated fence stays prose.
+---@param body string|nil
+---@return GitflowReviewBodySegment[]
+function M.split_suggestions(body)
+	local lines = split_lines(body)
+	local segments = {}
+	local text = {}
+
+	local function flush_text()
+		if #text > 0 then
+			segments[#segments + 1] = { kind = "text", lines = text }
+			text = {}
+		end
+	end
+
+	local i = 1
+	while i <= #lines do
+		local fence = lines[i]:match("^%s*(`+)suggestion%s*$")
+		local close_at = (fence and #fence >= 3)
+			and find_fence_close(lines, i + 1, fence) or nil
+		if close_at then
+			flush_text()
+			local block = {}
+			for j = i + 1, close_at - 1 do
+				block[#block + 1] = lines[j]
+			end
+			segments[#segments + 1] = { kind = "suggestion", lines = block }
+			i = close_at + 1
+		else
+			text[#text + 1] = lines[i]
+			i = i + 1
+		end
+	end
+	flush_text()
+	return segments
+end
+
+---@param body string|nil
+---@return boolean
+function M.has_suggestion(body)
+	for _, seg in ipairs(M.split_suggestions(body)) do
+		if seg.kind == "suggestion" then
+			return true
+		end
+	end
+	return false
+end
+
 ---@class GitflowReviewInlineComment
 ---@field author string|nil
 ---@field body string
@@ -548,6 +691,71 @@ local function wrap_text(text, width)
 	return out
 end
 
+--- Split `text` at exactly `width` display columns without reflowing words, so
+--- proposed code survives the box verbatim across continuation rows.
+---@param text string
+---@param width integer
+---@return string[]
+local function hard_wrap(text, width)
+	assert(width > 0, "hard_wrap width must be positive")
+	local out = {}
+	local rest = text or ""
+	repeat
+		if disp_width(rest) <= width then
+			out[#out + 1] = rest
+			break
+		end
+		-- Byte-wise cut is safe enough here: over-wide rows only clip.
+		out[#out + 1] = rest:sub(1, width)
+		rest = rest:sub(width + 1)
+	until rest == ""
+	if #out == 0 then
+		out[1] = ""
+	end
+	return out
+end
+
+---@class GitflowReviewBoxRow
+---@field text string
+---@field hl string
+
+local SUGGESTION_GUTTER = "▏"
+
+--- Rows for one comment body: prose word-wraps, suggestion blocks are marked
+--- and hard-wrapped so the reviewer sees the proposed lines as code (#367).
+---@param body string|nil
+---@return GitflowReviewBoxRow[]
+local function body_rows(body)
+	local rows = {}
+	for _, seg in ipairs(M.split_suggestions(body)) do
+		if seg.kind == "suggestion" then
+			rows[#rows + 1] = {
+				text = SUGGESTION_GUTTER .. " suggested change",
+				hl = "GitflowReviewAuthor",
+			}
+			for _, l in ipairs(seg.lines) do
+				for _, part in ipairs(hard_wrap(l, BOX_MAX_WIDTH - 4)) do
+					rows[#rows + 1] = {
+						text = ("%s + %s"):format(SUGGESTION_GUTTER, part),
+						hl = "GitflowAdded",
+					}
+				end
+			end
+		else
+			local prose = table.concat(seg.lines, "\n")
+			if vim.trim(prose) ~= "" then
+				for _, l in ipairs(wrap_text(prose, BOX_MAX_WIDTH)) do
+					rows[#rows + 1] = { text = l, hl = "GitflowReviewCommentBody" }
+				end
+			end
+		end
+	end
+	if #rows == 0 then
+		rows[1] = { text = "", hl = "GitflowReviewCommentBody" }
+	end
+	return rows
+end
+
 --- Title shown in the top border of a comment box.
 ---@param c GitflowReviewInlineComment
 ---@return string
@@ -555,6 +763,9 @@ local function box_header(c)
 	local author = (c.author and c.author ~= "") and c.author or "unknown"
 	local count = c.count or 1
 	local header = ("%s · %s"):format(c.pending and "draft" or "thread", author)
+	if M.has_suggestion(c.body) then
+		header = header .. " · suggestion"
+	end
 	if count > 1 then
 		header = header .. (" · %d repl%s"):format(
 			count - 1, (count - 1) == 1 and "y" or "ies")
@@ -570,16 +781,16 @@ local function box_header(c)
 	return header
 end
 
---- Wrapped reply blocks for a folded-out thread (#360); empty when collapsed.
+--- Reply blocks for a folded-out thread (#360); empty when collapsed.
 ---@param c GitflowReviewInlineComment
----@return { author: string, lines: string[] }[]
+---@return { author: string, rows: GitflowReviewBoxRow[] }[]
 local function box_reply_blocks(c)
 	local blocks = {}
 	for _, r in ipairs(c.replies or {}) do
 		local who = (r.author and r.author ~= "") and r.author or "unknown"
 		blocks[#blocks + 1] = {
 			author = ("@%s"):format(who),
-			lines = wrap_text(r.body or "", BOX_MAX_WIDTH),
+			rows = body_rows(r.body),
 		}
 	end
 	return blocks
@@ -587,18 +798,18 @@ end
 
 --- Widest content row, clamped to the box's min/max, excluding the borders.
 ---@param header string
----@param body_lines string[]
----@param replies { author: string, lines: string[] }[]
+---@param rows GitflowReviewBoxRow[]
+---@param replies { author: string, rows: GitflowReviewBoxRow[] }[]
 ---@return integer
-local function box_inner_width(header, body_lines, replies)
+local function box_inner_width(header, rows, replies)
 	local inner = disp_width(header) + 2
-	for _, bl in ipairs(body_lines) do
-		inner = math.max(inner, disp_width(bl))
+	for _, row in ipairs(rows) do
+		inner = math.max(inner, disp_width(row.text))
 	end
 	for _, reply in ipairs(replies) do
 		inner = math.max(inner, disp_width(reply.author) + 2)
-		for _, bl in ipairs(reply.lines) do
-			inner = math.max(inner, disp_width(bl))
+		for _, row in ipairs(reply.rows) do
+			inner = math.max(inner, disp_width(row.text))
 		end
 	end
 	return math.max(BOX_MIN_WIDTH, math.min(inner, BOX_MAX_WIDTH))
@@ -617,10 +828,10 @@ local function build_comment_box(c)
 	local border_hl = c.pending
 		and "GitflowReviewDraftBox" or "GitflowReviewCommentBox"
 	local header = box_header(c)
-	local body_lines = wrap_text(c.body or "", BOX_MAX_WIDTH)
+	local rows = body_rows(c.body)
 	local replies = box_reply_blocks(c)
 
-	local inner = box_inner_width(header, body_lines, replies)
+	local inner = box_inner_width(header, rows, replies)
 	local span = inner + 2 -- cells between the two corner glyphs
 
 	local function pad(s)
@@ -643,18 +854,19 @@ local function build_comment_box(c)
 		{ " " .. string.rep("─", dashes) .. "╮", border_hl },
 	}
 
-	local function push_body_rows(rows)
-		for _, bl in ipairs(rows) do
+	---@param body_rows_list GitflowReviewBoxRow[]
+	local function push_body_rows(body_rows_list)
+		for _, row in ipairs(body_rows_list) do
 			virt_lines[#virt_lines + 1] = {
 				{ BOX_INDENT, "GitflowReviewCommentBox" },
 				{ "│ ", border_hl },
-				{ pad(bl), "GitflowReviewCommentBody" },
+				{ pad(row.text), row.hl },
 				{ " │", border_hl },
 			}
 		end
 	end
 
-	push_body_rows(body_lines)
+	push_body_rows(rows)
 
 	for _, reply in ipairs(replies) do
 		local seg_w = 2 + disp_width(reply.author) + 1 -- "─ " + author + " "
@@ -665,7 +877,7 @@ local function build_comment_box(c)
 			{ " " .. string.rep("─", math.max(0, span - seg_w)) .. "┤",
 				border_hl },
 		}
-		push_body_rows(reply.lines)
+		push_body_rows(reply.rows)
 	end
 
 	-- Bottom border.
@@ -702,8 +914,15 @@ function M.apply_comments(bufnr, comments, opts)
 			if show_body and c.body and c.body ~= "" then
 				extmark.virt_lines = build_comment_box(c)
 			else
-				-- Collapsed: compact end-of-line badge only.
-				local marker = c.pending and " ● draft " or " ● thread "
+				-- Collapsed: compact end-of-line badge only.  A proposed edit
+				-- is named even here, so it is never mistaken for prose (#367).
+				local marker
+				if M.has_suggestion(c.body) then
+					marker = c.pending and " ● draft suggestion "
+						or " ● suggestion "
+				else
+					marker = c.pending and " ● draft " or " ● thread "
+				end
 				local marker_hl = c.pending
 					and "GitflowReviewChangesRequested"
 					or "GitflowReviewAuthor"

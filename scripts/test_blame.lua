@@ -502,8 +502,145 @@ test("blame icon should be registered in palette category", function()
 end)
 
 --------------------------------------------------------------------
+-- Superseded-refresh guard
+--------------------------------------------------------------------
+
+---A blame entry whose content names the request that produced it.
+---@param marker string
+local function stub_entry(marker)
+	return {
+		sha = "1234567890abcdef1234567890abcdef12345678",
+		short_sha = "1234567",
+		author = "tester",
+		date = "2026-01-01",
+		line_number = 1,
+		content = marker,
+		boundary = false,
+	}
+end
+
+---Open blame, then hold every subsequent git-blame callback so results can be
+---delivered out of order. Restores the real runner before returning.
+---@param body fun(deliver: fun(index: integer, err: string|nil, entries: table|nil))
+local function with_held_blame_results(body)
+	if blame_panel.is_open() then
+		blame_panel.close()
+	end
+	vim.cmd("edit " .. repo_dir .. "/test.txt")
+	commands.dispatch({ "blame" }, cfg)
+	wait_until(function()
+		return blame_panel.is_open()
+	end, "blame panel should open")
+
+	local git_blame = require("gitflow.git.blame")
+	local original_run = git_blame.run
+	local held = {}
+	git_blame.run = function(_, cb)
+		held[#held + 1] = cb
+	end
+
+	local function wait_for_held(expected)
+		wait_until(function()
+			return #held >= expected
+		end, ("request %d should reach git blame"):format(expected))
+	end
+
+	local function start_refresh(expected)
+		blame_panel.refresh()
+		wait_for_held(expected)
+	end
+
+	local ok, err = pcall(body, start_refresh, function(index, e, entries)
+		held[index](e, entries)
+	end, wait_for_held)
+
+	git_blame.run = original_run
+	assert_true(ok, tostring(err))
+end
+
+---@return string[]
+local function blame_lines()
+	local bufnr = blame_panel.state.bufnr
+	assert_true(
+		bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+		"blame panel should still have a buffer"
+	)
+	return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+end
+
+test("superseded blame result must not overwrite the newest render", function()
+	with_held_blame_results(function(start_refresh, deliver)
+		start_refresh(1)
+		start_refresh(2)
+
+		deliver(2, nil, { stub_entry("NEWEST-RESULT") })
+		deliver(1, nil, { stub_entry("STALE-RESULT") })
+
+		local lines = blame_lines()
+		assert_true(
+			find_line(lines, "NEWEST-RESULT") ~= nil,
+			"panel should show the newest result"
+		)
+		assert_true(
+			find_line(lines, "STALE-RESULT") == nil,
+			"a superseded result must not render over the newest one"
+		)
+	end)
+end)
+
+test("superseded blame error must not replace a good render", function()
+	with_held_blame_results(function(start_refresh, deliver)
+		start_refresh(1)
+		start_refresh(2)
+
+		deliver(2, nil, { stub_entry("GOOD-RESULT") })
+		deliver(1, "fatal: no such path in HEAD", nil)
+
+		local lines = blame_lines()
+		assert_true(
+			find_line(lines, "GOOD-RESULT") ~= nil,
+			"panel should keep the newest result"
+		)
+		assert_true(
+			find_line(lines, "Could not compute blame") == nil,
+			"a superseded error must not leave the panel in an error state"
+		)
+	end)
+end)
+
+test("result from before a close must not land in the reopened panel", function()
+	with_held_blame_results(function(start_refresh, deliver, wait_for_held)
+		start_refresh(1)
+		blame_panel.close()
+
+		-- The reopen issues its own request; hold it too.
+		commands.dispatch({ "blame" }, cfg)
+		wait_until(function()
+			return blame_panel.is_open()
+		end, "blame panel should reopen")
+		wait_for_held(2)
+
+		deliver(1, nil, { stub_entry("BEFORE-CLOSE") })
+		assert_true(
+			find_line(blame_lines(), "BEFORE-CLOSE") == nil,
+			"a result from before the close must not render"
+		)
+
+		-- The reopened panel must still be live, not stuck on the loading state.
+		deliver(2, nil, { stub_entry("REOPENED-RESULT") })
+		assert_true(
+			find_line(blame_lines(), "REOPENED-RESULT") ~= nil,
+			"the reopened panel should render its own result"
+		)
+	end)
+end)
+
+--------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------
+if blame_panel.is_open() then
+	blame_panel.close()
+end
 vim.fn.chdir(previous_cwd)
 vim.fn.delete(repo_dir, "rf")
 
