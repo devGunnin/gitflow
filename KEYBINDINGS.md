@@ -320,6 +320,7 @@ edit.
 | Key | Action |
 | --- | --- |
 | `c` | Comment on the current line. If deleted lines are shown next to the cursor row, you'll be asked whether to comment on the added/context line or one of the deleted lines (normal and visual mode) |
+| `s` | Start a GitHub suggestion block for the current line (normal and visual mode) — opens the comment composer prefilled with a suggestion code fence containing the selected lines, so you can propose an actual code edit |
 | `S` | Submit review (same dropdown flow as the file list) |
 | `R` | Reply to the existing thread on the current line |
 | `]f` / `[f` | Next / previous file (without leaving the editing pane) |

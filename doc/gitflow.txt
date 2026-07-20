@@ -408,6 +408,9 @@ Review view ~
     ]C      Jump to next comment thread (opens file, crosses files)
     [C      Jump to previous comment thread
     c       Inline comment (normal and visual mode)
+    s       Start a GitHub suggestion block for the current line (normal
+            and visual mode): opens the comment composer prefilled with
+            a suggestion code fence for the selected lines
     S       Submit pending review (Comment / Request changes / Approve)
     R       Reply to comment thread on the current line
     <leader>t   Fold/unfold the reply thread on the current line
