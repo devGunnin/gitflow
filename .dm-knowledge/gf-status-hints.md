@@ -1,0 +1,1 @@
+- **[convention]** status.lua's X (discard uncommitted changes) already confirms via ui.input.confirm defaulting to Cancel before running git restore/checkout/clean — verified by capturing vim.fn.confirm's default_choice arg in scripts/test_stage2.lua. It was just missing from the footer/split hints; not a missing-confirm bug.  _(2026-07-20T14:16:12Z)_
