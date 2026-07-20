@@ -84,6 +84,18 @@ local SUGGEST_LINES = {
 	[15] = '  GitflowDarkFg = { fg = "#cdd6f4" },',
 }
 
+--- The queued draft that carries a suggestion block. Found by content rather
+--- than index so an unrelated draft can never be asserted on by mistake.
+---@return table|nil
+local function find_suggestion_draft()
+	for _, pc in ipairs(review_panel.state.pending_comments) do
+		if inline.has_suggestion(pc.body) then
+			return pc
+		end
+	end
+	return nil
+end
+
 local function cleanup_panels()
 	review_panel.close()
 	T.cleanup_panels()
@@ -1741,6 +1753,9 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #367: suggested code changes ───────────────────────────────────
 
 	["starting a suggestion prefills the anchored diff line"] = function()
+		-- A draft left on disk by an earlier failed run rehydrates on open and
+		-- shifts the drafts under test; start from a known-empty cache.
+		cache.clear(42, cache.repo_slug())
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
@@ -1777,7 +1792,8 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		T.assert_equals(#review_panel.state.pending_comments, 1,
 			"a suggestion should queue exactly one draft")
-		local pc = review_panel.state.pending_comments[1]
+		local pc = find_suggestion_draft()
+		T.assert_true(pc ~= nil, "the suggestion draft should be queued")
 		T.assert_equals(pc.new_line, 13, "suggestion should anchor on line 13")
 		T.assert_true(pc.start_new_line == nil,
 			"a single-line suggestion carries no range start")
@@ -1789,6 +1805,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["a multi-line suggestion spans the selected range"] = function()
+		cache.clear(42, cache.repo_slug())
 		review_panel.open(cfg, 42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
@@ -1821,7 +1838,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			"```",
 		}, "\n"), "a range suggestion should prefill every anchored line")
 
-		local pc = review_panel.state.pending_comments[1]
+		local pc = find_suggestion_draft()
 		T.assert_true(pc ~= nil, "the range suggestion should be queued")
 		T.assert_equals(pc.start_new_line, 13,
 			"range suggestion should start at the selection's first line")
