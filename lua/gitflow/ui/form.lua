@@ -110,6 +110,7 @@ end
 ---@field on_submit fun(values: table<string, string>)
 ---@field on_cancel? fun()
 ---@field active_field integer
+---@field closed boolean  latched once the form has been cancelled or submitted
 
 -- Separator between label row and editable value row
 local FIELD_SEPARATOR = "─"
@@ -557,7 +558,7 @@ end
 
 ---Open an interactive form float.
 ---@param opts GitflowFormOpts
----@return GitflowFormState
+---@return GitflowFormState|nil  nil when the terminal is too small for the float
 function M.open(opts)
 	local state = {
 		bufnr = nil,
@@ -570,6 +571,7 @@ function M.open(opts)
 		on_cancel = opts.on_cancel,
 		active_field = 1,
 		draft_key = opts.draft_key,
+		closed = false,
 	}
 
 	-- Create buffer
@@ -587,6 +589,44 @@ function M.open(opts)
 	initialize_markers(state, lines)
 	sync_field_lines(state)
 
+	-- Cancel: stash a draft so the form can be resumed later. Reached from the
+	-- q/<Esc> binds and from ui.window's close hook (plain :q!, :bd, a layout
+	-- change), so it latches — the draft must be stashed once, never twice.
+	---@param from_hook boolean  true when ui.window's close hook got here first
+	local function cancel(from_hook)
+		if state.closed then
+			return
+		end
+		state.closed = true
+
+		-- Reads the buffer, so it must run before the close route wipes it.
+		local saved = save_draft(state.draft_key, collect_values(state))
+
+		if from_hook then
+			-- Window is already going away and deleting a buffer inside
+			-- WinClosed is unsafe; `bufhidden=wipe` collects it.
+			state.winid = nil
+			state.bufnr = nil
+		else
+			close_form(state)
+		end
+
+		if saved then
+			utils.notify(
+				"Draft saved — reopen to resume, <C-d> to discard",
+				vim.log.levels.INFO
+			)
+		end
+		if not state.on_cancel then
+			return
+		end
+		if from_hook then
+			vim.schedule(state.on_cancel)
+		else
+			state.on_cancel()
+		end
+	end
+
 	-- Open float
 	local width = opts.width or 0.5
 	local height = opts.height or 0.5
@@ -598,7 +638,18 @@ function M.open(opts)
 		title = "  " .. opts.title .. "  ",
 		title_pos = "center",
 		enter = true,
+		on_close = function()
+			cancel(true)
+		end,
 	})
+	if not state.winid then
+		-- open_float already said why. Bail before touching `completeopt`, or
+		-- the global would stay clobbered with no window left to restore it.
+		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+		state.bufnr = nil
+		state.closed = true
+		return nil
+	end
 
 	-- Show completion suggestions without force-inserting/selecting them, so
 	-- typing a brand-new label/assignee still works.  Restored when the form
@@ -660,6 +711,9 @@ function M.open(opts)
 		end
 
 		clear_draft(state.draft_key)
+		-- Latch first: closing below raises WinClosed, which would otherwise
+		-- route into cancel() and re-stash the values we just submitted.
+		state.closed = true
 		close_form(state)
 		state.on_submit(values)
 	end, { buffer = bufnr, silent = true })
@@ -683,22 +737,12 @@ function M.open(opts)
 	end, { buffer = bufnr, silent = true })
 
 	-- q / <Esc>: cancel — stash a draft so the form can be resumed later
-	local function cancel()
-		local saved = save_draft(state.draft_key, collect_values(state))
-		close_form(state)
-		if saved then
-			utils.notify(
-				"Draft saved — reopen to resume, <C-d> to discard",
-				vim.log.levels.INFO
-			)
-		end
-		if state.on_cancel then
-			state.on_cancel()
-		end
+	local function cancel_from_keymap()
+		cancel(false)
 	end
 
-	vim.keymap.set("n", "q", cancel, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Esc>", cancel, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "q", cancel_from_keymap, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "<Esc>", cancel_from_keymap, { buffer = bufnr, silent = true })
 
 	-- Prevent BufWriteCmd from erroring on :w in acwrite buffer
 	vim.api.nvim_create_autocmd("BufWriteCmd", {
