@@ -13,6 +13,7 @@ local components = require("gitflow.ui.components")
 ---@field cfg GitflowConfig|nil
 ---@field filepath string|nil
 ---@field on_open_commit fun(sha: string)|nil
+---@field request_id integer
 
 local M = {}
 local BLAME_FLOAT_TITLE = "  Gitflow Blame  "
@@ -32,7 +33,26 @@ M.state = {
 	cfg = nil,
 	filepath = nil,
 	on_open_commit = nil,
+	request_id = 0,
 }
+
+---@return integer
+local function next_request_id()
+	M.state.request_id = (M.state.request_id or 0) + 1
+	return M.state.request_id
+end
+
+---A refresh is superseded as soon as another refresh, open, or close starts;
+---its callbacks must not render, or a stale result clobbers the live panel.
+---@param request_id integer
+---@return boolean
+local function is_active_request(request_id)
+	if M.state.request_id ~= request_id then
+		return false
+	end
+	local bufnr = M.state.bufnr
+	return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
+end
 
 ---@param cfg GitflowConfig
 local function ensure_window(cfg)
@@ -271,6 +291,8 @@ function M.refresh()
 		return
 	end
 
+	local request_id = next_request_id()
+
 	local filepath = M.state.filepath
 	if not filepath or filepath == "" then
 		utils.notify(
@@ -282,7 +304,13 @@ function M.refresh()
 	end
 
 	git_branch.current({}, function(_, branch)
+		if not is_active_request(request_id) then
+			return
+		end
 		git_blame.run({ filepath = filepath }, function(err, entries)
+			if not is_active_request(request_id) then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				render_error(err)
@@ -321,6 +349,8 @@ function M.open_commit_under_cursor()
 end
 
 function M.close()
+	next_request_id()
+
 	if M.state.winid then
 		ui.window.close(M.state.winid)
 	else
