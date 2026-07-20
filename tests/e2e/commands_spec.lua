@@ -775,6 +775,86 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		end)
 	end,
 
+	-- ── per-area registration seam ───────────────────────────────────────
+
+	["register_subcommand refuses a non-function complete"] = function()
+		local ok, err = pcall(commands.register_subcommand, "e2e-bad-complete", {
+			description = "test-only handler with a broken completer",
+			run = function() end,
+			complete = "not-a-function",
+		})
+		commands.subcommands["e2e-bad-complete"] = nil
+
+		T.assert_true(not ok, "a non-function complete should be refused")
+		T.assert_contains(
+			tostring(err),
+			"complete must be a function",
+			"refusal should name the offending field"
+		)
+		T.assert_true(
+			commands.subcommands["e2e-bad-complete"] == nil,
+			"a refused subcommand should not be registered"
+		)
+	end,
+
+	["a registered complete function drives :Gitflow completion"] = function()
+		local seen
+		commands.register_subcommand("e2e-completing", {
+			description = "test-only handler with a completer",
+			run = function()
+				return "ok"
+			end,
+			complete = function(arglead, cmdline, args)
+				seen = { arglead = arglead, cmdline = cmdline, args = args }
+				return { "alpha", "beta" }
+			end,
+		})
+
+		local candidates = commands.complete("al", "Gitflow e2e-completing al", 25)
+		commands.subcommands["e2e-completing"] = nil
+
+		T.assert_deep_equals(
+			candidates,
+			{ "alpha", "beta" },
+			"completion should come from the subcommand's own completer"
+		)
+		T.assert_true(seen ~= nil, "the completer should have been called")
+		T.assert_equals(seen.arglead, "al", "completer should receive the arglead")
+		T.assert_equals(seen.args[2], "e2e-completing", "completer should receive the split cmdline")
+	end,
+
+	["a subcommand without a completer completes to nothing"] = function()
+		T.assert_deep_equals(
+			commands.complete("", "Gitflow status ", 16),
+			{},
+			"a subcommand that registers no completer should offer no candidates"
+		)
+	end,
+
+	["close closes panels owned by every area"] = function()
+		local status_panel = require("gitflow.panels.status")
+		local conflict_panel = require("gitflow.panels.conflict")
+		local palette_panel = require("gitflow.panels.palette")
+
+		commands.dispatch({ "status" }, cfg)
+		commands.dispatch({ "conflicts" }, cfg)
+		commands.dispatch({ "palette" }, cfg)
+		T.drain_jobs(3000)
+
+		T.assert_true(status_panel.is_open(), "status panel should be open before close")
+		T.assert_true(conflict_panel.is_open(), "conflict panel should be open before close")
+		T.assert_true(palette_panel.is_open(), "palette panel should be open before close")
+
+		commands.dispatch({ "close" }, cfg)
+
+		-- One panel per area proves close walks every registered area, not a
+		-- hand-maintained list inside the dispatcher.
+		T.assert_true(not status_panel.is_open(), "close should close the workspace area's panels")
+		T.assert_true(not conflict_panel.is_open(), "close should close the history area's panels")
+		T.assert_true(not palette_panel.is_open(), "close should close the shell area's panels")
+		T.cleanup_panels()
+	end,
+
 	["worktree add -b followed by a flag errors"] = function()
 		with_temp_git_log(function(log_path)
 			local result = commands.dispatch(

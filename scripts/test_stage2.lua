@@ -815,18 +815,12 @@ local function has_duplicate(list)
 	return false
 end
 
--- Read source files and extract confirm() choice strings
-local source_files = {
-	project_root .. "/lua/gitflow/commands.lua",
-	project_root .. "/lua/gitflow/panels/status.lua",
-	project_root .. "/lua/gitflow/panels/conflict.lua",
-	project_root .. "/lua/gitflow/panels/branch.lua",
-	project_root .. "/lua/gitflow/panels/issues.lua",
-	project_root .. "/lua/gitflow/panels/labels.lua",
-	project_root .. "/lua/gitflow/panels/prs.lua",
-	project_root .. "/lua/gitflow/panels/stash.lua",
-	project_root .. "/lua/gitflow/ui/conflict.lua",
-}
+-- Read source files and extract confirm() choice strings.
+-- Enumerated, not hardcoded: a hardcoded list silently drops a module the
+-- moment one is added or code moves between files.
+local source_files = vim.fn.glob(project_root .. "/lua/**/*.lua", false, true)
+table.sort(source_files)
+assert_true(#source_files > 0, "confirm() accelerator scan should find source files")
 
 for _, filepath in ipairs(source_files) do
 	local f = io.open(filepath, "r")
@@ -869,10 +863,17 @@ for _, filepath in ipairs(source_files) do
 end
 
 -- Also verify commit confirm specifically uses non-conflicting keys
-local cmd_src = io.open(project_root .. "/lua/gitflow/commands.lua", "r")
-assert_true(cmd_src ~= nil, "commands.lua should be readable")
+local commit_confirm_path = project_root .. "/lua/gitflow/commands/workspace.lua"
+local cmd_src = io.open(commit_confirm_path, "r")
+assert_true(cmd_src ~= nil, "workspace command area should be readable")
 local cmd_content = cmd_src:read("*a")
 cmd_src:close()
+-- Pin the confirm's location too: without this the check below passes
+-- vacuously if the commit flow moves to another file.
+assert_true(
+	cmd_content:find("Commit %d staged file(s)?", 1, true) ~= nil,
+	"commit confirm should live in the workspace command area"
+)
 assert_true(
 	cmd_content:find('"&Yes",%s*"&No"', 1) ~= nil
 		or not cmd_content:find('"&Commit",%s*"&Cancel"', 1),
