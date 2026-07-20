@@ -400,6 +400,54 @@ assert_deep_equals(
 	"revert should restore tracked file content"
 )
 
+-- X is destructive and irreversible, so the confirm gate matters more than
+-- the hint text: prove it actually defaults to Cancel (simulating <CR> with
+-- no explicit choice) and that the default leaves the file untouched.
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "uncommitted" })
+status_panel.refresh()
+local decline_ready = vim.wait(5000, function()
+	if not status_panel.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
+	local header = find_line(lines, "Unstaged")
+	return header ~= nil and find_line(lines, "tracked.txt", header + 1) ~= nil
+end, 25)
+assert_true(decline_ready, "status panel should show the new uncommitted change as unstaged")
+
+local decline_lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
+local decline_unstaged_header = find_line(decline_lines, "Unstaged")
+local decline_tracked_line = find_line(decline_lines, "tracked.txt", decline_unstaged_header + 1)
+assert_true(decline_tracked_line ~= nil, "unstaged tracked file should be visible")
+
+local captured_message, captured_default_choice = nil, nil
+local decline_confirm = vim.fn.confirm
+vim.fn.confirm = function(message, _, default_choice)
+	captured_message = message
+	captured_default_choice = default_choice
+	-- Simulate pressing <CR> without picking a choice: real vim.fn.confirm
+	-- returns the dialog's own default in that case.
+	return default_choice
+end
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { decline_tracked_line, 0 })
+status_panel.revert_under_cursor()
+vim.wait(300)
+vim.fn.confirm = decline_confirm
+
+assert_true(
+	type(captured_message) == "string" and captured_message:find("tracked.txt", 1, true) ~= nil,
+	"revert should still prompt for confirmation before discarding"
+)
+assert_equals(
+	captured_default_choice, 2,
+	"revert confirm must default to Cancel (index 2), not Revert"
+)
+assert_deep_equals(
+	vim.fn.readfile(repo_dir .. "/tracked.txt"),
+	{ "alpha", "beta", "gamma", "uncommitted" },
+	"declining (or dismissing) the revert confirm must leave uncommitted changes intact"
+)
+
 local branch_name = vim.trim(run_git(repo_dir, { "rev-parse", "--abbrev-ref", "HEAD" }))
 local remote_dir = vim.fn.tempname()
 run_git(repo_dir, { "init", "--bare", remote_dir })
