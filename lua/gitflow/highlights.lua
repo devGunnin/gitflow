@@ -249,11 +249,19 @@ function M.label_color_group(hex_color)
 	return group_name
 end
 
----@param user_overrides table<string, table>|nil
-function M.setup(user_overrides)
-	local overrides = type(user_overrides) == "table" and user_overrides or {}
+---@class GitflowHighlightsState
+---@field augroup integer|nil
+---@field overrides table<string, table>|nil  nil until setup() runs
 
-	-- Select palette based on vim.o.background
+---@type GitflowHighlightsState
+M.state = {
+	augroup = nil,
+	overrides = nil,
+}
+
+---Rebuild the palette from vim.o.background and apply every group.
+---@param overrides table<string, table>
+local function apply_groups(overrides)
 	local palette = vim.o.background == "light"
 		and M.PALETTE_LIGHT or M.PALETTE_DARK
 	M.PALETTE = vim.deepcopy(palette)
@@ -267,6 +275,48 @@ function M.setup(user_overrides)
 		end
 		vim.api.nvim_set_hl(0, group, attrs)
 	end
+end
+
+---Re-apply highlights against the current theme, reusing the overrides
+---setup() was called with. No-op when gitflow was never set up.
+function M.refresh()
+	if M.state.overrides == nil then
+		return
+	end
+	apply_groups(M.state.overrides)
+end
+
+---A ColorScheme change wipes user highlight groups, and a background flip
+---changes which palette applies — both need the groups recomputed.
+local function register_theme_autocmds()
+	if M.state.augroup then
+		pcall(vim.api.nvim_del_augroup_by_id, M.state.augroup)
+	end
+	M.state.augroup = vim.api.nvim_create_augroup("GitflowHighlights", { clear = true })
+
+	vim.api.nvim_create_autocmd("ColorScheme", {
+		group = M.state.augroup,
+		desc = "gitflow: re-apply highlights after a colorscheme change",
+		callback = function()
+			M.refresh()
+		end,
+	})
+	vim.api.nvim_create_autocmd("OptionSet", {
+		group = M.state.augroup,
+		pattern = "background",
+		desc = "gitflow: re-apply highlights after a background change",
+		callback = function()
+			M.refresh()
+		end,
+	})
+end
+
+---@param user_overrides table<string, table>|nil
+function M.setup(user_overrides)
+	M.state.overrides = type(user_overrides) == "table"
+		and vim.deepcopy(user_overrides) or {}
+	apply_groups(M.state.overrides)
+	register_theme_autocmds()
 end
 
 return M

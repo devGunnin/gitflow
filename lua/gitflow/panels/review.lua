@@ -12,6 +12,7 @@ local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local git = require("gitflow.git")
 local gh_prs = require("gitflow.gh.prs")
+local list_picker = require("gitflow.ui.list_picker")
 local git_branch = require("gitflow.git.branch")
 local inline = require("gitflow.review.inline")
 local cache = require("gitflow.review.cache")
@@ -107,6 +108,11 @@ M.state = {
 	hunk_anchors = {},
 	show_inline_comments = true,
 	show_diff = true,
+	-- Thread id → true while its replies are folded out inline (#360).
+	expanded_threads = {},
+	-- winid → the window-local winbar the review banner replaced, so close()
+	-- can put it back instead of blanking the user's own winbar (#366).
+	banner_wins = {},
 	collapsed_dirs = {},
 	repo_toplevel = nil,
 	-- Deleted (LEFT-side) lines keyed by the buffer line they render next to,
@@ -115,6 +121,9 @@ M.state = {
 	-- When set, the review is scoped to a git commit range instead of the
 	-- whole PR diff: { base = <rev>, head = <rev>, label = <string> }.
 	commit_scope = nil,
+	-- Monotonic stamp for in-flight PR loads; never reset, so a response from
+	-- a closed or superseded load can never match the current one.
+	request_id = 0,
 	-- Legacy compat shape (kept so :Gitflow pr submit-review / external
 	-- callers that read state.* don't crash).
 	file_markers = {},
@@ -199,24 +208,49 @@ local function banner_text()
 		extra = extra .. (" • scope: %s"):format(M.state.commit_scope.label)
 	end
 	if not M.state.show_diff then
-		extra = extra .. " • diff hidden"
+		extra = extra .. " • view: full file"
 	end
 	return ("  PR REVIEW #%s  %s  %s%s%s "):format(
 		n, title, author, pending_label, extra)
 end
 
+--- Paint the review banner on `winid`, remembering the winbar it replaced so
+--- teardown can restore it (#366).  Windows outside the review tabpage are
+--- never touched — the banner must not leak into the user's other windows.
+---@param winid integer|nil
 local function set_banner_winbar(winid)
 	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return
 	end
-	local ok = pcall(
+	if M.state.tabpage and vim.api.nvim_tabpage_is_valid(M.state.tabpage)
+		and vim.api.nvim_win_get_tabpage(winid) ~= M.state.tabpage then
+		return
+	end
+	if M.state.banner_wins[winid] == nil then
+		-- winbar requires nvim 0.8+; on older versions leave the window alone.
+		local ok, previous = pcall(vim.api.nvim_get_option_value, "winbar",
+			{ win = winid })
+		if not ok then
+			return
+		end
+		M.state.banner_wins[winid] = previous or ""
+	end
+	pcall(
 		vim.api.nvim_set_option_value,
 		"winbar", "%#GitflowTitle#" .. banner_text(),
 		{ win = winid }
 	)
-	if not ok then
-		-- winbar requires nvim 0.8+; ignore older versions
+end
+
+--- Put every winbar the banner overwrote back the way we found it (#366).
+local function restore_banner_winbars()
+	for winid, previous in pairs(M.state.banner_wins) do
+		if vim.api.nvim_win_is_valid(winid) then
+			pcall(vim.api.nvim_set_option_value, "winbar", previous,
+				{ win = winid })
+		end
 	end
+	M.state.banner_wins = {}
 end
 
 ---@return integer
@@ -244,7 +278,9 @@ end
 ---@return GitflowPrReviewThread[]
 local function build_comment_threads(comments)
 	local threads = {}
-	local root_map = {}
+	-- Every comment id → the thread it belongs to, so a reply that points at
+	-- another reply (not the thread root) still lands in the same thread.
+	local thread_of = {}
 
 	for _, c in ipairs(comments or {}) do
 		local user = ""
@@ -265,7 +301,14 @@ local function build_comment_threads(comments)
 			start_line = as_integer(c.start_line),
 		}
 
-		if not comment.in_reply_to_id then
+		local parent = comment.in_reply_to_id
+			and thread_of[comment.in_reply_to_id] or nil
+		if parent then
+			parent.comments[#parent.comments + 1] = comment
+			thread_of[comment.id] = parent
+		else
+			-- A root comment, or a reply whose parent we never saw: either way
+			-- it starts a thread of its own rather than being dropped.
 			local thread = {
 				id = comment.id,
 				path = comment.path,
@@ -274,22 +317,7 @@ local function build_comment_threads(comments)
 				collapsed = false,
 			}
 			threads[#threads + 1] = thread
-			root_map[comment.id] = thread
-		else
-			local parent = root_map[comment.in_reply_to_id]
-			if parent then
-				parent.comments[#parent.comments + 1] = comment
-			else
-				local thread = {
-					id = comment.id,
-					path = comment.path,
-					line = comment.line,
-					comments = { comment },
-					collapsed = false,
-				}
-				threads[#threads + 1] = thread
-				root_map[comment.id] = thread
-			end
+			thread_of[comment.id] = thread
 		end
 	end
 
@@ -315,14 +343,6 @@ local function clear_all_annotations()
 			inline.clear_comments(bufnr)
 			pcall(vim.api.nvim_buf_clear_namespace, bufnr,
 				vim.api.nvim_create_namespace("gitflow_review_file_list"), 0, -1)
-			-- also clear winbar on any windows that show this buffer
-			for _, winid in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_is_valid(winid)
-					and vim.api.nvim_win_get_buf(winid) == bufnr then
-					pcall(vim.api.nvim_set_option_value,
-						"winbar", "", { win = winid })
-				end
-			end
 		end
 	end
 	M.state.annotated_buffers = {}
@@ -335,6 +355,18 @@ local function comments_for_path(path)
 	for _, thread in ipairs(M.state.comment_threads) do
 		if thread.path == path and #thread.comments > 0 then
 			local first = thread.comments[1]
+			-- Replies are only handed to the renderer while the thread is
+			-- folded out, so a long discussion can't swamp the diff (#360).
+			local expanded = M.state.expanded_threads[thread.id] == true
+			local replies = {}
+			if expanded then
+				for i = 2, #thread.comments do
+					replies[#replies + 1] = {
+						author = thread.comments[i].user,
+						body = thread.comments[i].body,
+					}
+				end
+			end
 			out[#out + 1] = {
 				author = first.user,
 				body = first.body,
@@ -342,6 +374,8 @@ local function comments_for_path(path)
 				old_line = nil,
 				pending = false,
 				count = #thread.comments,
+				expanded = expanded,
+				replies = replies,
 			}
 		end
 	end
@@ -638,6 +672,10 @@ local function render_file_list()
 	if M.state.commit_scope and M.state.commit_scope.label then
 		lines[#lines + 1] = ("  ◆ scope: %s"):format(M.state.commit_scope.label)
 	end
+	-- Which layer the diff pane is showing, so the toggle is never ambiguous.
+	if not M.state.show_diff then
+		lines[#lines + 1] = "  ◆ view: full file (diff hidden)"
+	end
 	lines[#lines + 1] = sep
 
 	-- Files header with an aggregate +/- summary.
@@ -748,7 +786,14 @@ local function render_file_list()
 
 		for idx, pc in ipairs(pending) do
 			local in_scope = draft_in_scope(pc)
-			local marker = in_scope and "●" or "✗"
+			-- ✓ = already on the PR (a partially-failed submit); it will not
+			-- be posted again.
+			local marker = "●"
+			if pc.posted then
+				marker = "✓"
+			elseif not in_scope then
+				marker = "✗"
+			end
 			local name = vim.fn.fnamemodify(pc.path or "?", ":t")
 			local preview = vim.trim((pc.body or ""):gsub("%s+", " "))
 			local locator
@@ -820,11 +865,13 @@ local function render_file_list()
 	hint_keys({ { "<CR>/o", "open" }, { "<Tab>", "fold" } })
 	hint_keys({ { "zR/zM", "unfold/fold all" } })
 	hint_keys({ { "]f/[f", "file" }, { "]c/[c", "hunk" } })
+	hint_keys({ { "]C/[C", "comment" }, { "<leader>c", "all comments" } })
 
 	hint_label("REVIEW")
-	hint_keys({ { "c", "comment" }, { "R", "reply" } })
+	hint_keys({ { "c", "comment" }, { "s", "suggest" }, { "R", "reply" } })
 	hint_keys({ { "S", "submit" }, { "C", "scope" } })
 	hint_keys({ { "<leader>e", "edit" }, { "<leader>x", "delete" } })
+	hint_keys({ { "<CR>/<leader>t", "thread" } })
 	hint_keys({ { "<leader>d", "toggle diff view" } })
 
 	hint_label("DRAFTS")
@@ -973,6 +1020,43 @@ local function open_placeholder_buffer(path, message)
 	return bufnr
 end
 
+--- Review actions bound buffer-locally on every file opened in the diff pane.
+--- Kept as one table so setup and teardown can never drift: a key added here
+--- is also a key removed on close (#366).
+local REVIEW_BUFFER_KEYMAPS = {
+	{ "n", "c", function() M.inline_comment() end },
+	{ "v", "c", function() M.inline_comment_visual() end },
+	{ "n", "s", function() M.inline_suggestion() end },
+	{ "v", "s", function() M.inline_suggestion_visual() end },
+	{ "n", "S", function() M.submit_pending_review() end },
+	{ "n", "R", function() M.reply_to_thread() end },
+	{ "n", "<CR>", function() M.view_thread_at_cursor() end },
+	{ "n", "]c", function() M.next_hunk() end },
+	{ "n", "[c", function() M.prev_hunk() end },
+	{ "n", "]f", function() M.next_file() end },
+	{ "n", "[f", function() M.prev_file() end },
+	{ "n", "]C", function() M.next_comment() end },
+	{ "n", "[C", function() M.prev_comment() end },
+	{ "n", "<leader>i", function() M.toggle_inline_comments() end },
+	{ "n", "<leader>d", function() M.toggle_diff_view() end },
+	{ "n", "<leader>t", function() M.toggle_thread() end },
+	{ "n", "<leader>c", function() M.comments_overview() end },
+	{ "n", "<leader>e", function() M.edit_comment_at_cursor() end },
+	{ "n", "<leader>x", function() M.delete_comment_at_cursor() end },
+}
+
+--- Drop the review keymaps from every buffer the overlay decorated, so a file
+--- the user keeps editing after review mode behaves normally again (#366).
+local function clear_review_keymaps()
+	for _, bufnr in ipairs(M.state.annotated_buffers) do
+		if vim.api.nvim_buf_is_valid(bufnr) then
+			for _, km in ipairs(REVIEW_BUFFER_KEYMAPS) do
+				pcall(vim.keymap.del, km[1], km[2], { buffer = bufnr })
+			end
+		end
+	end
+end
+
 --- Apply the full PR-review overlay to a buffer that displays the
 --- working-tree file at repo-relative `path`: inline diff annotations,
 --- comment boxes, the winbar banner, and the review keymaps.  `winid` is the
@@ -1026,21 +1110,9 @@ local function apply_review_overlay(bufnr, path, winid, opts)
 
 	-- Set up buffer-local keymaps for review actions in the diff pane.
 	local kopts = { buffer = bufnr, silent = true, nowait = true }
-	vim.keymap.set("n", "c", function() M.inline_comment() end, kopts)
-	vim.keymap.set("v", "c", function() M.inline_comment_visual() end, kopts)
-	vim.keymap.set("n", "S", function() M.submit_pending_review() end, kopts)
-	vim.keymap.set("n", "R", function() M.reply_to_thread() end, kopts)
-	vim.keymap.set("n", "<CR>", function() M.view_thread_at_cursor() end, kopts)
-	vim.keymap.set("n", "]c", function() M.next_hunk() end, kopts)
-	vim.keymap.set("n", "[c", function() M.prev_hunk() end, kopts)
-	vim.keymap.set("n", "]f", function() M.next_file() end, kopts)
-	vim.keymap.set("n", "[f", function() M.prev_file() end, kopts)
-	vim.keymap.set("n", "]C", function() M.next_comment() end, kopts)
-	vim.keymap.set("n", "[C", function() M.prev_comment() end, kopts)
-	vim.keymap.set("n", "<leader>i", function() M.toggle_inline_comments() end, kopts)
-	vim.keymap.set("n", "<leader>d", function() M.toggle_diff_view() end, kopts)
-	vim.keymap.set("n", "<leader>e", function() M.edit_comment_at_cursor() end, kopts)
-	vim.keymap.set("n", "<leader>x", function() M.delete_comment_at_cursor() end, kopts)
+	for _, km in ipairs(REVIEW_BUFFER_KEYMAPS) do
+		vim.keymap.set(km[1], km[2], km[3], kopts)
+	end
 
 	-- Jump to first hunk so the change is immediately on screen.
 	if opts.jump ~= false
@@ -1401,6 +1473,8 @@ local function set_up_file_list_keymaps(bufnr)
 	vim.keymap.set("n", "[f", function() M.prev_file() end, opts)
 	vim.keymap.set("n", "]C", function() M.next_comment() end, opts)
 	vim.keymap.set("n", "[C", function() M.prev_comment() end, opts)
+	vim.keymap.set("n", "<leader>c", function() M.comments_overview() end, opts)
+	vim.keymap.set("n", "<leader>d", function() M.toggle_diff_view() end, opts)
 	-- File-level comment on the file row under the cursor (#361).
 	vim.keymap.set("n", "c", function() M.file_comment_under_cursor() end, opts)
 	-- Scope the review to a single commit or a range of commits (#363).
@@ -1693,11 +1767,28 @@ local function build_commit_scope_diffs(base, head, cb)
 	)
 end
 
+---@return integer
+local function next_request_id()
+	M.state.request_id = (M.state.request_id or 0) + 1
+	return M.state.request_id
+end
+
+--- Is this async response still the one the view is waiting for?  Switching
+--- PRs (or closing review mode) mid-load must not splice the old PR's files
+--- and comment threads into the new view.
+---@param request_id integer
+---@param number integer
+---@return boolean
+local function is_active_request(request_id, number)
+	return M.state.request_id == request_id and M.state.pr_number == number
+end
+
 function M.refresh()
 	if not M.state.cfg or not M.state.pr_number then
 		return
 	end
 	local number = M.state.pr_number
+	local request_id = next_request_id()
 
 	M.state.files_error = nil
 	M.state.pr_title = M.state.pr_title or "(loading)"
@@ -1707,6 +1798,9 @@ function M.refresh()
 	-- whole-PR and commit-scoped paths.
 	local function load_comments_and_finish()
 		gh_prs.review_comments(number, {}, function(rc_err, comments)
+			if not is_active_request(request_id, number) then
+				return
+			end
 			if not rc_err and comments then
 				M.state.comment_threads = build_comment_threads(comments)
 			end
@@ -1730,6 +1824,9 @@ function M.refresh()
 	end
 
 	gh_prs.view(number, {}, function(view_err, pr)
+		if not is_active_request(request_id, number) then
+			return
+		end
 		if view_err then
 			notify_error(view_err)
 		else
@@ -1742,6 +1839,9 @@ function M.refresh()
 		if M.state.commit_scope then
 			local s = M.state.commit_scope
 			build_commit_scope_diffs(s.base, s.head, function(derr)
+				if not is_active_request(request_id, number) then
+					return
+				end
 				if derr then
 					M.state.files_loaded = true
 					M.state.files_error = derr
@@ -1753,6 +1853,9 @@ function M.refresh()
 		end
 
 		gh_prs.list_files(number, {}, function(files_err, files_data)
+			if not is_active_request(request_id, number) then
+				return
+			end
 			if files_err then
 				M.state.files_loaded = true
 				M.state.files_error = files_err
@@ -1867,7 +1970,12 @@ function M.apply_commit_scope(base, head, label)
 	M.state.active_path = nil
 	M.state.active_bufnr = nil
 	M.state.active_file_idx = nil
+	local number = M.state.pr_number
+	local request_id = next_request_id()
 	build_commit_scope_diffs(base, head, function(err)
+		if not is_active_request(request_id, number) then
+			return
+		end
 		if err then
 			notify_error(err)
 			M.state.commit_scope = nil
@@ -1936,6 +2044,8 @@ function M.open(cfg, pr_number)
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
 	M.state.show_diff = true
+	M.state.expanded_threads = {}
+	M.state.banner_wins = {}
 	M.state.deleted_anchors = {}
 	M.state.commit_scope = nil
 	M.state.collapsed_dirs = {}
@@ -1968,6 +2078,16 @@ function M.open(cfg, pr_number)
 		end,
 	})
 
+	-- Catch the user closing a review window/tab directly instead of pressing
+	-- q, so the banner and overlays don't outlive the mode (#366).  WinClosed
+	-- fires before the window is gone, hence the deferred check.
+	vim.api.nvim_create_autocmd({ "WinClosed", "TabClosed" }, {
+		group = AUGROUP,
+		callback = function()
+			vim.schedule(M._on_layout_changed)
+		end,
+	})
+
 	render_file_list()
 	M.refresh()
 end
@@ -1983,25 +2103,27 @@ function M.toggle(cfg)
 	pr_panel.open(cfg, { state = "open" })
 end
 
-function M.close()
+--- Undo every editor-visible thing review mode installed: its autocmds, the
+--- banner winbars, the inline annotations, and the buffer-local keymaps.
+--- Idempotent, so both the normal and the abnormal close path can call it.
+local function teardown_decorations()
 	pcall(vim.api.nvim_clear_autocmds, { group = AUGROUP })
 	M._applying = false
+	restore_banner_winbars()
+	-- Keymaps first: clear_all_annotations empties annotated_buffers.
+	clear_review_keymaps()
 	clear_all_annotations()
+end
 
-	-- Close the tabpage if it's still around.
-	if M.state.tabpage and vim.api.nvim_tabpage_is_valid(M.state.tabpage) then
-		local wins = vim.api.nvim_tabpage_list_wins(M.state.tabpage)
-		for _, winid in ipairs(wins) do
-			pcall(vim.api.nvim_win_close, winid, true)
-		end
-	end
-
+local function drop_file_list_buffer()
 	if M.state.file_list_bufnr
 		and vim.api.nvim_buf_is_valid(M.state.file_list_bufnr) then
 		pcall(vim.api.nvim_buf_delete, M.state.file_list_bufnr,
 			{ force = true })
 	end
+end
 
+local function reset_state()
 	M.state.cfg = nil
 	M.state.pr_number = nil
 	M.state.pr_title = nil
@@ -2026,6 +2148,8 @@ function M.close()
 	M.state.hunk_anchors = {}
 	M.state.show_inline_comments = true
 	M.state.show_diff = true
+	M.state.expanded_threads = {}
+	M.state.banner_wins = {}
 	M.state.deleted_anchors = {}
 	M.state.commit_scope = nil
 	M.state.collapsed_dirs = {}
@@ -2035,6 +2159,46 @@ function M.close()
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}
 	M.state.line_context = {}
+end
+
+function M.close()
+	-- Suppress our own WinClosed hook while we dismantle the layout.
+	M._closing = true
+	teardown_decorations()
+
+	if M.state.tabpage and vim.api.nvim_tabpage_is_valid(M.state.tabpage) then
+		for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(M.state.tabpage)) do
+			pcall(vim.api.nvim_win_close, winid, true)
+		end
+	end
+
+	drop_file_list_buffer()
+	reset_state()
+	M._closing = false
+end
+
+--- Review mode only exists while its tabpage, file list and diff pane all do.
+---@return boolean
+local function layout_intact()
+	return M.state.tabpage ~= nil
+		and vim.api.nvim_tabpage_is_valid(M.state.tabpage)
+		and M.state.file_list_winid ~= nil
+		and vim.api.nvim_win_is_valid(M.state.file_list_winid)
+		and M.state.diff_winid ~= nil
+		and vim.api.nvim_win_is_valid(M.state.diff_winid)
+end
+
+--- The user dismantled the layout by hand (:q, :tabclose, closing the file
+--- list). End review mode and clean up, but leave the windows they still have
+--- alone — they may be mid-edit in the file that was under review (#366).
+function M._on_layout_changed()
+	if M._closing or not M.state.tabpage or layout_intact() then
+		return
+	end
+	teardown_decorations()
+	drop_file_list_buffer()
+	reset_state()
+	notify_info("Review mode closed")
 end
 
 function M.close_with_guard()
@@ -2124,34 +2288,47 @@ end
 --- Ordered list of every comment anchor across the whole PR: remote review
 --- threads (from any author) plus local unsubmitted drafts, sorted by the
 --- file-list order then line. Powers ]C / [C comment navigation.
----@return { path: string, line: integer, file_idx: integer, kind: string }[]
+---@return { path: string, line: integer, file_idx: integer, kind: string, summary: string }[]
 local function collect_comment_anchors()
 	local file_order = {}
 	for i, f in ipairs(M.state.files) do
 		file_order[f.path] = i
 	end
+
 	local anchors = {}
-	for _, t in ipairs(M.state.comment_threads) do
-		if t.path and t.line then
-			anchors[#anchors + 1] = {
-				path = t.path,
-				line = t.line,
-				file_idx = file_order[t.path] or math.huge,
-				kind = "thread",
-			}
+	local function add(path, line, kind, author, body)
+		if not path or not line then
+			return
 		end
+		local preview = vim.trim((body or ""):gsub("%s+", " "))
+		anchors[#anchors + 1] = {
+			path = path,
+			line = line,
+			file_idx = file_order[path] or math.huge,
+			kind = kind,
+			summary = ("@%s  %s"):format(author,
+				vim.fn.strcharpart(preview, 0, 70)),
+		}
+	end
+
+	for _, t in ipairs(M.state.comment_threads) do
+		local comments = t.comments or {}
+		local first = comments[1]
+		local author = (first and first.user ~= "") and first.user or "unknown"
+		local body = first and first.body or ""
+		if #comments > 1 then
+			body = ("(+%d repl%s) %s"):format(#comments - 1,
+				(#comments - 1) == 1 and "y" or "ies", body)
+		end
+		add(t.path, t.line, "thread", author, body)
 	end
 	for _, pc in ipairs(M.state.pending_comments) do
-		local line = pc.new_line or pc.old_line
-		if pc.path and line then
-			anchors[#anchors + 1] = {
-				path = pc.path,
-				line = line,
-				file_idx = file_order[pc.path] or math.huge,
-				kind = "draft",
-			}
-		end
+		-- File-level drafts (#361) carry no line; list them at the file's top
+		-- so they're still reachable when working through the comments.
+		local line = pc.new_line or pc.old_line or (pc.file_level and 1 or nil)
+		add(pc.path, line, "draft", "you (draft)", pc.body)
 	end
+
 	table.sort(anchors, function(a, b)
 		if a.file_idx ~= b.file_idx then
 			return a.file_idx < b.file_idx
@@ -2219,6 +2396,37 @@ function M.prev_comment()
 		end
 	end
 	goto_comment_anchor(anchors[#anchors])
+end
+
+--- Overview of every comment on the PR — remote threads and local drafts, in
+--- file-list then line order — as a picker that jumps to the one chosen (#382).
+function M.comments_overview()
+	local anchors = collect_comment_anchors()
+	if #anchors == 0 then
+		notify_info("No comments in this review")
+		return
+	end
+
+	local items, by_name = {}, {}
+	for i, anchor in ipairs(anchors) do
+		-- The picker sorts unfiltered items by name, so the index prefix is
+		-- what keeps the list in review order.
+		local name = ("%03d. %s:%d"):format(i, anchor.path, anchor.line)
+		items[#items + 1] = { name = name, description = anchor.summary }
+		by_name[name] = anchor
+	end
+
+	list_picker.open({
+		items = items,
+		multi_select = false,
+		title = ("Comments · PR #%s"):format(fmt_number(M.state.pr_number)),
+		on_submit = function(selected)
+			local anchor = by_name[(selected or {})[1] or ""]
+			if anchor then
+				goto_comment_anchor(anchor)
+			end
+		end,
+	})
 end
 
 -- ── Comments ────────────────────────────────────────────────────────────
@@ -2296,13 +2504,17 @@ end
 
 --- Prompt for a body and queue a draft against the chosen anchor target.
 ---@param path string
----@param target table  { hunk, new_line, old_line, desc }
-local function queue_target_comment(path, target)
+---@param target table  { hunk, new_line, old_line, start_new_line, start_old_line, desc }
+---@param opts table|nil  { kind, title, noun, default }  compose overrides
+local function queue_target_comment(path, target, opts)
+	opts = opts or {}
+	local kind = opts.kind or "inline"
 	input.prompt({
 		multiline = true,
-		title = "Inline comment",
-		draft_key = ("review:%s:inline:%s:%s:%s"):format(
-			tostring(M.state.pr_number), path,
+		title = opts.title or "Inline comment",
+		default = opts.default,
+		draft_key = ("review:%s:%s:%s:%s:%s"):format(
+			tostring(M.state.pr_number), kind, path,
 			tostring(target.new_line), tostring(target.old_line)
 		),
 	}, function(text)
@@ -2319,13 +2531,15 @@ local function queue_target_comment(path, target)
 			-- Anchor to the diff's own line numbers, not the raw cursor.
 			new_line = target.new_line,
 			old_line = target.old_line,
+			start_new_line = target.start_new_line,
+			start_old_line = target.start_old_line,
 			created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 		}
 		M.state.pending_comments[#M.state.pending_comments + 1] = pending
 		persist_pending()
 		notify_info(
-			("Comment queued on %s (#%d) — press S to submit"):
-				format(target.desc, pending.id))
+			("%s queued on %s (#%d) — press S to submit"):
+				format(opts.noun or "Comment", target.desc, pending.id))
 		render_file_list()
 		refresh_comments_for_active()
 	end)
@@ -2448,24 +2662,20 @@ function M.file_comment_under_cursor()
 	M.file_comment(file.path)
 end
 
-function M.inline_comment_visual()
+--- Resolve the file + ordered line range of the current visual selection and
+--- leave visual mode.  The path comes from the buffer the selection is in, so
+--- the comment can't be misattributed to a previously-active file.
+---@return { path: string, start_line: integer, end_line: integer }|nil
+local function require_visual_diff_range()
 	if not M.state.diff_winid
 		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
-		return
+		return nil
 	end
-	-- Resolve the path from the buffer the visual selection is in, so the
-	-- comment can't be misattributed to a previously-active file.
 	local buf = vim.api.nvim_get_current_buf()
 	local path = buf_repo_relative(buf)
 	if not path or not M.state.file_diffs[path] then
 		path = M.state.active_path
 	end
-	if not path then
-		notify_warn("Open a file from the PR file list first")
-		return
-	end
-	M.state.active_path = path
-	M.state.active_bufnr = buf
 
 	local start_line = vim.fn.line("v")
 	local end_line = vim.fn.line(".")
@@ -2473,52 +2683,124 @@ function M.inline_comment_visual()
 		vim.api.nvim_replace_termcodes("<Esc>", true, false, true),
 		"nx", false
 	)
+
+	if not path then
+		notify_warn("Open a file from the PR file list first")
+		return nil
+	end
+	M.state.active_path = path
+	M.state.active_bufnr = buf
+
 	if start_line > end_line then
 		start_line, end_line = end_line, start_line
 	end
+	return { path = path, start_line = start_line, end_line = end_line }
+end
+
+function M.inline_comment_visual()
+	local sel = require_visual_diff_range()
+	if not sel then
+		return
+	end
 
 	-- Both ends of the range must be diff lines, or GitHub can't resolve it.
-	local end_hunk, hunk_header = find_hunk_line_for(path, end_line)
-	local start_hunk = find_hunk_line_for(path, start_line)
+	local end_hunk, hunk_header = find_hunk_line_for(sel.path, sel.end_line)
+	local start_hunk = find_hunk_line_for(sel.path, sel.start_line)
 	if not end_hunk or not start_hunk then
 		notify_warn(OFF_DIFF_HINT)
 		return
 	end
 
-	input.prompt(
-		{
-			multiline = true,
-			title = "Inline range comment",
-			draft_key = ("review:%s:range:%s:%d:%d"):format(
-				tostring(M.state.pr_number), path, start_line, end_line
-			),
-		},
-		function(text)
-			local body = vim.trim(text or "")
-			if body == "" then
-				notify_warn("Comment cannot be empty")
-				return
-			end
-			local pending = {
-				id = next_pending_id(),
-				path = path,
-				body = body,
-				hunk = hunk_header,
-				new_line = end_hunk.new_line,
-				old_line = end_hunk.old_line,
-				start_new_line = start_hunk.new_line,
-				start_old_line = start_hunk.old_line,
-				created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-			}
-			M.state.pending_comments[#M.state.pending_comments + 1] = pending
-			persist_pending()
-			notify_info(
-				("Range comment queued (#%d, lines %d-%d) — press S to submit"):
-					format(pending.id, start_line, end_line))
-			render_file_list()
-			refresh_comments_for_active()
-		end
-	)
+	queue_target_comment(sel.path, {
+		hunk = hunk_header,
+		new_line = end_hunk.new_line,
+		old_line = end_hunk.old_line,
+		start_new_line = start_hunk.new_line,
+		start_old_line = start_hunk.old_line,
+		desc = ("lines %d-%d"):format(sel.start_line, sel.end_line),
+	}, { kind = "range", title = "Inline range comment" })
+end
+
+-- ── Suggested changes (#367) ────────────────────────────────────────────
+
+local SUGGESTION_SIDE_HINT =
+	"A suggestion replaces lines in the PR's new file, so it can only be "
+	.. "started on added or context lines of the diff (not removed lines)."
+
+--- Resolve what a suggestion anchored on buffer rows `start_row`..`end_row`
+--- would replace: the new-side line numbers, and those lines' exact text from
+--- the PR diff.  The diff is the source of truth, not the buffer, so a locally
+--- modified working tree can never leak into the proposal.
+---@param path string
+---@param start_row integer
+---@param end_row integer
+---@return table|nil, string|nil  { hunk, start_new, end_new, lines }
+local function resolve_suggestion_range(path, start_row, end_row)
+	local start_hunk, hunk_header = find_hunk_line_for(path, start_row)
+	local end_hunk = find_hunk_line_for(path, end_row)
+	if not start_hunk or not end_hunk
+		or not start_hunk.new_line or not end_hunk.new_line then
+		return nil, SUGGESTION_SIDE_HINT
+	end
+
+	local lines, err = inline.new_side_lines(
+		M.state.file_diffs[path], start_hunk.new_line, end_hunk.new_line)
+	if not lines then
+		return nil, ("Cannot suggest here: %s"):format(err or "unknown reason")
+	end
+	return {
+		hunk = hunk_header,
+		start_new = start_hunk.new_line,
+		end_new = end_hunk.new_line,
+		lines = lines,
+	}, nil
+end
+
+--- Queue a draft prefilled with a ```suggestion block holding the anchored
+--- lines verbatim, so the reviewer edits the proposal instead of retyping it.
+---@param path string
+---@param start_row integer
+---@param end_row integer
+local function queue_suggestion(path, start_row, end_row)
+	local range, err = resolve_suggestion_range(path, start_row, end_row)
+	if not range then
+		notify_warn(err)
+		return
+	end
+
+	local multi = range.start_new ~= range.end_new
+	queue_target_comment(path, {
+		hunk = range.hunk,
+		-- The comment anchors at the range end; GitHub replaces start..end.
+		new_line = range.end_new,
+		start_new_line = multi and range.start_new or nil,
+		desc = multi
+			and ("lines %d-%d"):format(range.start_new, range.end_new)
+			or ("line %d"):format(range.end_new),
+	}, {
+		kind = "suggest",
+		title = "Suggested change",
+		noun = "Suggestion",
+		default = inline.suggestion_block(range.lines),
+	})
+end
+
+--- Propose an edit to the line under the cursor (#367).
+function M.inline_suggestion()
+	local ctx = require_active_diff_line()
+	if not ctx then
+		return
+	end
+	queue_suggestion(ctx.path, ctx.line, ctx.line)
+end
+
+--- Propose an edit spanning the visual selection (#367).
+function M.inline_suggestion_visual()
+	local sel = require_visual_diff_range()
+	if not sel then
+		return
+	end
+	queue_suggestion(sel.path, sel.start_line, sel.end_line)
 end
 
 function M.toggle_inline_comments()
@@ -2548,9 +2830,39 @@ function M.toggle_diff_view()
 		or "Diff view: showing file as in branch (diff hidden)")
 end
 
+--- Fold the replies of the thread under the diff-pane cursor in or out, so a
+--- discussion is readable in place instead of only its first comment (#360).
+--- <CR> still opens the same thread full-size in a float.
 function M.toggle_thread()
-	-- Comment threads aren't rendered as a separate list in this mode;
-	-- toggle is kept as a no-op so legacy keymaps don't error.
+	if not M.state.active_path or not M.state.diff_winid
+		or not vim.api.nvim_win_is_valid(M.state.diff_winid) then
+		notify_warn("Open a file from the PR file list first")
+		return
+	end
+	local cur = vim.api.nvim_win_get_cursor(M.state.diff_winid)[1]
+	local thread
+	for _, t in ipairs(M.state.comment_threads) do
+		if t.path == M.state.active_path and t.line == cur then
+			thread = t
+			break
+		end
+	end
+	if not thread then
+		notify_warn("No comment thread on this line")
+		return
+	end
+	if #thread.comments < 2 then
+		notify_info("This thread has no replies")
+		return
+	end
+
+	M.state.expanded_threads[thread.id] =
+		not M.state.expanded_threads[thread.id] or nil
+	if not M.state.show_inline_comments then
+		-- Bodies are collapsed to end-of-line badges; nothing would change.
+		notify_info("Press <leader>i to show comment bodies inline")
+	end
+	refresh_comments_for_active()
 end
 
 -- ── Review submission ──────────────────────────────────────────────────
@@ -2560,7 +2872,7 @@ end
 --- the reviews API rejects any comment without a line (→ 422); they're posted
 --- via the review-comments API with subject_type=file instead (#361).
 ---@return table[]|nil  line/range comments for the reviews API
----@return table[]  file-level comments ({ path, body })
+---@return table[]  file-level comments ({ path, body, draft })
 ---@return string|nil  error message if any draft can't be resolved
 local function collect_api_comments()
 	local api = {}
@@ -2570,10 +2882,17 @@ local function collect_api_comments()
 		-- File-level comments (#361): posted separately, never in the
 		-- reviews batch payload.
 		if pc.file_level then
+			-- Each file comment is its own API call, so a submit that fails
+			-- part-way leaves some already on the PR.  Skipping those is what
+			-- stops a retry from posting them a second time.
+			if pc.posted then
+				goto continue
+			end
 			if pc.path and pc.path ~= "" then
 				file_comments[#file_comments + 1] = {
 					path = pc.path,
 					body = pc.body,
+					draft = pc,
 				}
 			else
 				unresolved[#unresolved + 1] = tostring(pc.id or "?")
@@ -2725,9 +3044,16 @@ local function submit_review_with_pending(mode, body, on_success_message)
 			number, commit_id, fc.path, fc.body, {},
 			function(err)
 				if err then
-					notify_error("File comment failed: " .. err)
+					notify_error(("File comment on %s failed: %s\n"
+						.. "(%d of %d already posted; retrying will not "
+						.. "repost them.)"):format(
+						fc.path, err, idx - 1, #file_comments))
 					return
 				end
+				-- Record the post before moving on, and persist it, so a
+				-- crash or a retry can't duplicate it on the PR.
+				fc.draft.posted = true
+				persist_pending()
 				post_next()
 			end
 		)

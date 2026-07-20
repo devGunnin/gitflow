@@ -291,6 +291,7 @@ local cfg = gitflow.setup({
 })
 
 local gh = require("gitflow.gh")
+gh.ensure_prerequisites()
 assert_true(
 	gh.state.checked,
 	"gh prerequisites should be checked on setup"

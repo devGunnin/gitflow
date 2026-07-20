@@ -16,6 +16,7 @@ local commands = require("gitflow.commands")
 local ui = require("gitflow.ui")
 local gh = require("gitflow.gh")
 local gh_actions = require("gitflow.gh.actions")
+local git_branch = require("gitflow.git.branch")
 local actions_panel = require("gitflow.panels.actions")
 
 ---@param patches table[]
@@ -99,6 +100,49 @@ local function footer_text(footer)
 		end
 	end
 	return table.concat(parts, "")
+end
+
+---Stand-in for `git_branch.current` that answers without spawning a job.
+local function sync_branch(_, cb)
+	cb(nil, "main")
+end
+
+---Stub for a `gh_actions` async call that parks its callback for the test to
+---fire, so response ordering is deterministic.
+---@param sink fun(...)[]
+---@return fun(...)
+local function capture(sink)
+	return function(...)
+		-- select("#") not #{...}: the panel passes a nil `opts` argument.
+		sink[#sink + 1] = select(select("#", ...), ...)
+	end
+end
+
+---@param title string
+---@return GitflowActionRun
+local function stub_run(title)
+	return {
+		id = 1,
+		name = title,
+		branch = "main",
+		status = "completed",
+		conclusion = "success",
+		event = "push",
+		created_at = "2026-01-01T00:00:00Z",
+		updated_at = "2026-01-01T00:00:00Z",
+		url = "https://example.test/run/1",
+		display_title = title,
+	}
+end
+
+---@return string  the actions panel's rendered contents
+local function rendered_panel_text()
+	local bufnr = actions_panel.state.bufnr
+	T.assert_true(
+		bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
+		"actions buffer should be valid"
+	)
+	return table.concat(T.buf_lines(bufnr), "\n")
 end
 
 T.run_suite("E2E: GitHub Actions Panel", {
@@ -389,6 +433,106 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		T.assert_true(
 			windows_step.log_snippet:find("Windows failure", 1, true) ~= nil,
 			"windows step should keep windows-specific snippet"
+		)
+	end,
+
+	["view records a failing --log-failed instead of reporting clean success"] = function()
+		local run_result = nil
+		local err_result = nil
+		with_temporary_patches({
+			{
+				table = gh,
+				key = "json",
+				value = function(_, _, cb)
+					cb(nil, {
+						databaseId = 777,
+						name = "CI",
+						headBranch = "main",
+						status = "completed",
+						conclusion = "failure",
+						event = "push",
+						url = "https://example.invalid/actions/runs/777",
+						displayTitle = "CI",
+						jobs = {
+							{
+								databaseId = 1,
+								name = "linux",
+								status = "completed",
+								conclusion = "failure",
+								steps = {
+									{
+										name = "Run tests",
+										status = "completed",
+										conclusion = "failure",
+										number = 1,
+									},
+								},
+							},
+						},
+					})
+				end,
+			},
+			{
+				table = gh,
+				key = "run",
+				value = function(_, _, cb)
+					cb({
+						code = 1,
+						signal = 0,
+						stdout = "",
+						stderr = "failed to fetch logs: HTTP 503",
+						cmd = { "gh" },
+					})
+				end,
+			},
+		}, function()
+			T.wait_async(function(done)
+				gh_actions.view(777, nil, function(err, run)
+					err_result = err
+					run_result = run
+					done()
+				end)
+			end)
+		end)
+
+		-- The run itself loaded, so it is still delivered; only the optional
+		-- log enrichment failed, and that failure must not vanish.
+		T.assert_true(
+			err_result == nil,
+			"run data loaded, so view should not fail outright: "
+				.. tostring(err_result)
+		)
+		T.assert_true(run_result ~= nil, "view should still return the run")
+		T.assert_true(
+			type(run_result.log_error) == "string" and run_result.log_error ~= "",
+			"a non-zero --log-failed exit must be recorded on the run"
+		)
+		T.assert_true(
+			run_result.log_error:find("503", 1, true) ~= nil,
+			"log_error should carry the gh output: "
+				.. tostring(run_result.log_error)
+		)
+		T.assert_true(
+			run_result.jobs[1].steps[1].log_snippet == nil,
+			"no snippet should be attached when the log fetch failed"
+		)
+	end,
+
+	["view leaves log_error unset when --log-failed succeeds"] = function()
+		local run_result = nil
+
+		T.wait_async(function(done)
+			gh_actions.view(12345, nil, function(_, run)
+				run_result = run
+				done()
+			end)
+		end)
+
+		T.assert_true(run_result ~= nil, "view should return a run")
+		T.assert_true(
+			run_result.log_error == nil,
+			"a successful log fetch should not record an error: "
+				.. tostring(run_result.log_error)
 		)
 	end,
 
@@ -709,6 +853,80 @@ T.run_suite("E2E: GitHub Actions Panel", {
 				and cfg.keybindings.actions ~= "",
 			"actions keybinding should have a default value"
 		)
+	end,
+
+	-- ── Stale async responses ───────────────────────────────────────────
+
+	["a superseded list response does not overwrite newer state"] = function()
+		actions_panel.close()
+
+		local list_callbacks = {}
+		with_temporary_patches({
+			{ table = git_branch, key = "current", value = sync_branch },
+			{ table = gh_actions, key = "list", value = capture(list_callbacks) },
+		}, function()
+			actions_panel.open(cfg)
+			T.assert_equals(
+				#list_callbacks, 1, "open should issue one list request"
+			)
+
+			actions_panel.refresh()
+			T.assert_equals(
+				#list_callbacks, 2, "refresh should issue a second list request"
+			)
+
+			-- Newest response renders first; the superseded one lands late.
+			list_callbacks[2](nil, { stub_run("NEWEST RUN") })
+			list_callbacks[1](nil, { stub_run("STALE RUN") })
+		end)
+
+		local rendered = rendered_panel_text()
+		T.assert_contains(
+			rendered, "NEWEST RUN", "the newest response should be rendered"
+		)
+		T.assert_false(
+			rendered:find("STALE RUN", 1, true) ~= nil,
+			"a superseded list response must not overwrite newer state"
+		)
+
+		actions_panel.close()
+	end,
+
+	["a list response landing after a detail switch is discarded"] = function()
+		actions_panel.close()
+
+		local list_callbacks = {}
+		local view_callbacks = {}
+		with_temporary_patches({
+			{ table = git_branch, key = "current", value = sync_branch },
+			{ table = gh_actions, key = "list", value = capture(list_callbacks) },
+			{ table = gh_actions, key = "view", value = capture(view_callbacks) },
+		}, function()
+			actions_panel.open(cfg)
+			list_callbacks[1](nil, { stub_run("LIST RUN") })
+
+			-- Refresh in flight, then the user opens a detail view.
+			actions_panel.refresh()
+			focus_run_by_title("LIST RUN")
+			actions_panel.open_detail_under_cursor()
+			T.assert_equals(
+				#view_callbacks, 1, "detail should issue one view request"
+			)
+
+			view_callbacks[1](nil, stub_run("DETAIL RUN"))
+			list_callbacks[#list_callbacks](nil, { stub_run("STALE RUN") })
+		end)
+
+		local rendered = rendered_panel_text()
+		T.assert_contains(
+			rendered, "DETAIL RUN", "the detail view should be rendered"
+		)
+		T.assert_false(
+			rendered:find("STALE RUN", 1, true) ~= nil,
+			"a list response must not overwrite the newer detail view"
+		)
+
+		actions_panel.close()
 	end,
 
 	-- ── Palette entry includes actions ──────────────────────────────────

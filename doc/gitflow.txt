@@ -17,6 +17,7 @@ CONTENTS                                                   *gitflow-contents*
     9. Signs ................... |gitflow-signs|
    10. Icons ................... |gitflow-icons|
    11. Statusline .............. |gitflow-statusline|
+   12. Lua API ................. |gitflow-lua-api|
 
 ==============================================================================
 1. INTRODUCTION                                               *gitflow-intro*
@@ -172,6 +173,21 @@ inline_blame ~
     delay           number      200             Debounce (ms) before blaming
     date_format     string      "%Y-%m-%d"      os.date() format for the date
 
+                                                  *gitflow-config-validation*
+validation ~
+
+    setup() rejects a config it cannot honour instead of ignoring it.
+
+    Unknown options raise an error naming the full path, with a suggestion
+    when the key looks like a typo.  For example: >
+        require("gitflow").setup({ inline_blame = { enalbe = false } })
+<   raises: >
+        unknown option 'inline_blame.enalbe' (did you mean 'enable'?)
+<   Highlight group names under `highlights` are free-form and never checked.
+
+    Duplicate keybindings raise an error naming the mapping and every action
+    bound to it, so a custom bind cannot silently shadow another feature.
+
 ==============================================================================
 6. COMMANDS                                                *gitflow-commands*
 
@@ -243,12 +259,13 @@ Panel-local keybindings are set on each panel buffer. These are fixed and
 cannot be overridden through configuration.
 
 Status panel ~
-    s       Stage file under cursor
-    u       Unstage file under cursor
+    s       Stage file under cursor (or visual-line selection)
+    u       Unstage file under cursor (or visual-line selection)
     a       Stage all files
     A       Unstage all files
+    <CR>    Open the file under cursor for editing
     cc      Commit
-    dd      Open diff for file under cursor
+    dd      Review diff for file under cursor (diff review viewer)
     cx      Open conflict resolution for file
     p       Push
     X       Revert uncommitted changes in file
@@ -257,7 +274,28 @@ Status panel ~
 
 Diff view ~
     r       Refresh diff
+    ]f/[f   Next / previous file
+    ]c/[c   Next / previous hunk
     q       Close
+
+Diff review viewer ~
+    A separate, richer diff surface: a tabpage with a file-list pane on
+    the left and a per-file diff on the right.  Opens for `dd` in the
+    status panel (working tree, or --staged) and for <CR> / range-review
+    in the log view (a single commit, or a marked commit range).  No
+    direct :Gitflow command opens it.
+
+    File list pane:
+      <CR>/o  Open file under cursor in the right pane
+      ]f/[f   Next / previous file
+      ]c/[c   Next / previous hunk
+      r       Refresh
+      q       Close
+
+    Diff pane:
+      ]f/[f   Next / previous file
+      ]c/[c   Next / previous hunk
+      q       Close
 
 Branch list ~
     <CR>    Switch to branch under cursor
@@ -267,19 +305,24 @@ Branch list ~
     m       Merge branch into current
     u       Update branch to its upstream (fast-forward, no checkout)
     r       Rename branch
-    R       Refresh branch list
+    R       Refresh branch list (with fetch)
     f       Fetch remote branches
+    .       Jump to the current branch (list view only)
     G       Toggle list / graph view
     q       Close
 
 Log view ~
-    <CR>    Open diff for commit under cursor
+    <CR>    Review commit under cursor (or, with a range marked, the range)
+    V       Mark commit under cursor as range start (<CR> on another
+            commit reviews the combined range; V on the same commit clears)
+    <Esc>   Cancel a pending range selection
     r       Refresh
     q       Close
 
 Stash panel ~
     P       Pop stash entry under cursor
     D       Drop stash entry under cursor
+    A       Apply stash entry under cursor
     S       Stash with message prompt
     r       Refresh
     q       Close
@@ -290,6 +333,17 @@ Issue list ~
     C       Comment on issue
     x       Close issue
     L       Edit labels
+    A       Edit assignees
+    f       Open filter menu (state/labels/assignee/milestone)
+    X       Clear all filters
+    s       Cycle sort key (updated/number/title/milestone)
+    S       Toggle sort direction
+    G       Cycle grouping (none/milestone/assignee/label)
+    <Tab>   Fold/unfold group under cursor (list mode, when grouped)
+    v       Switch to a saved view
+    V       Save current filters/sort as a named view
+    D       Delete a saved view
+    B       Create a branch from the selected issue
     r       Refresh
     b       Back to list (detail view)
     q       Close
@@ -299,6 +353,7 @@ PR list ~
     c       Create new PR
     C       Comment on PR
     L       Edit labels
+    A       Edit assignees
     m       Merge PR
     x       Close PR
     o       Checkout PR branch
@@ -330,23 +385,39 @@ Review view ~
     [f      Jump to / open previous file
     ]C      Jump to next comment thread (any file)
     [C      Jump to previous comment thread (any file)
+    c       Comment on the whole file under cursor (deleted files too)
+    C       Scope the review to a single commit or a range of commits
     S       Submit pending review
+    <leader>c   Comments overview (picker over every thread in the PR)
+    <leader>d   Toggle diff overlay: PR changes vs. the file on the branch
     r       Refresh
     q       Close
+
+    On a draft row in the Drafts section: <CR> jumps to the comment, e
+    edits the draft body, dd (or x) deletes it, X deletes all off-diff
+    drafts.  e on a file row edits any draft on that file.
 
   Diff pane (right) ~
     <CR>    View the full discussion (all replies + drafts) for the
             comment on the current line, in a floating window.  When the
             line has no comment, behaves like the native <CR> motion.
+    ]f      Next file (without leaving the editing pane)
+    [f      Previous file
     ]c      Jump to next hunk
     [c      Jump to previous hunk
     ]C      Jump to next comment thread (opens file, crosses files)
     [C      Jump to previous comment thread
     c       Inline comment (normal and visual mode)
+    s       Start a GitHub suggestion block for the current line (normal
+            and visual mode): opens the comment composer prefilled with
+            a suggestion code fence for the selected lines
     S       Submit pending review (Comment / Request changes / Approve)
     R       Reply to comment thread on the current line
+    <leader>t   Fold/unfold the reply thread on the current line
+    <leader>c   Comments overview (picker over every thread in the PR)
     <leader>i   Toggle inline comment bodies (boxes) on/off
     <leader>x   Delete draft/comment on the current line
+    <leader>d   Toggle diff overlay: PR changes vs. the file on the branch
 
   Thread popup ~
     R       Reply to the thread (remote threads only)
@@ -401,8 +472,44 @@ Command palette ~
     <Up>/<C-p>      Move selection up
     <Tab>/<S-Tab>   Move selection down/up
     <C-j>/<C-k>     Move selection down/up
+    1-9             Run the numbered command directly (index shown next
+                    to the first 9 entries)
     j/k             Move selection (list normal mode)
     q               Close (list normal mode)
+
+Known conflicts ~
+    Gitflow's global keybindings are ordinary normal-mode mappings
+    installed in every buffer, so they can shadow a plugin or LSP mapping.
+
+    gc vs vim-commentary: gitflow binds gc to `commit`; vim-commentary
+    uses gc as a comment operator.  Remap gitflow's commit action to free
+    gc: >lua
+        require("gitflow").setup({ keybindings = { commit = "<leader>gc" } })
+<
+    gd vs LSP go-to-definition: not an actual conflict.  Gitflow's diff
+    command is gD (capital D), not gd; there is no default gitflow
+    mapping on lowercase gd.
+
+    If your LSP config binds the common (non-default-Neovim) convention
+    of bare gr for references, note gitflow uses bare gr for `refresh`.
+    Remap one side if both are active.
+
+Cross-panel inconsistencies ~
+    Panel-local bindings are fixed per panel, so the same key means
+    something different in different panels — a documentation note, not
+    a proposal to change any binding.
+
+    A: abort active merge/rebase/cherry-pick (conflict list, destructive,
+       confirms first) / unstage all files (status panel) / apply stash
+       under cursor (stash panel) / edit assignees (issue list, PR list).
+    R: reset to entry under cursor (reflog panel, destructive, confirms
+       first, default choice Cancel) / refresh (branch list, conflict
+       list) / reply to comment thread (review view).
+    "Back to list": b (issue list, PR list) or <BS> (actions panel).
+    No panel uses <Esc> for this.
+
+    Both destructive cases above default their confirmation prompt to
+    Cancel.
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*
@@ -570,11 +677,15 @@ Configure via `setup({ signs = { ... } })`: >lua
         modified = "~",
         deleted  = "\u{2212}",
         conflict = "!",
+        debounce = 300,     -- ms to wait after a write before refreshing
       },
     })
 <
 
 On Neovim 0.10+ signs use extmarks; older versions use `vim.fn.sign_place`.
+
+`signs.debounce` coalesces a burst of rapid writes into a single git call
+instead of one per write.
 
 ==============================================================================
 10. ICONS                                                     *gitflow-icons*
@@ -612,6 +723,41 @@ lualine.nvim: >lua
 
 The statusline refreshes on `FocusGained`, `BufWritePost`, and after
 Gitflow operations via the `User GitflowPostOperation` event.
+
+==============================================================================
+12. LUA API                                                *gitflow-lua-api*
+
+This is the surface a dependent plugin or user config can call directly, as
+opposed to the panel/git/gh internals under `lua/gitflow/panels`, `git`, and
+`gh`, which are implementation detail and may change without notice.
+
+require("gitflow") ~
+    setup({opts})   Initialize the plugin (see |gitflow-config|). Returns
+                    the resolved `GitflowConfig`.
+    get_config()    Returns the currently active resolved `GitflowConfig`
+                    (the same table `setup()` returned).
+    statusline()    Returns the current statusline string (see
+                    |gitflow-statusline|). Safe to call before setup() has
+                    finished; returns "" if not ready yet.
+    initialized     `true` once `setup()` has completed.
+
+require("gitflow.commands") ~
+    register_subcommand(name, subcommand)
+        Register a new `:Gitflow <name>` subcommand. `subcommand` is a
+        table: >lua
+            require("gitflow.commands").register_subcommand("my-thing", {
+              description = "One-line summary shown in :Gitflow help",
+              category = "Git",     -- optional, groups it in help output
+              run = function(ctx)
+                -- ctx.args:   full argv, ctx.args[1] == "my-thing"
+                -- ctx.config: the resolved GitflowConfig
+                return "Result message shown via vim.notify"
+              end,
+            })
+<
+        A throwing `run` is caught, reported via `vim.notify` with the
+        original message and traceback preserved, and returned as the
+        dispatch result — it never crashes `:Gitflow`.
 
 ==============================================================================
  vim:tw=78:ts=8:ft=help:norl:

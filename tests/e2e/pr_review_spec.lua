@@ -16,6 +16,7 @@ local utils = require("gitflow.utils")
 local review_panel = require("gitflow.panels.review")
 local cache = require("gitflow.review.cache")
 local inline = require("gitflow.review.inline")
+local list_picker = require("gitflow.ui.list_picker")
 
 ---@param patches table[]
 ---@param fn fun()
@@ -67,6 +68,29 @@ local function decode_logged_stdin_payload(lines)
 				return decoded
 			end
 			return nil
+		end
+	end
+	return nil
+end
+
+-- #367 fixtures. The hunk `@@ -10,7 +10,9 @@` on lua/gitflow/highlights.lua
+-- gives new-side lines 13/14/15 as the three added lines below. The real
+-- working-tree file has different text at those rows, so asserting on these
+-- strings proves a suggestion is built from the PR diff, not from the buffer.
+local SUGGEST_PATH = "lua/gitflow/highlights.lua"
+local SUGGEST_LINES = {
+	[13] = '  GitflowModified = { link = "DiffText" },',
+	[14] = '  GitflowDarkBg = { bg = "#1e1e2e" },',
+	[15] = '  GitflowDarkFg = { fg = "#cdd6f4" },',
+}
+
+--- The queued draft that carries a suggestion block. Found by content rather
+--- than index so an unrelated draft can never be asserted on by mistake.
+---@return table|nil
+local function find_suggestion_draft()
+	for _, pc in ipairs(review_panel.state.pending_comments) do
+		if inline.has_suggestion(pc.body) then
+			return pc
 		end
 	end
 	return nil
@@ -1027,6 +1051,37 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["next_file and prev_file walk the file list and wrap"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 1
+		end, "at least two files should be populated after open")
+
+		local files = review_panel.state.files
+		review_panel.open_file(files[1].path)
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_file_idx, 1,
+			"opening the first file should make it active")
+
+		review_panel.next_file()
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, files[2].path,
+			"]f should open the next file in the list")
+
+		review_panel.prev_file()
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, files[1].path,
+			"[f should go back to the previous file")
+
+		review_panel.prev_file()
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, files[#files].path,
+			"[f on the first file should wrap to the last")
+
+		cleanup_panels()
+	end,
+
 	-- ── #357: toggle the diff overlay on/off ───────────────────────────
 
 	["toggle_diff_view hides and restores diff annotations"] = function()
@@ -1061,6 +1116,399 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			"show_diff should be true after toggling back on")
 		T.assert_true(diff_mark_count() > 0,
 			"diff annotations should be restored when toggled back on")
+
+		cleanup_panels()
+	end,
+
+	["file list names the active view layer while the diff is hidden"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local function file_list_text()
+			return table.concat(
+				T.buf_lines(review_panel.state.file_list_bufnr), "\n")
+		end
+
+		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
+			"the diff view is the default and needs no marker")
+
+		review_panel.toggle_diff_view()
+		T.drain_jobs(1000)
+		T.assert_contains(file_list_text(), "view: full file",
+			"the file list should name the full-file layer while it is active")
+
+		review_panel.toggle_diff_view()
+		T.drain_jobs(1000)
+		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
+			"the marker should disappear when the diff view comes back")
+
+		cleanup_panels()
+	end,
+
+	-- ── #366: review mode tears itself down completely ─────────────────
+
+	["close restores the winbar it replaced and drops review keymaps"] = function()
+		local outside_win = vim.api.nvim_get_current_win()
+		vim.api.nvim_set_option_value("winbar", "USER BAR",
+			{ win = outside_win })
+
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local diff_winid = review_panel.state.diff_winid
+		local bufnr = review_panel.state.active_bufnr
+		T.assert_contains(
+			vim.api.nvim_get_option_value("winbar", { win = diff_winid }),
+			"PR REVIEW", "the diff pane should carry the review banner")
+		T.assert_keymaps(bufnr, { "c", "]f", "]C" })
+
+		review_panel.close()
+		T.drain_jobs(500)
+
+		T.assert_false(vim.api.nvim_win_is_valid(diff_winid),
+			"the review windows should be gone after close")
+		T.assert_equals(#vim.api.nvim_buf_get_keymap(bufnr, "n"), 0,
+			"review keymaps must not outlive review mode")
+		T.assert_equals(
+			vim.api.nvim_get_option_value("winbar", { win = outside_win }),
+			"USER BAR",
+			"review mode must not clobber the user's own winbar")
+
+		vim.api.nvim_set_option_value("winbar", "", { win = outside_win })
+		T.cleanup_panels()
+	end,
+
+	["closing the file list window directly ends review mode"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		local diff_winid = review_panel.state.diff_winid
+		local bufnr = review_panel.state.active_bufnr
+
+		-- Abnormal exit: the user closes a review window by hand (:q) instead
+		-- of pressing q in the file list.
+		pcall(vim.api.nvim_win_close, review_panel.state.file_list_winid, true)
+		T.wait_until(function()
+			return not review_panel.is_open()
+		end, "review mode should end when its layout is dismantled")
+
+		T.assert_equals(
+			vim.api.nvim_get_option_value("winbar", { win = diff_winid }), "",
+			"the review title bar must not survive review mode (#366)")
+		T.assert_equals(#vim.api.nvim_buf_get_keymap(bufnr, "n"), 0,
+			"review keymaps must not survive an abnormal close")
+		T.assert_equals(review_panel.state.pr_number, nil,
+			"review state should be reset after an abnormal close")
+
+		pcall(vim.api.nvim_win_close, diff_winid, true)
+		T.cleanup_panels()
+	end,
+
+	-- ── Stale-response and retry safety ────────────────────────────────
+
+	["a superseded PR load never writes into the current review"] = function()
+		local deferred = {}
+		local ok_result =
+			{ code = 0, signal = 0, stdout = "", stderr = "", cmd = {} }
+
+		with_temporary_patches({
+			{ table = gh_prs, key = "view",
+				value = function(number, _, cb)
+					deferred[#deferred + 1] = function()
+						cb(nil, {
+							title = "PR " .. number,
+							author = { login = "octocat" },
+							headRefName = "head", baseRefName = "main",
+						}, ok_result)
+					end
+				end },
+			{ table = gh_prs, key = "list_files",
+				value = function(number, _, cb)
+					deferred[#deferred + 1] = function()
+						cb(nil, { {
+							filename = ("pr_%s.lua"):format(number),
+							status = "modified", additions = 1, deletions = 0,
+							patch = "@@ -1 +1 @@\n-a\n+b",
+						} }, ok_result)
+					end
+				end },
+			{ table = gh_prs, key = "review_comments",
+				value = function(number, _, cb)
+					deferred[#deferred + 1] = function()
+						cb(nil, { {
+							id = number, path = ("pr_%s.lua"):format(number),
+							line = 1, body = ("comment from PR %s"):format(number),
+							user = { login = "someone" },
+						} }, ok_result)
+					end
+				end },
+		}, function()
+			local function run_next()
+				local fn = table.remove(deferred, 1)
+				T.assert_true(fn ~= nil, "a deferred gh response should exist")
+				fn()
+			end
+
+			-- PR 42's metadata and files land, its comments are still in flight.
+			review_panel.open(cfg, 42)
+			run_next()
+			run_next()
+			local stale_comments = table.remove(deferred, 1)
+			T.assert_true(stale_comments ~= nil,
+				"PR 42's comment request should be in flight")
+
+			-- The user switches to PR 99 before PR 42 finishes loading.
+			review_panel.open(cfg, 99)
+			while #deferred > 0 do
+				run_next()
+			end
+			T.assert_equals(review_panel.state.pr_number, 99,
+				"the review should now be showing PR 99")
+			T.assert_equals(#review_panel.state.comment_threads, 1,
+				"PR 99's own comments should have loaded")
+
+			-- PR 42's response finally arrives; it must be discarded.
+			stale_comments()
+
+			T.assert_equals(
+				review_panel.state.comment_threads[1].comments[1].body,
+				"comment from PR 99",
+				"a superseded PR's comments must not be spliced into the view")
+		end)
+
+		cleanup_panels()
+	end,
+
+	["retrying a failed submit does not repost file comments"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local path = "lua/gitflow/highlights.lua"
+		review_panel.state.pr_head_sha = "deadbeef"
+		review_panel.state.pending_comments = {
+			{ id = 1, path = path, body = "file note A", file_level = true },
+			{ id = 2, path = path, body = "file note B", file_level = true },
+		}
+
+		local posted = {}
+		local submit_fails = true
+		local function failing_submit(...)
+			local cb = select(select("#", ...), ...)
+			cb(submit_fails and "submit failed" or nil)
+		end
+
+		with_temporary_patches({
+			{ table = gh_prs, key = "create_file_comment",
+				value = function(_, _, _, body, _, cb)
+					posted[#posted + 1] = body
+					cb(nil, { code = 0 })
+				end },
+			{ table = gh_prs, key = "review", value = failing_submit },
+			{ table = gh_prs, key = "submit_review", value = failing_submit },
+		}, function()
+			review_panel.submit_review_direct("comment", "please look")
+			T.drain_jobs(1000)
+
+			T.assert_equals(#posted, 2,
+				"both file comments should reach GitHub before the failure")
+			T.assert_equals(#review_panel.state.pending_comments, 2,
+				"a failed submit must not discard the drafts")
+
+			-- The user retries once the cause is fixed.
+			submit_fails = false
+			review_panel.submit_review_direct("comment", "please look")
+			T.drain_jobs(1000)
+
+			T.assert_equals(#posted, 2,
+				"a retry must not post the file comments a second time")
+		end)
+
+		cleanup_panels()
+	end,
+
+	-- ── #360: whole comment threads, not just the first comment ────────
+
+	["review comment replies are grouped into a single thread"] = function()
+		with_temporary_patches({
+			{ table = gh_prs, key = "review_comments",
+				value = function(_, _, cb)
+					cb(nil, {
+						{ id = 1, path = "lua/gitflow/highlights.lua", line = 13,
+							body = "root", user = { login = "alice" } },
+						{ id = 2, path = "lua/gitflow/highlights.lua", line = 13,
+							body = "reply to root", in_reply_to_id = 1,
+							user = { login = "bob" } },
+						-- GitHub can point a reply at another reply; it still
+						-- belongs to the same discussion.
+						{ id = 3, path = "lua/gitflow/highlights.lua", line = 13,
+							body = "reply to reply", in_reply_to_id = 2,
+							user = { login = "carol" } },
+					}, { code = 0, signal = 0, stdout = "", stderr = "", cmd = {} })
+				end },
+		}, function()
+			review_panel.open(cfg, 42)
+			T.drain_jobs(5000)
+			T.wait_until(function()
+				return #review_panel.state.comment_threads > 0
+			end, "comment threads should be built from the review comments")
+		end)
+
+		T.assert_equals(#review_panel.state.comment_threads, 1,
+			"chained replies should not spawn extra threads")
+		T.assert_equals(#review_panel.state.comment_threads[1].comments, 3,
+			"the thread should hold the root comment and both replies")
+
+		cleanup_panels()
+	end,
+
+	["toggle_thread folds the replies out under the first comment"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local path = "lua/gitflow/highlights.lua"
+		review_panel.state.comment_threads = {
+			{ id = 7, path = path, line = 13, collapsed = false, comments = {
+				{ id = 7, path = path, line = 13,
+					body = "root comment", user = "alice" },
+				{ id = 8, path = path, line = 13,
+					body = "a follow up reply", user = "bob" },
+			} },
+		}
+		review_panel.open_file(path)
+		T.drain_jobs(1000)
+
+		local bufnr = review_panel.state.active_bufnr
+		local function comment_box_text()
+			local marks = vim.api.nvim_buf_get_extmarks(
+				bufnr, inline.COMMENT_NS, 0, -1, { details = true })
+			local out = {}
+			for _, mark in ipairs(marks) do
+				for _, virt_line in ipairs(mark[4].virt_lines or {}) do
+					for _, chunk in ipairs(virt_line) do
+						out[#out + 1] = chunk[1]
+					end
+				end
+			end
+			return table.concat(out, "")
+		end
+
+		T.assert_contains(comment_box_text(), "root comment",
+			"the first comment should render inline")
+		T.assert_false(
+			comment_box_text():find("a follow up reply", 1, true) ~= nil,
+			"replies stay hidden until the thread is folded out")
+
+		vim.api.nvim_win_set_cursor(review_panel.state.diff_winid, { 13, 0 })
+		review_panel.toggle_thread()
+		T.drain_jobs(500)
+
+		T.assert_true(review_panel.state.expanded_threads[7] == true,
+			"toggle_thread should mark the thread expanded")
+		T.assert_contains(comment_box_text(), "a follow up reply",
+			"the reply should render inline once the thread is folded out")
+		T.assert_contains(comment_box_text(), "@bob",
+			"each folded-out reply should be attributed to its author")
+
+		review_panel.toggle_thread()
+		T.drain_jobs(500)
+		T.assert_false(
+			comment_box_text():find("a follow up reply", 1, true) ~= nil,
+			"toggling again should fold the thread back up")
+
+		cleanup_panels()
+	end,
+
+	-- ── #382: jump to next comment + overview of all comments ──────────
+
+	["diff pane has ]C/[C and the comments overview keybind"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file("lua/gitflow/highlights.lua")
+		T.drain_jobs(1000)
+
+		-- Keymaps are recorded with <leader> already expanded.
+		local overview = (vim.g.mapleader or "\\") .. "c"
+		T.assert_keymaps(review_panel.state.active_bufnr,
+			{ "]C", "[C", overview })
+		T.assert_keymaps(review_panel.state.file_list_bufnr,
+			{ "]C", "[C", overview })
+
+		cleanup_panels()
+	end,
+
+	["comments_overview lists every comment and jumps to the chosen one"] = function()
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		local path = "lua/gitflow/highlights.lua"
+		review_panel.state.comment_threads = {
+			{ id = 7, path = path, line = 13, collapsed = false, comments = {
+				{ id = 7, path = path, line = 13,
+					body = "please rename this", user = "alice" },
+			} },
+		}
+		review_panel.state.pending_comments = {
+			{ id = 1, path = path, body = "my own note", new_line = 14 },
+		}
+
+		local opened
+		with_temporary_patches({
+			{ table = list_picker, key = "open",
+				value = function(opts)
+					opened = opts
+					return {}
+				end },
+		}, function()
+			review_panel.comments_overview()
+		end)
+
+		T.assert_true(opened ~= nil, "the overview should open a picker")
+		T.assert_equals(#opened.items, 2,
+			"the overview should list the remote thread and the draft")
+		T.assert_contains(opened.items[1].description, "please rename this",
+			"each row should preview its comment")
+		T.assert_false(opened.multi_select,
+			"the overview picks a single comment to jump to")
+
+		-- Selecting a row jumps the diff pane to that comment.
+		opened.on_submit({ opened.items[2].name })
+		T.drain_jobs(1000)
+		T.assert_equals(review_panel.state.active_path, path,
+			"selecting a comment should open its file")
+		T.assert_equals(
+			vim.api.nvim_win_get_cursor(review_panel.state.diff_winid)[1], 14,
+			"selecting a comment should put the cursor on its line")
 
 		cleanup_panels()
 	end,
@@ -1300,6 +1748,234 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
 		cleanup_panels()
+	end,
+
+	-- ── #367: suggested code changes ───────────────────────────────────
+
+	["starting a suggestion prefills the anchored diff line"] = function()
+		-- A draft left on disk by an earlier failed run rehydrates on open and
+		-- shifts the drafts under test; start from a known-empty cache.
+		cache.clear(42, cache.repo_slug())
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file(SUGGEST_PATH)
+		T.drain_jobs(1000)
+
+		local prefill
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(opts, on_confirm)
+					prefill = opts.default
+					on_confirm(opts.default)
+				end },
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(review_panel.state.diff_winid, { 13, 0 })
+			review_panel.inline_suggestion()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(prefill,
+			"```suggestion\n" .. SUGGEST_LINES[13] .. "\n```",
+			"suggestion should be prefilled with the anchored diff line")
+
+		-- The buffer holds the real file, whose line 13 is different text;
+		-- the proposal must come from the diff, never from the buffer.
+		local buf_line = vim.api.nvim_buf_get_lines(
+			review_panel.state.active_bufnr, 12, 13, false)[1]
+		T.assert_true(buf_line ~= SUGGEST_LINES[13],
+			"fixture precondition: buffer line 13 differs from the diff line")
+
+		T.assert_equals(#review_panel.state.pending_comments, 1,
+			"a suggestion should queue exactly one draft")
+		local pc = find_suggestion_draft()
+		T.assert_true(pc ~= nil, "the suggestion draft should be queued")
+		T.assert_equals(pc.new_line, 13, "suggestion should anchor on line 13")
+		T.assert_true(pc.start_new_line == nil,
+			"a single-line suggestion carries no range start")
+		T.assert_true(inline.has_suggestion(pc.body),
+			"the queued body should hold a suggestion block")
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["a multi-line suggestion spans the selected range"] = function()
+		cache.clear(42, cache.repo_slug())
+		review_panel.open(cfg, 42)
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return #review_panel.state.files > 0
+		end, "files should be populated after open")
+
+		review_panel.open_file(SUGGEST_PATH)
+		T.drain_jobs(1000)
+
+		local prefill
+		with_temporary_patches({
+			{ table = input, key = "prompt",
+				value = function(opts, on_confirm)
+					prefill = opts.default
+					on_confirm(opts.default)
+				end },
+		}, function()
+			vim.api.nvim_set_current_win(review_panel.state.diff_winid)
+			vim.api.nvim_win_set_cursor(review_panel.state.diff_winid, { 13, 0 })
+			vim.cmd("normal! V2j")
+			review_panel.inline_suggestion_visual()
+			T.drain_jobs(1000)
+		end)
+
+		T.assert_equals(prefill, table.concat({
+			"```suggestion",
+			SUGGEST_LINES[13],
+			SUGGEST_LINES[14],
+			SUGGEST_LINES[15],
+			"```",
+		}, "\n"), "a range suggestion should prefill every anchored line")
+
+		local pc = find_suggestion_draft()
+		T.assert_true(pc ~= nil, "the range suggestion should be queued")
+		T.assert_equals(pc.start_new_line, 13,
+			"range suggestion should start at the selection's first line")
+		T.assert_equals(pc.new_line, 15,
+			"range suggestion should end at the selection's last line")
+
+		-- The body must survive to the reviews API unchanged: a suggestion is
+		-- an ordinary comment, so no separate API path may be involved.
+		with_temp_gh_log(function(log_path)
+			with_temporary_patches({
+				{ table = input, key = "prompt",
+					value = function(_, on_confirm) on_confirm("") end },
+			}, function()
+				review_panel.review_approve()
+				T.drain_jobs(3000)
+			end)
+
+			local payload = decode_logged_stdin_payload(T.read_file(log_path))
+			T.assert_true(payload ~= nil and type(payload.comments) == "table"
+				and #payload.comments == 1,
+				"the suggestion should be batched into the reviews payload")
+			local sent = payload.comments[1]
+			T.assert_equals(sent.body, prefill,
+				"the suggestion body must reach the API intact")
+			T.assert_equals(sent.start_line, 13, "start_line should be 13")
+			T.assert_equals(sent.line, 15, "line should be 15")
+			T.assert_equals(sent.side, "RIGHT",
+				"a suggestion replaces new-side lines")
+			T.assert_equals(sent.start_side, "RIGHT",
+				"the range start must be on the new side too")
+		end)
+
+		cache.clear(review_panel.state.pr_number, review_panel.state.repo_slug)
+		cleanup_panels()
+	end,
+
+	["a suggestion is refused when a line in the range is off-diff"] = function()
+		local fd = { hunks = { { lines = {
+			{ kind = "ctx", text = "keep", new_line = 10 },
+			{ kind = "del", text = "gone", old_line = 11 },
+			{ kind = "add", text = "added", new_line = 12 },
+		} } } }
+
+		local ok_lines = inline.new_side_lines(fd, 10, 10)
+		T.assert_true(ok_lines ~= nil and #ok_lines == 1,
+			"a covered range should resolve")
+
+		local gapped, err = inline.new_side_lines(fd, 10, 12)
+		T.assert_true(gapped == nil,
+			"line 11 has no new side, so the range must not resolve")
+		T.assert_true(err ~= nil and err:find("11", 1, true) ~= nil,
+			"the error should name the line that is missing from the diff")
+	end,
+
+	["received suggestions render distinguishably from prose"] = function()
+		local function box_rows(body)
+			local bufnr = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "a", "b", "c" })
+			inline.apply_comments(bufnr, {
+				{ author = "octocat", body = body, new_line = 2 },
+			}, { show_body = true })
+
+			local marks = vim.api.nvim_buf_get_extmarks(
+				bufnr, inline.COMMENT_NS, 0, -1, { details = true })
+			T.assert_equals(#marks, 1, "one comment should be drawn")
+
+			local rows = {}
+			for _, vline in ipairs(marks[1][4].virt_lines or {}) do
+				local text, groups = "", {}
+				for _, chunk in ipairs(vline) do
+					text = text .. chunk[1]
+					groups[#groups + 1] = tostring(chunk[2])
+				end
+				rows[#rows + 1] = { text = text, groups = groups }
+			end
+			vim.api.nvim_buf_delete(bufnr, { force = true })
+			return rows
+		end
+
+		local suggested = box_rows("Rename it:\n```suggestion\nlocal renamed = 1\n```")
+		local header, code_row = nil, nil
+		for _, row in ipairs(suggested) do
+			if row.text:find("suggestion", 1, true) then
+				header = row
+			end
+			if row.text:find("local renamed = 1", 1, true) then
+				code_row = row
+			end
+		end
+		T.assert_true(header ~= nil,
+			"a comment carrying a suggestion should say so in its header")
+		T.assert_true(code_row ~= nil,
+			"the proposed line should be rendered in the box")
+		T.assert_true(
+			vim.tbl_contains(code_row.groups, "GitflowAdded"),
+			"proposed lines should be highlighted as additions, not prose")
+		T.assert_true(code_row.text:find("+", 1, true) ~= nil,
+			"proposed lines should carry an addition marker")
+
+		local prose = box_rows("Rename it: local renamed = 1")
+		for _, row in ipairs(prose) do
+			T.assert_true(not vim.tbl_contains(row.groups, "GitflowAdded"),
+				"a prose comment must not render as a suggestion")
+			T.assert_true(row.text:find("suggested change", 1, true) == nil,
+				"a prose comment must not claim to be a suggestion")
+		end
+	end,
+
+	["repo_slug resolves once across repeated comment loads"] = function()
+		cache.invalidate_repo_slug()
+
+		with_temp_gh_log(function(log_path)
+			for _ = 1, 3 do
+				cache.load(4242)
+				cache.save(4242, { comments = {} })
+			end
+
+			-- A cwd change can mean a different repo, so it must re-resolve.
+			local original_cwd = vim.fn.getcwd()
+			local elsewhere = vim.fn.tempname()
+			vim.fn.mkdir(elsewhere, "p")
+			vim.cmd.cd(elsewhere)
+			cache.repo_slug()
+			vim.cmd.cd(original_cwd)
+			pcall(vim.fn.delete, elsewhere, "rf")
+
+			local resolves = 0
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("repo view", 1, true) then
+					resolves = resolves + 1
+				end
+			end
+			T.assert_equals(resolves, 2,
+				"the slug should resolve once per cwd, not per load/save")
+		end)
+
+		cache.clear(4242)
 	end,
 
 	-- ── #363: scope review to a commit range via a local git diff ───────

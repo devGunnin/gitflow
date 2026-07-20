@@ -2,6 +2,7 @@ local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
 vim.opt.runtimepath:append(project_root)
 dofile(project_root .. "/scripts/test_real_git.lua")
+local compose = dofile(project_root .. "/scripts/test_compose_form.lua")
 
 local function assert_true(condition, message)
 	if not condition then
@@ -287,23 +288,19 @@ local stage_all_err = wait_async(function(done)
 end)
 assert_equals(stage_all_err, nil, "stage_all should succeed")
 
-local original_input = vim.ui.input
 local original_confirm = vim.fn.confirm
-vim.ui.input = function(_, on_confirm)
-	on_confirm("stage2 automated commit")
-end
 vim.fn.confirm = function()
 	return 1
 end
 
 commands.dispatch({ "commit" }, cfg)
+compose.submit("stage2 automated commit")
 local commit_seen = vim.wait(5000, function()
 	local log_output = run_git(repo_dir, { "log", "--oneline", "-n", "1" })
 	return log_output:find("stage2 automated commit", 1, true) ~= nil
 end, 25)
 assert_true(commit_seen, "commit command should create a commit")
 
-vim.ui.input = original_input
 vim.fn.confirm = original_confirm
 
 write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "delta" })
@@ -401,6 +398,54 @@ assert_deep_equals(
 	vim.fn.readfile(repo_dir .. "/tracked.txt"),
 	{ "alpha", "beta", "gamma" },
 	"revert should restore tracked file content"
+)
+
+-- X is destructive and irreversible, so the confirm gate matters more than
+-- the hint text: prove it actually defaults to Cancel (simulating <CR> with
+-- no explicit choice) and that the default leaves the file untouched.
+write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "uncommitted" })
+status_panel.refresh()
+local decline_ready = vim.wait(5000, function()
+	if not status_panel.state.bufnr then
+		return false
+	end
+	local lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
+	local header = find_line(lines, "Unstaged")
+	return header ~= nil and find_line(lines, "tracked.txt", header + 1) ~= nil
+end, 25)
+assert_true(decline_ready, "status panel should show the new uncommitted change as unstaged")
+
+local decline_lines = vim.api.nvim_buf_get_lines(status_panel.state.bufnr, 0, -1, false)
+local decline_unstaged_header = find_line(decline_lines, "Unstaged")
+local decline_tracked_line = find_line(decline_lines, "tracked.txt", decline_unstaged_header + 1)
+assert_true(decline_tracked_line ~= nil, "unstaged tracked file should be visible")
+
+local captured_message, captured_default_choice = nil, nil
+local decline_confirm = vim.fn.confirm
+vim.fn.confirm = function(message, _, default_choice)
+	captured_message = message
+	captured_default_choice = default_choice
+	-- Simulate pressing <CR> without picking a choice: real vim.fn.confirm
+	-- returns the dialog's own default in that case.
+	return default_choice
+end
+vim.api.nvim_win_set_cursor(status_panel.state.winid, { decline_tracked_line, 0 })
+status_panel.revert_under_cursor()
+vim.wait(300)
+vim.fn.confirm = decline_confirm
+
+assert_true(
+	type(captured_message) == "string" and captured_message:find("tracked.txt", 1, true) ~= nil,
+	"revert should still prompt for confirmation before discarding"
+)
+assert_equals(
+	captured_default_choice, 2,
+	"revert confirm must default to Cancel (index 2), not Revert"
+)
+assert_deep_equals(
+	vim.fn.readfile(repo_dir .. "/tracked.txt"),
+	{ "alpha", "beta", "gamma", "uncommitted" },
+	"declining (or dismissing) the revert confirm must leave uncommitted changes intact"
 )
 
 local branch_name = vim.trim(run_git(repo_dir, { "rev-parse", "--abbrev-ref", "HEAD" }))
@@ -613,16 +658,12 @@ assert_true(#log_entries >= 1, "log should contain at least one commit")
 
 write_file(repo_dir .. "/tracked.txt", { "alpha", "beta", "gamma", "stash-change" })
 
-local stash_input = vim.ui.input
-vim.ui.input = function(_, on_confirm)
-	on_confirm("stage2 stash")
-end
 commands.dispatch({ "stash", "push" }, cfg)
+compose.submit("stage2 stash")
 local stash_push_seen = vim.wait(5000, function()
 	local output = run_git(repo_dir, { "stash", "list", "-n", "1" })
 	return output:find("stage2 stash", 1, true) ~= nil
 end, 25)
-vim.ui.input = stash_input
 assert_true(stash_push_seen, "stash push command should support prompted message")
 
 local stash_list_err, stash_entries = wait_async(function(done)
@@ -774,18 +815,12 @@ local function has_duplicate(list)
 	return false
 end
 
--- Read source files and extract confirm() choice strings
-local source_files = {
-	project_root .. "/lua/gitflow/commands.lua",
-	project_root .. "/lua/gitflow/panels/status.lua",
-	project_root .. "/lua/gitflow/panels/conflict.lua",
-	project_root .. "/lua/gitflow/panels/branch.lua",
-	project_root .. "/lua/gitflow/panels/issues.lua",
-	project_root .. "/lua/gitflow/panels/labels.lua",
-	project_root .. "/lua/gitflow/panels/prs.lua",
-	project_root .. "/lua/gitflow/panels/stash.lua",
-	project_root .. "/lua/gitflow/ui/conflict.lua",
-}
+-- Read source files and extract confirm() choice strings.
+-- Enumerated, not hardcoded: a hardcoded list silently drops a module the
+-- moment one is added or code moves between files.
+local source_files = vim.fn.glob(project_root .. "/lua/**/*.lua", false, true)
+table.sort(source_files)
+assert_true(#source_files > 0, "confirm() accelerator scan should find source files")
 
 for _, filepath in ipairs(source_files) do
 	local f = io.open(filepath, "r")
@@ -828,10 +863,17 @@ for _, filepath in ipairs(source_files) do
 end
 
 -- Also verify commit confirm specifically uses non-conflicting keys
-local cmd_src = io.open(project_root .. "/lua/gitflow/commands.lua", "r")
-assert_true(cmd_src ~= nil, "commands.lua should be readable")
+local commit_confirm_path = project_root .. "/lua/gitflow/commands/workspace.lua"
+local cmd_src = io.open(commit_confirm_path, "r")
+assert_true(cmd_src ~= nil, "workspace command area should be readable")
 local cmd_content = cmd_src:read("*a")
 cmd_src:close()
+-- Pin the confirm's location too: without this the check below passes
+-- vacuously if the commit flow moves to another file.
+assert_true(
+	cmd_content:find("Commit %d staged file(s)?", 1, true) ~= nil,
+	"commit confirm should live in the workspace command area"
+)
 assert_true(
 	cmd_content:find('"&Yes",%s*"&No"', 1) ~= nil
 		or not cmd_content:find('"&Commit",%s*"&Cancel"', 1),

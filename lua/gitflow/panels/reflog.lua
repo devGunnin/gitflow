@@ -19,6 +19,14 @@ local REFLOG_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_reflog_hl")
 local REFLOG_FLOAT_FOOTER =
 	" <CR> checkout · 1-9 quick checkout · R reset · r refresh · q close "
+-- Split-layout counterpart of REFLOG_FLOAT_FOOTER; keep the two in sync.
+local REFLOG_HINTS = {
+	{ "<CR>", "checkout" },
+	{ "1-9", "quick checkout" },
+	{ "R", "reset" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 
 ---@type GitflowReflogPanelState
 M.state = {
@@ -196,6 +204,10 @@ local function render(entries, current_branch)
 		end
 	end
 
+	-- In-buffer hints for split layout (floats advertise the same keys in
+	-- their window footer).
+	components.split_hint_bar(B, render_opts, REFLOG_HINTS)
+
 	ui.buffer.update("reflog", B.lines)
 	M.state.line_entries = line_entries
 
@@ -235,12 +247,11 @@ end
 
 ---@param entry GitflowReflogEntry
 local function execute_checkout(entry)
-	local confirmed = vim.fn.confirm(
+	local confirmed = ui.input.confirm(
 		("Checkout %s? This will detach HEAD."):format(
 			entry.short_sha
-		),
-		"&Yes\n&No", 2
-	) == 1
+		)
+	)
 	if not confirmed then
 		return
 	end
@@ -320,9 +331,12 @@ function M.reset_under_cursor()
 		return
 	end
 
-	local choice = vim.fn.confirm(
+	local _, choice = ui.input.confirm(
 		("Reset to %s?"):format(entry.short_sha),
-		"&Soft\n&Mixed\n&Hard\n&Cancel", 4
+		{
+			choices = { "&Soft", "&Mixed", "&Hard", "&Cancel" },
+			default_choice = 4,
+		}
 	)
 	if choice == 0 or choice == 4 then
 		return

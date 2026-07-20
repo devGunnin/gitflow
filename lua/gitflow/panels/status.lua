@@ -38,13 +38,14 @@ local icons = require("gitflow.icons")
 ---@field opts GitflowStatusPanelOpts
 ---@field line_entries table<integer, GitflowStatusLineEntry>
 ---@field active boolean
+---@field generation integer
 
 local M = {}
 local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
 local STATUS_FLOAT_TITLE = "  Gitflow Status  "
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
 local STATUS_FLOAT_FOOTER = " s/u stage · V then s/u batch · a/A all · cc commit"
-	.. " · dd diff · cx conflict · p push · r refresh · q close "
+	.. " · dd diff · cx conflict · X discard changes · p push · r refresh · q close "
 -- Compact in-buffer hints for split layout (floats use the footer above).
 local STATUS_HINTS = {
 	{ "s/u", "stage/unstage" },
@@ -52,6 +53,7 @@ local STATUS_HINTS = {
 	{ "<CR>", "open" },
 	{ "cc", "commit" },
 	{ "dd", "diff" },
+	{ "X", "discard changes" },
 	{ "p", "push" },
 	{ "r", "refresh" },
 	{ "q", "close" },
@@ -65,6 +67,10 @@ M.state = {
 	opts = {},
 	line_entries = {},
 	active = false,
+	-- Monotonic refresh counter. Every callback in a refresh chain checks it
+	-- and bails if a newer refresh has started, so a slow stale response can
+	-- never repaint over fresher data (#283).
+	generation = 0,
 	-- Cached commit-section data from the last full refresh, so staging /
 	-- unstaging (which never changes commits or upstream) can repaint from a
 	-- single `git status` call instead of re-running upstream + two git logs
@@ -389,6 +395,12 @@ end
 ---@param upstream_name string|nil
 ---@param current_branch string
 local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
+	local bufnr = M.state.bufnr
+	-- Async callbacks can land after the panel closed; never paint a dead buffer.
+	if not M.state.active or not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+
 	-- Remember the commit-section data so a files-only refresh can reuse it
 	-- without re-querying upstream + git log (#362).
 	M.state.last = {
@@ -455,12 +467,17 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	ui.buffer.update("status", B.lines)
 	M.state.line_entries = line_entries
 
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
 	B:apply(bufnr, STATUS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
+end
+
+--- True once a newer refresh has started, meaning this chain's result is stale
+--- and belongs to nobody. Checked before error reporting so a superseded chain
+--- stays silent, while a failure in the current chain still surfaces.
+---@param generation integer
+---@return boolean
+local function superseded(generation)
+	return M.state.generation ~= generation
 end
 
 ---@param err string|nil
@@ -506,6 +523,11 @@ function M.refresh(opts)
 		return
 	end
 
+	-- This refresh owns a generation; every callback below abandons its work if
+	-- a newer refresh has since started.
+	local generation = M.state.generation + 1
+	M.state.generation = generation
+
 	-- Fast path: staging/unstaging only moves files between sections; the
 	-- commit history and upstream are unchanged, so reuse the cached commit
 	-- data and just re-read `git status` (#362). One subprocess instead of
@@ -513,6 +535,9 @@ function M.refresh(opts)
 	if opts and opts.files_only and M.state.last then
 		local last = M.state.last
 		git_status.fetch({}, function(err, _, grouped)
+			if superseded(generation) then
+				return
+			end
 			if notify_if_error(err) then
 				return
 			end
@@ -523,7 +548,13 @@ function M.refresh(opts)
 	end
 
 	git_branch.current({}, function(_, branch)
+		if superseded(generation) then
+			return
+		end
 		git_status.fetch({}, function(err, _, grouped)
+			if superseded(generation) then
+				return
+			end
 			if notify_if_error(err) then
 				return
 			end
@@ -531,6 +562,9 @@ function M.refresh(opts)
 			local current_branch = branch or "(unknown)"
 
 			resolve_upstream(function(upstream_err, upstream)
+				if superseded(generation) then
+					return
+				end
 				if notify_if_error(upstream_err) then
 					return
 				end
@@ -546,6 +580,9 @@ function M.refresh(opts)
 					reverse = true,
 					range = ("%s..HEAD"):format(upstream.full_name),
 				}, function(outgoing_err, outgoing_entries)
+					if superseded(generation) then
+						return
+					end
 					if notify_if_error(outgoing_err) then
 						return
 					end
@@ -556,6 +593,9 @@ function M.refresh(opts)
 						reverse = true,
 						range = ("HEAD..%s"):format(upstream.full_name),
 					}, function(incoming_err, incoming_entries)
+						if superseded(generation) then
+							return
+						end
 						if notify_if_error(incoming_err) then
 							return
 						end

@@ -1,4 +1,5 @@
 local git = require("gitflow.git")
+local git_path = require("gitflow.git.path")
 
 ---@alias GitflowConflictOperation "merge"|"rebase"|"cherry-pick"
 ---@alias GitflowConflictResolution "local"|"base"|"remote"|"edit"
@@ -190,7 +191,7 @@ function M.list(opts, cb)
 
 		local paths = {}
 		for _, line in ipairs(split_lines(result.stdout or "")) do
-			local path = vim.trim(line)
+			local path = git_path.unquote(vim.trim(line))
 			if path ~= "" then
 				paths[#paths + 1] = path
 			end
