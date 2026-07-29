@@ -122,6 +122,7 @@ local function parse_issue_list_args(args, start_index)
 		state = "open",
 		label = nil,
 		assignee = nil,
+		milestone = nil,
 		limit = 100,
 	}
 
@@ -139,6 +140,9 @@ local function parse_issue_list_args(args, start_index)
 		elseif token == "--assignee" then
 			options.assignee = args[i + 1] or options.assignee
 			i = i + 1
+		elseif token == "--milestone" then
+			options.milestone = args[i + 1] or options.milestone
+			i = i + 1
 		elseif token == "--limit" then
 			options.limit = tonumber(args[i + 1]) or options.limit
 			i = i + 1
@@ -150,6 +154,10 @@ local function parse_issue_list_args(args, start_index)
 			local assignee = token:match("^assignee=(.+)$")
 			if assignee then
 				options.assignee = assignee
+			end
+			local milestone = token:match("^milestone=(.+)$")
+			if milestone then
+				options.milestone = milestone
 			end
 		end
 		i = i + 1
