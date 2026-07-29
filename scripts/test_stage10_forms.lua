@@ -1023,8 +1023,9 @@ vim.api.nvim_buf_set_lines(
 	{ "PR picker label test" }
 )
 
+-- Title -> Body -> Base branch -> Closes issues -> Reviewers -> Labels
 vim.api.nvim_set_current_win(pr_submit_win)
-for _ = 1, 4 do
+for _ = 1, 5 do
 	vim.api.nvim_feedkeys(tab, "x", false)
 end
 vim.api.nvim_feedkeys(

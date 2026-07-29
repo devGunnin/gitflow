@@ -12,6 +12,7 @@ local M = {}
 ---@field warmed boolean
 ---@field augroup integer|nil
 ---@field waiters fun(value: string)[]
+---@field root_cache { cwd: string, root: string }|nil
 M.state = {
 	cache = "",
 	cwd = nil,
@@ -20,7 +21,13 @@ M.state = {
 	warmed = false,
 	augroup = nil,
 	waiters = {},
+	root_cache = nil,
 }
+
+--- Drop the memoized repository root so the next refresh re-resolves it.
+function M.invalidate_root_cache()
+	M.state.root_cache = nil
+end
 
 ---@return string
 local function current_cwd()
@@ -135,6 +142,37 @@ local function read_divergence(repo_root, cb)
 	)
 end
 
+--- Resolve the repository root for `cwd`, reusing the memoized value.
+--- Only the branch/ahead/behind/dirty state is re-read every refresh; the root
+--- is stable for a given cwd and is invalidated explicitly by its callers.
+---@param cwd string
+---@param cb fun(repo_root: string|nil)
+local function resolve_repo_root(cwd, cb)
+	local cached = M.state.root_cache
+	if cached and cached.cwd == cwd then
+		cb(cached.root)
+		return
+	end
+
+	git.git({ "rev-parse", "--show-toplevel" }, { cwd = cwd }, function(result)
+		if result.code ~= 0 then
+			cb(nil)
+			return
+		end
+
+		local repo_root = vim.trim(result.stdout or "")
+		if repo_root == "" then
+			cb(nil)
+			return
+		end
+
+		-- Only successful lookups are cached: a non-repo cwd already costs one
+		-- probe, and caching the miss would hide a repo created later.
+		M.state.root_cache = { cwd = cwd, root = repo_root }
+		cb(repo_root)
+	end)
+end
+
 ---@param on_done fun(value: string)|nil
 function M.refresh(on_done)
 	if type(on_done) == "function" then
@@ -148,14 +186,8 @@ function M.refresh(on_done)
 	M.state.updating = true
 
 	local cwd = current_cwd()
-	git.git({ "rev-parse", "--show-toplevel" }, { cwd = cwd }, function(root_result)
-		if root_result.code ~= 0 then
-			finish_refresh("", cwd)
-			return
-		end
-
-		local repo_root = vim.trim(root_result.stdout or "")
-		if repo_root == "" then
+	resolve_repo_root(cwd, function(repo_root)
+		if not repo_root then
 			finish_refresh("", cwd)
 			return
 		end
@@ -208,10 +240,17 @@ function M.setup()
 		pcall(vim.api.nvim_del_augroup_by_id, M.state.augroup)
 	end
 	M.state.augroup = vim.api.nvim_create_augroup("GitflowStatusline", { clear = true })
+	M.invalidate_root_cache()
 
 	vim.api.nvim_create_autocmd({ "FocusGained", "BufWritePost" }, {
 		group = M.state.augroup,
-		callback = function()
+		callback = function(event)
+			-- Regaining focus is when an out-of-band change to the root (a
+			-- nested `git init`, a worktree swap) is plausible; a buffer write
+			-- cannot move the root, so the frequent event keeps the cache.
+			if event.event == "FocusGained" then
+				M.invalidate_root_cache()
+			end
 			M.refresh()
 		end,
 	})
@@ -220,6 +259,7 @@ function M.setup()
 		group = M.state.augroup,
 		pattern = "GitflowPostOperation",
 		callback = function()
+			M.invalidate_root_cache()
 			M.refresh()
 		end,
 	})

@@ -11,11 +11,10 @@ local M = {}
 ---@type table<string, GitflowBufferRecord>
 M.registry = {}
 
----@param name string
----@return string
-local function normalize_name(name)
-	return name:gsub("[^%w_]", "_")
-end
+-- One group for every gitflow buffer. The autocmds below are buffer-local, so
+-- Neovim removes them when their buffer is wiped; a group per buffer name
+-- (the old shape) survived the buffer and grew without bound.
+local cleanup_augroup = vim.api.nvim_create_augroup("GitflowBufferCleanup", { clear = true })
 
 ---@param name string
 local function clear_registry_entry(name)
@@ -24,17 +23,16 @@ end
 
 ---@param name string
 ---@param bufnr integer
+---@return integer augroup
 local function create_cleanup_autocmd(name, bufnr)
-	local group_name = ("GitflowBuffer_%s"):format(normalize_name(name))
-	local augroup = vim.api.nvim_create_augroup(group_name, { clear = true })
 	vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
-		group = augroup,
+		group = cleanup_augroup,
 		buffer = bufnr,
 		callback = function()
 			clear_registry_entry(name)
 		end,
 	})
-	return augroup
+	return cleanup_augroup
 end
 
 ---@param bufnr integer

@@ -212,6 +212,77 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 		status.close()
 	end,
 
+	-- `X` discards uncommitted changes irreversibly; it must be advertised
+	-- (worded as destructive) in both the float footer and the split hints,
+	-- not just bound silently.
+	["status panel advertises X as a destructive discard in both layouts"] = function()
+		local status = require("gitflow.panels.status")
+		local gitflow = require("gitflow")
+
+		---@param footer any  string or [text, hl] chunk list
+		---@return string
+		local function footer_text(footer)
+			if type(footer) == "string" then
+				return footer
+			end
+			if type(footer) ~= "table" then
+				return tostring(footer or "")
+			end
+			local parts = {}
+			for _, chunk in ipairs(footer) do
+				parts[#parts + 1] = type(chunk) == "table"
+					and tostring(chunk[1] or "") or tostring(chunk)
+			end
+			return table.concat(parts)
+		end
+
+		gitflow.setup({
+			ui = {
+				default_layout = "float",
+				split = { orientation = "vertical", size = 40 },
+			},
+		})
+		T.exec_command("Gitflow status")
+		T.drain_jobs(3000)
+
+		local float_winid = status.state.winid
+		T.assert_true(
+			float_winid ~= nil and vim.api.nvim_win_is_valid(float_winid),
+			"status float window should be valid"
+		)
+		local float_footer = footer_text(
+			vim.api.nvim_win_get_config(float_winid).footer
+		)
+		T.assert_contains(
+			float_footer, "X",
+			"status float footer should advertise the X key"
+		)
+		T.assert_contains(
+			float_footer, "discard",
+			"status float footer should word X as destructive (discard), not a bare verb"
+		)
+		status.close()
+
+		gitflow.setup({
+			ui = {
+				default_layout = "split",
+				split = { orientation = "vertical", size = 40 },
+			},
+		})
+		T.exec_command("Gitflow status")
+		T.drain_jobs(3000)
+
+		local split_bufnr = ui.buffer.get("status")
+		T.assert_true(
+			split_bufnr ~= nil, "status buffer should exist in split layout"
+		)
+		T.assert_true(
+			T.buf_find_line(split_bufnr, "discard") ~= nil,
+			"status split-layout hints should advertise X as a destructive discard"
+		)
+		status.close()
+	end,
+
 	-- ── Diff panel open/close ───────────────────────────────────────────
 
 	["diff panel opens and creates buffer"] = function()
@@ -268,6 +339,25 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 		T.assert_true(
 			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
 			"log buffer should exist after :Gitflow log"
+		)
+
+		log_panel.close()
+	end,
+
+	-- Split is the test-suite default layout; this proves the log panel's
+	-- split hint bar actually renders (not just that opening it doesn't
+	-- throw — a *_HINTS table can be deleted while its call site remains,
+	-- which only breaks the split path since the float path returns early).
+	["log panel renders keybind hints in split layout"] = function()
+		local log_panel = require("gitflow.panels.log")
+		T.exec_command("Gitflow log")
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("log")
+		T.assert_true(bufnr ~= nil, "log buffer should exist")
+		T.assert_true(
+			T.buf_find_line(bufnr, "review commit") ~= nil,
+			"log panel split layout should render its keybind hints"
 		)
 
 		log_panel.close()

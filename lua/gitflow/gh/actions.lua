@@ -2,6 +2,17 @@ local gh = require("gitflow.gh")
 
 local M = {}
 
+---@param result GitflowGitResult
+---@param action string
+---@return string
+local function error_from_result(result, action)
+	local output = gh.output(result)
+	if output == "" then
+		return ("gh run %s failed"):format(action)
+	end
+	return ("gh run %s failed: %s"):format(action, output)
+end
+
 local RUN_LIST_FIELDS = table.concat({
 	"databaseId",
 	"name",
@@ -41,6 +52,7 @@ local RUN_VIEW_FIELDS = table.concat({
 ---@field url string
 ---@field display_title string
 ---@field jobs GitflowActionJob[]|nil
+---@field log_error string|nil why the failed-job logs could not be fetched
 
 ---@class GitflowActionJob
 ---@field id integer
@@ -354,11 +366,21 @@ function M.view(run_id, opts, cb)
 			tostring(run_id),
 			"--log-failed",
 		}, opts, function(result)
-			if result.code == 0 then
-				local log_output = gh.output(result)
-				if log_output ~= "" then
-					attach_failed_log_snippets(run, log_output)
-				end
+			if result.code ~= 0 then
+				-- Snippets are enrichment, not the payload: the run itself
+				-- loaded, so report it with the log failure recorded on it
+				-- rather than discarding valid data or claiming success.
+				run.log_error = error_from_result(
+					result,
+					("view %s --log-failed"):format(run_id)
+				)
+				cb(nil, run)
+				return
+			end
+
+			local log_output = gh.output(result)
+			if log_output ~= "" then
+				attach_failed_log_snippets(run, log_output)
 			end
 			cb(nil, run)
 		end)

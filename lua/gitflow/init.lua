@@ -1,6 +1,5 @@
 local config = require("gitflow.config")
 local commands = require("gitflow.commands")
-local gh = require("gitflow.gh")
 local highlights = require("gitflow.highlights")
 local signs = require("gitflow.signs")
 local icons = require("gitflow.icons")
@@ -54,7 +53,9 @@ function M.setup(opts)
 	if statusline ~= nil and type(statusline.refresh) == "function" then
 		statusline.refresh()
 	end
-	gh.check_prerequisites({ notify = true })
+	-- No gh probe here on purpose: `gh auth status` calls the GitHub API, so
+	-- checking at startup cost every launch a round-trip (and a hang when
+	-- offline). gh.ensure_prerequisites() checks on first GitHub command.
 	M.initialized = true
 	return cfg
 end

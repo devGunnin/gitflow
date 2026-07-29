@@ -30,7 +30,20 @@ M.state = {
 	hunk_anchors = {},
 	title = "",
 	cfg = nil,
+	open_request_id = 0,
 }
+
+---@return integer
+local function next_open_request_id()
+	M.state.open_request_id = (M.state.open_request_id or 0) + 1
+	return M.state.open_request_id
+end
+
+---@param request_id integer
+---@return boolean
+local function is_active_open_request(request_id)
+	return M.state.open_request_id == request_id
+end
 
 -- ── status glyphs ──────────────────────────────────────────────────────
 local function status_icon(status)
@@ -318,6 +331,16 @@ function M.prev_hunk()
 end
 
 -- ── layout ─────────────────────────────────────────────────────────────
+---Drop the file-list buffer. It is `bufhidden = "hide"`, so closing its window
+---is not enough — without this it leaks one buffer per open. Idempotent.
+local function delete_file_list_buffer()
+	local bufnr = M.state.file_list_bufnr
+	M.state.file_list_bufnr = nil
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+	end
+end
+
 local function ensure_file_list_buffer()
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_set_option_value("buftype", "nofile", { buf = bufnr })
@@ -394,14 +417,20 @@ end
 ---@param cfg table|nil
 ---@param focus_path string|nil  file to select in the list (defaults to first)
 local function open_from_git(args, title, cfg, focus_path)
-	if M.is_open() then
-		M.close()
-	end
+	-- Unconditional: close also drops a file-list buffer left behind by a tab
+	-- the user closed with a bare `:tabclose`.
+	M.close()
 	M.state.cfg = cfg
 	M.state.title = title
 	M.state._last = { args = args, title = title, focus_path = focus_path }
 
+	-- Two rapid opens race: without this the loser still builds a tabpage, and
+	-- it renders the winner's title over its own diff.
+	local request_id = next_open_request_id()
 	git.git(args, {}, function(result)
+		if not is_active_open_request(request_id) then
+			return
+		end
 		if (result.code or 1) ~= 0 then
 			utils.notify(
 				("git diff failed: %s"):format(git.output(result)),
@@ -429,7 +458,10 @@ local function open_from_git(args, title, cfg, focus_path)
 			end
 			M.open_index(target)
 			select_file_line(target)
-			vim.api.nvim_set_current_win(M.state.file_list_winid)
+			if M.state.file_list_winid
+				and vim.api.nvim_win_is_valid(M.state.file_list_winid) then
+				vim.api.nvim_set_current_win(M.state.file_list_winid)
+			end
 		end
 	end)
 end
@@ -479,6 +511,9 @@ function M.is_open()
 end
 
 function M.close()
+	-- Discard any in-flight open; its callback must not resurrect a tabpage.
+	next_open_request_id()
+
 	local tabpage = M.state.tabpage
 	M.state.tabpage = nil
 	M.state.file_list_winid = nil
@@ -497,6 +532,8 @@ function M.close()
 			pcall(vim.api.nvim_win_close, winid, true)
 		end
 	end
+
+	delete_file_list_buffer()
 end
 
 return M

@@ -50,6 +50,7 @@ jobs:
           passing_stages=(
             scripts/test_stage1.lua
             scripts/test_stage2.lua
+            scripts/test_stage3.lua
             scripts/test_stage4.lua
             scripts/test_stage5.lua
             scripts/test_stage6.lua
@@ -67,6 +68,7 @@ jobs:
             scripts/test_content_width.lua
             scripts/test_keybinding_docs.lua
             scripts/test_palette_accent_parity.lua
+            scripts/test_rebase_interactive.lua
             scripts/test_reset.lua
             scripts/test_review_loop.lua
             scripts/test_state_components.lua

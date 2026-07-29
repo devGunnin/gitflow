@@ -3,6 +3,33 @@
 Complete keybinding reference organized by context. All keybindings listed
 are defaults and can be overridden through `setup()`.
 
+## Known Conflicts
+
+Gitflow's global keybindings (see below) are ordinary normal-mode mappings
+installed in every buffer, so they can shadow a plugin or LSP mapping you
+already rely on:
+
+- **`gc` vs vim-commentary.** Gitflow binds `gc` to `commit`. vim-commentary
+  (and similar comment plugins) use `gc` as a comment operator (`gcc`,
+  `gc{motion}`, visual `gc`). Whichever plugin calls `setup()`/loads last wins
+  the mapping. Remap gitflow's commit action to free `gc`:
+  ```lua
+  require("gitflow").setup({ keybindings = { commit = "<leader>gc" } })
+  ```
+- **`gd` vs LSP go-to-definition — not actually a conflict.** Gitflow's diff
+  command is bound to `gD` (capital D), not `gd`; there is no default gitflow
+  mapping on lowercase `gd`, so it does not collide with the common LSP
+  `gd` = go-to-definition convention out of the box.
+- If your LSP setup binds the common `gr` = references convention (bare,
+  not `<leader>`-prefixed), note gitflow uses bare `gr` for `refresh`. Remap
+  one side if both are active:
+  ```lua
+  require("gitflow").setup({ keybindings = { refresh = "<leader>gz" } })
+  ```
+
+See [Overriding Keybindings](#overriding-keybindings) below for the general
+remap mechanism.
+
 ## Global
 
 Normal-mode mappings available in any buffer. Configured via
@@ -49,17 +76,21 @@ Buffer-local bindings active in the status panel (`:Gitflow status`).
 
 | Key | Action |
 | --- | --- |
-| `s` | Stage file under cursor |
-| `u` | Unstage file under cursor |
+| `s` | Stage file under cursor (or the visual-line selection) |
+| `u` | Unstage file under cursor (or the visual-line selection) |
 | `a` | Stage all files |
 | `A` | Unstage all files |
+| `<CR>` | Open the file under cursor for editing |
 | `cc` | Commit |
-| `dd` | Open diff for file under cursor |
+| `dd` | Review diff for file under cursor (opens the diff review viewer) |
 | `cx` | Open conflict resolution for file |
 | `p` | Push |
 | `X` | Revert uncommitted changes in file |
 | `r` | Refresh |
 | `q` | Close |
+
+`s` / `u` also work in visual line mode (`V` to select rows, then `s` or `u`)
+to stage/unstage several files at once.
 
 ## Diff View
 
@@ -68,6 +99,34 @@ Buffer-local bindings active in diff buffers (`:Gitflow diff`).
 | Key | Action |
 | --- | --- |
 | `r` | Refresh diff |
+| `]f` / `[f` | Next / previous file |
+| `]c` / `[c` | Next / previous hunk |
+| `q` | Close |
+
+## Diff Review Viewer
+
+A separate, richer diff surface (not the Diff View above): a tabpage with a
+file-list pane on the left and a per-file diff on the right. It opens for
+`dd` in the [Status Panel](#status-panel) (the working tree, or `--staged`),
+and for `<CR>` / range-review in the [Log View](#log-view) (a single commit,
+or a marked commit range) — no direct `:Gitflow` command opens it.
+
+### File list pane
+
+| Key | Action |
+| --- | --- |
+| `<CR>` / `o` | Open the file under cursor in the right pane |
+| `]f` / `[f` | Next / previous file |
+| `]c` / `[c` | Next / previous hunk |
+| `r` | Refresh |
+| `q` | Close |
+
+### Diff pane
+
+| Key | Action |
+| --- | --- |
+| `]f` / `[f` | Next / previous file |
+| `]c` / `[c` | Next / previous hunk |
 | `q` | Close |
 
 ## Branch List
@@ -81,9 +140,12 @@ Buffer-local bindings active in the branch panel (`:Gitflow branch`).
 | `d` | Delete branch |
 | `D` | Force delete branch |
 | `m` | Merge branch into current |
+| `u` | Update branch to its upstream (fast-forward, no checkout) |
 | `r` | Rename branch |
-| `R` | Refresh branch list |
+| `R` | Refresh branch list (with fetch) |
 | `f` | Fetch remote branches |
+| `.` | Jump to the current branch (list view only) |
+| `G` | Toggle list / graph view |
 | `q` | Close |
 
 ## Log View
@@ -92,7 +154,9 @@ Buffer-local bindings active in the log panel (`:Gitflow log`).
 
 | Key | Action |
 | --- | --- |
-| `<CR>` | Open diff for commit under cursor |
+| `<CR>` | Review commit under cursor (or, with a range marked, the range) |
+| `V` | Mark the commit under cursor as a range start (`<CR>` on another commit reviews the combined range); `V` on the same commit clears it |
+| `<Esc>` | Cancel a pending range selection |
 | `r` | Refresh |
 | `q` | Close |
 
@@ -135,6 +199,17 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `C` | Comment on issue |
 | `x` | Close issue |
 | `L` | Edit labels |
+| `A` | Edit assignees |
+| `f` | Open filter menu (state / labels / assignee / milestone) |
+| `X` | Clear all filters |
+| `s` | Cycle sort key (updated → number → title → milestone) |
+| `S` | Toggle sort direction |
+| `G` | Cycle grouping (none → milestone → assignee → label) |
+| `<Tab>` | Fold / unfold the group under cursor (when grouped) |
+| `v` | Switch to a saved view |
+| `V` | Save current filters/sort as a named view |
+| `D` | Delete a saved view |
+| `B` | Create a branch from the selected issue (prompts, prefilled name) |
 | `r` | Refresh |
 | `q` | Close |
 
@@ -147,8 +222,22 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `C` | Comment on issue |
 | `x` | Close issue |
 | `L` | Edit labels |
+| `A` | Edit assignees |
+| `f` | Open filter menu |
+| `X` | Clear all filters |
+| `s` | Cycle sort key |
+| `S` | Toggle sort direction |
+| `G` | Cycle grouping |
+| `v` | Switch to a saved view |
+| `V` | Save current filters/sort as a named view |
+| `D` | Delete a saved view |
+| `B` | Create a branch from this issue (prompts, prefilled name) |
 | `r` | Refresh |
 | `q` | Close |
+
+`f`/`X`/`s`/`S`/`G`/`v`/`V`/`D` act on the panel's shared filter/sort/group/view
+state, so they take effect from either view but only become visible once you
+go back (`b`) to the list.
 
 ## PR List
 
@@ -162,7 +251,9 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `c` | Create new PR |
 | `C` | Comment on PR |
 | `L` | Edit labels |
+| `A` | Edit assignees |
 | `m` | Merge PR |
+| `x` | Close PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
 | `r` | Refresh |
@@ -176,7 +267,9 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `c` | Create new PR |
 | `C` | Comment on PR |
 | `L` | Edit labels |
+| `A` | Edit assignees |
 | `m` | Merge PR |
+| `x` | Close PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
 | `r` | Refresh |
@@ -197,12 +290,17 @@ file list and the editing area with the standard `<C-w>w` motion.
 
 | Key | Action |
 | --- | --- |
-| `<CR>` / `o` | Open the file under cursor in the right pane |
+| `<CR>` / `o` / `<Tab>` | Open the file under cursor in the right pane, or fold/unfold a folder row |
+| `za` | Toggle the folder under the cursor |
+| `zR` | Unfold all folders |
+| `zM` | Fold all folders |
 | `]f` / `[f` | Next / previous file |
 | `]C` / `[C` | Jump to the next / previous comment thread (any file) |
 | `c` | Comment on the whole file under the cursor (works for deleted files too) |
 | `C` | Scope the review to a single commit or a range of commits |
 | `S` | Submit review — opens dropdown (comment / request changes / approve), then prompts for an optional body |
+| `<leader>c` | Comments overview — picker listing every comment thread in the PR, jump on select |
+| `<leader>d` | Toggle the diff overlay: PR changes ↔ the file as it is in the branch |
 | `r` | Refresh PR metadata, diff, and threads |
 | `q` | Close review mode (confirms if pending comments exist) |
 
@@ -212,24 +310,37 @@ those counts up, and the **Files** header shows the total (`[threads in
 files]`). Use `]C` / `[C` to walk straight through every comment.
 
 On a draft row in the **Drafts** section: `<CR>` jumps to the comment,
-`e` edits the draft body, `dd` deletes it, `X` deletes all off-diff drafts.
-`e` on a **file row** edits any draft on that file (file-level or line
-comment); if the file has more than one draft you're asked which to edit.
+`e` edits the draft body, `dd` (or `x`) deletes it, `X` deletes all off-diff
+drafts. `e` on a **file row** edits any draft on that file (file-level or
+line comment); if the file has more than one draft you're asked which to
+edit.
 
 ### Editing pane (per-file)
 
 | Key | Action |
 | --- | --- |
 | `c` | Comment on the current line. If deleted lines are shown next to the cursor row, you'll be asked whether to comment on the added/context line or one of the deleted lines (normal and visual mode) |
+| `s` | Start a GitHub suggestion block for the current line (normal and visual mode) — opens the comment composer prefilled with a suggestion code fence containing the selected lines, so you can propose an actual code edit |
 | `S` | Submit review (same dropdown flow as the file list) |
 | `R` | Reply to the existing thread on the current line |
 | `]f` / `[f` | Next / previous file (without leaving the editing pane) |
 | `]c` / `[c` | Next / previous hunk |
 | `]C` / `[C` | Next / previous comment thread — opens the file and jumps to the line, crossing files as needed |
+| `<leader>t` | Fold / unfold the reply thread on the current line (threads with no replies are unaffected) |
+| `<leader>c` | Comments overview — picker listing every comment thread in the PR, jump on select |
 | `<leader>e` | Edit the draft comment on the current line |
 | `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
 | `<leader>i` | Toggle inline comment body lines (collapsed vs. expanded) |
 | `<leader>d` | Toggle the diff overlay: PR changes ↔ the file as it is in the branch |
+
+### Thread popup
+
+Opened by `<CR>` on a commented line in the editing pane.
+
+| Key | Action |
+| --- | --- |
+| `R` | Reply to the thread (remote threads only) |
+| `q` / `<Esc>` | Close the popup |
 
 Pending comments are persisted to
 `stdpath('data')/gitflow/review/<repo>/<pr>.json` and rehydrated when
@@ -436,6 +547,7 @@ Bindings active in the command palette (`:Gitflow palette`).
 | `<Esc>` | Close palette |
 | `<Down>` / `<C-n>` / `<Tab>` / `<C-j>` | Move selection down |
 | `<Up>` / `<C-p>` / `<S-Tab>` / `<C-k>` | Move selection up |
+| `1`-`9` | Run the numbered command directly (see the index shown next to the first 9 entries) |
 
 ### List (Normal Mode)
 
@@ -444,7 +556,36 @@ Bindings active in the command palette (`:Gitflow palette`).
 | `<CR>` | Select highlighted command |
 | `j` / `<C-n>` | Move selection down |
 | `k` / `<C-p>` | Move selection up |
+| `1`-`9` | Run the numbered command directly |
 | `q` / `<Esc>` | Close palette |
+
+## Cross-Panel Inconsistencies
+
+Panel-local bindings are fixed per panel (see [Overriding
+Keybindings](#overriding-keybindings)), so the same key is free to mean
+something different in each one. This is a known, intentional tradeoff, not a
+bug — but it can catch you out if you jump between panels on muscle memory:
+
+- **`A`** — [abort the active merge/rebase/cherry-pick](#conflict-resolution)
+  (Conflict List, destructive, confirms first) / [unstage all
+  files](#status-panel) (Status Panel) / [apply the stash under
+  cursor](#stash-panel) (Stash Panel) / [edit assignees](#issue-list)
+  (Issue List, PR List).
+- **`R`** — [reset to the entry under cursor](#reflog-panel) (Reflog Panel,
+  destructive, confirms first, default choice is Cancel) / refresh (Branch
+  List, Conflict List — same as `r` there) / [reply to the comment thread on
+  the current line](#pr-review-mode) (PR Review Mode editing pane and thread
+  popup).
+- **"Back to list"** — `b` (Issue List, PR List) or `<BS>` (Actions Panel),
+  depending on the panel. There is no panel where `<Esc>` performs this;
+  `<Esc>` is used elsewhere for unrelated things (cancelling a log-panel range
+  selection, closing the command palette or a review thread popup).
+
+Both destructive cases above (`A` = abort, `R` = reset) show a confirmation
+prompt defaulting to Cancel, so an accidental press does not lose work.
+
+This is a documentation note, not a proposal to change any binding — panel
+keybindings are not currently user-configurable (see below).
 
 ## Overriding Keybindings
 

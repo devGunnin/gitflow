@@ -41,11 +41,19 @@ local function slugify(value)
 	return (tostring(value or "")):gsub("[^%w%-_%.]", "_")
 end
 
---- Compute a stable slug for the current repository. Prefers the gh
---- nameWithOwner so multiple checkouts of the same repo share a draft.
---- Falls back to the absolute path of the toplevel directory.
+-- Memoized repo slug. Resolving it costs two blocking subprocesses, and it is
+-- read on every comment load and save; it can only change when the working
+-- directory moves to another repo, so cwd is the cache key.
+local slug_cache = { cwd = nil, slug = nil }
+
+--- Drop the memoized slug. Only needed when the repo's gh remote changes
+--- underneath a session; a `:cd` invalidates on its own.
+function M.invalidate_repo_slug()
+	slug_cache = { cwd = nil, slug = nil }
+end
+
 ---@return string
-function M.repo_slug()
+local function compute_repo_slug()
 	local function via_git()
 		local out = vim.fn.systemlist({
 			"git", "rev-parse", "--show-toplevel",
@@ -71,6 +79,22 @@ function M.repo_slug()
 	end
 
 	return via_gh() or via_git() or "unknown"
+end
+
+--- Stable slug for the current repository. Prefers the gh nameWithOwner so
+--- multiple checkouts of the same repo share a draft; falls back to the
+--- toplevel path. Memoized per cwd.
+---@return string
+function M.repo_slug()
+	local cwd = vim.fn.getcwd()
+	assert(type(cwd) == "string", "getcwd must return a string")
+	if slug_cache.slug and slug_cache.cwd == cwd then
+		return slug_cache.slug
+	end
+	local slug = compute_repo_slug()
+	assert(type(slug) == "string" and slug ~= "", "repo slug must be non-empty")
+	slug_cache = { cwd = cwd, slug = slug }
+	return slug
 end
 
 ---@param pr_number integer|string

@@ -288,6 +288,7 @@ local cfg = gitflow.setup({
 })
 
 local gh = require("gitflow.gh")
+gh.ensure_prerequisites()
 assert_true(gh.state.checked, "gh prerequisites should be checked on setup")
 assert_true(gh.state.available, "gh should be available with stub")
 assert_true(gh.state.authenticated, "gh auth should pass with stub")

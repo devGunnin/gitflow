@@ -1,4 +1,5 @@
 local git = require("gitflow.git")
+local git_path = require("gitflow.git.path")
 
 ---@class GitflowStatusEntry
 ---@field raw string
@@ -33,11 +34,11 @@ end
 ---@param pathspec string
 ---@return string, string|nil
 local function parse_paths(pathspec)
-	local source, destination = pathspec:match("^(.-) %-%> (.+)$")
+	local source, destination = git_path.split_rename(pathspec)
 	if source and destination then
-		return destination, source
+		return git_path.unquote(destination), git_path.unquote(source)
 	end
-	return pathspec, nil
+	return git_path.unquote(pathspec), nil
 end
 
 ---@param line string
@@ -48,7 +49,7 @@ function M.parse_line(line)
 	end
 
 	if vim.startswith(line, "?? ") then
-		local path = line:sub(4)
+		local path = git_path.unquote(line:sub(4))
 		return {
 			raw = line,
 			index_status = "?",
@@ -63,7 +64,7 @@ function M.parse_line(line)
 	end
 
 	if vim.startswith(line, "!! ") then
-		local path = line:sub(4)
+		local path = git_path.unquote(line:sub(4))
 		return {
 			raw = line,
 			index_status = "!",

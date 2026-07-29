@@ -22,7 +22,7 @@ local GRAPH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_graph_h
 local BRANCH_FLOAT_TITLE = "Gitflow Branches"
 local LIST_FOOTER =
 	" <CR> switch · c create · d delete · D force delete · m merge"
-	.. " · u update · r rename · R refresh · f fetch · G graph · q close "
+	.. " · u update · r rename · . current · R refresh · f fetch · G graph · q close "
 local GRAPH_FOOTER =
 	" R refresh · f fetch · G list · q close "
 
@@ -166,6 +166,10 @@ local function ensure_window(cfg)
 
 	vim.keymap.set("n", "u", function()
 		M.update_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
+	vim.keymap.set("n", ".", function()
+		M.jump_to_current()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
 	vim.keymap.set("n", "G", function()
@@ -710,6 +714,47 @@ function M.open(cfg)
 	M.state.cfg = cfg
 	ensure_window(cfg)
 	M.refresh()
+end
+
+---Lowest rendered line holding the checked-out branch, nil when not rendered.
+---@return integer|nil
+local function current_branch_line()
+	local target
+	for line, entry in pairs(M.state.line_entries) do
+		if entry.is_current and (target == nil or line < target) then
+			target = line
+		end
+	end
+	return target
+end
+
+---Move the cursor to the checked-out branch. Absent from the view (detached
+---HEAD, or not listed) is an ordinary case: warn, leave the cursor put.
+function M.jump_to_current()
+	if M.state.view_mode == "graph" then
+		utils.notify(
+			"Switch to list view (G) to jump to the current branch",
+			vim.log.levels.INFO
+		)
+		return
+	end
+
+	local bufnr = M.state.bufnr
+	local winid = M.state.winid
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return
+	end
+
+	local target = current_branch_line()
+	if not target or target > vim.api.nvim_buf_line_count(bufnr) then
+		utils.notify("No current branch in view", vim.log.levels.WARN)
+		return
+	end
+
+	vim.api.nvim_win_set_cursor(winid, { target, 0 })
 end
 
 function M.switch_under_cursor()

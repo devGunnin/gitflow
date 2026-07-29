@@ -176,7 +176,7 @@ T.run_suite("E2E: Keybinding Verification", {
 		local bufnr = ui.buffer.get("status")
 		T.assert_true(bufnr ~= nil, "status buffer should exist")
 
-		local expected_keys = { "s", "u", "a", "A", "r", "q" }
+		local expected_keys = { "s", "u", "a", "A", "X", "r", "q" }
 		for _, key in ipairs(expected_keys) do
 			local m = find_buf_map(bufnr, key)
 			T.assert_true(

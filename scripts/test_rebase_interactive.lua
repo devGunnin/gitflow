@@ -254,7 +254,7 @@ test("rebase-interactive subcommand has correct description", function()
 	)
 	assert_equals(
 		commands.subcommands["rebase-interactive"].description,
-		"Open interactive rebase panel",
+		"Open rebase panel (normal rebase, press i for interactive)",
 		"rebase-interactive subcommand description should match"
 	)
 end)
@@ -367,9 +367,10 @@ end)
 
 test("parse_commits handles tab-separated output", function()
 	local git_rebase = require("gitflow.git.rebase")
+	-- Matches list_commits' --pretty=format:%H\t%an\t%ar\t%s
 	local output = table.concat({
-		"abc1234567890123456789012345678901234567\tfirst commit",
-		"def5678901234567890123456789012345678901\tsecond commit",
+		"abc1234567890123456789012345678901234567\tAda\t2 days ago\tfirst commit",
+		"def5678901234567890123456789012345678901\tGrace\t3 days ago\tsecond commit",
 	}, "\n")
 	local entries = git_rebase.parse_commits(output)
 	assert_equals(#entries, 2, "should parse 2 entries")
@@ -385,6 +386,14 @@ test("parse_commits handles tab-separated output", function()
 	assert_equals(
 		entries[1].subject, "first commit",
 		"first entry subject should match"
+	)
+	assert_equals(
+		entries[1].author, "Ada",
+		"first entry author should match"
+	)
+	assert_equals(
+		entries[1].relative_time, "2 days ago",
+		"first entry relative time should match"
 	)
 	assert_equals(
 		entries[1].action, "pick",
@@ -612,10 +621,13 @@ test("rebase panel renders commit list with actions", function()
 		)
 		assert_true(#lines > 2, "should have rendered content lines")
 
-		-- Check base ref header
+		-- Base ref is a padded meta row with an icon, so match key and
+		-- value on the same line rather than exact spacing.
 		local has_base = false
 		for _, line in ipairs(lines) do
-			if line:find("Base: main", 1, true) then
+			if line:find("Base:", 1, true)
+				and line:find("main", 1, true)
+			then
 				has_base = true
 				break
 			end
@@ -1070,30 +1082,44 @@ test("float footer includes action keybind hints", function()
 			end
 		end
 
+		-- The footer is stage-specific: open() starts on the base picker,
+		-- and the action hints belong to the interactive todo stage.
+		local function footer_text()
+			local winid = rb_panel.state.winid
+			if not winid or not vim.api.nvim_win_is_valid(winid) then
+				return ""
+			end
+			local footer = vim.api.nvim_win_get_config(winid).footer
+			if type(footer) == "string" then
+				return footer
+			end
+			if type(footer) ~= "table" then
+				return ""
+			end
+			local parts = {}
+			for _, part in ipairs(footer) do
+				parts[#parts + 1] = type(part) == "table"
+					and tostring(part[1]) or tostring(part)
+			end
+			return table.concat(parts)
+		end
+
 		rb_panel.open(float_cfg)
 
-		local winid = rb_panel.state.winid
-		local has_action_hint = false
-		if winid and vim.api.nvim_win_is_valid(winid) then
-			local win_cfg =
-				vim.api.nvim_win_get_config(winid)
-			local footer = win_cfg.footer
-			if type(footer) == "string" then
-				has_action_hint = footer:find("cycle", 1, true)
-					or footer:find("execute", 1, true)
-			elseif type(footer) == "table" then
-				for _, part in ipairs(footer) do
-					local text = type(part) == "table"
-						and part[1] or tostring(part)
-					if text:find("cycle", 1, true)
-						or text:find("execute", 1, true)
-					then
-						has_action_hint = true
-						break
-					end
-				end
-			end
-		end
+		local base_footer = footer_text()
+		assert_true(
+			base_footer:find("select", 1, true) ~= nil,
+			"base stage footer should include the select hint"
+		)
+
+		rb_panel.state.base_ref = "main"
+		rb_panel.state.entries = {}
+		rb_panel.state.stage = "normal"
+		rb_panel.switch_to_interactive()
+
+		local todo_footer = footer_text()
+		local has_action_hint = todo_footer:find("cycle", 1, true)
+			or todo_footer:find("execute", 1, true)
 
 		rb_panel.close()
 

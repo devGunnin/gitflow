@@ -151,18 +151,23 @@ local function selected_count(state)
 end
 
 ---@param state table
-local function close_picker(state)
+---@param from_hook boolean|nil  true when ui.window's close hook got here first
+local function close_picker(state, from_hook)
 	if state.closed then
 		return
 	end
 	state.closed = true
 
 	pcall(vim.api.nvim_del_augroup_by_name, SEARCH_AUGROUP)
-	if state.winid and vim.api.nvim_win_is_valid(state.winid) then
-		pcall(vim.api.nvim_win_close, state.winid, true)
-	end
-	if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
-		pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
+	-- From the hook the window is already going away and deleting a buffer
+	-- inside WinClosed is unsafe; `bufhidden=wipe` collects it.
+	if not from_hook then
+		if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+			pcall(vim.api.nvim_win_close, state.winid, true)
+		end
+		if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+			pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
+		end
 	end
 
 	state.winid = nil
@@ -436,7 +441,7 @@ local function start_search(state)
 end
 
 ---@param opts GitflowLabelPickerOpts
----@return table
+---@return table|nil  nil when the terminal is too small for the float
 function M.open(opts)
 	local labels = {}
 	for _, label in ipairs(opts.labels or {}) do
@@ -479,6 +484,32 @@ function M.open(opts)
 		closed = false,
 	}
 
+	local function confirm()
+		local selections = collect_selected(state)
+		close_picker(state)
+		state.on_submit(selections)
+	end
+
+	-- Reached from the q/<Esc> binds and from ui.window's close hook (plain
+	-- :q, :bd, a layout change). The latch is here, not just in close_picker,
+	-- so a hook-then-keymap (or submit-then-hook) race cannot fire on_cancel
+	-- twice.
+	---@param from_hook boolean  true when the close hook got here first
+	local function cancel(from_hook)
+		if state.closed then
+			return
+		end
+		close_picker(state, from_hook)
+		if not state.on_cancel then
+			return
+		end
+		if from_hook then
+			vim.schedule(state.on_cancel)
+		else
+			state.on_cancel()
+		end
+	end
+
 	state.winid = ui_window.open_float({
 		bufnr = bufnr,
 		width = 0.55,
@@ -487,22 +518,23 @@ function M.open(opts)
 		title_pos = "center",
 		border = "rounded",
 		enter = true,
+		on_close = function()
+			cancel(true)
+		end,
 	})
+	if not state.winid then
+		-- open_float already said why; without a window there is no picker.
+		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+		state.bufnr = nil
+		state.closed = true
+		return nil
+	end
 	vim.api.nvim_set_option_value("cursorline", false, { win = state.winid })
 
 	render(state)
 
-	local function confirm()
-		local selections = collect_selected(state)
-		close_picker(state)
-		state.on_submit(selections)
-	end
-
-	local function cancel()
-		close_picker(state)
-		if state.on_cancel then
-			state.on_cancel()
-		end
+	local function cancel_from_keymap()
+		cancel(false)
 	end
 
 	local map = function(lhs, fn)
@@ -522,8 +554,8 @@ function M.open(opts)
 		render(state)
 	end)
 	map("<CR>", confirm)
-	map("q", cancel)
-	map("<Esc>", cancel)
+	map("q", cancel_from_keymap)
+	map("<Esc>", cancel_from_keymap)
 
 	return state
 end

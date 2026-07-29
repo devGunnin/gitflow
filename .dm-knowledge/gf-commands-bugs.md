@@ -1,0 +1,1 @@
+- **[pitfall]** commands.lua: register_builtin_subcommands is near LuaJIT's 60-upvalue ceiling. Adding file-level locals that its subcommand closures reference fails at load with 'function ... has more than 60 upvalues'. Keep new helper tables as upvalues of the helper function, not of the closures.  _(2026-07-19T23:23:56Z)_

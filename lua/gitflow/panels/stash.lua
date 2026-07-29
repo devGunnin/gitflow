@@ -248,6 +248,7 @@ function M.pop_under_cursor()
 		end
 		utils.notify(output_or_default(result), vim.log.levels.INFO)
 		M.refresh()
+		refresh_status_panel_if_open()
 	end)
 end
 

@@ -62,6 +62,108 @@ function M.deep_merge(defaults, overrides)
 	return merged
 end
 
+---@param value unknown
+---@return boolean
+local function is_map(value)
+	if type(value) ~= "table" then
+		return false
+	end
+	local islist = vim.islist or vim.tbl_islist
+	return not islist(value)
+end
+
+---Levenshtein distance, capped so a wildly different key scores no suggestion.
+---@param a string
+---@param b string
+---@return integer
+local function edit_distance(a, b)
+	local previous = {}
+	for j = 0, #b do
+		previous[j] = j
+	end
+
+	for i = 1, #a do
+		local current = { [0] = i }
+		for j = 1, #b do
+			local cost = (a:sub(i, i) == b:sub(j, j)) and 0 or 1
+			current[j] = math.min(
+				previous[j] + 1,
+				current[j - 1] + 1,
+				previous[j - 1] + cost
+			)
+		end
+		previous = current
+	end
+
+	return previous[#b]
+end
+
+--- Longest edit distance still considered a typo rather than a different key.
+local MAX_SUGGESTION_DISTANCE = 3
+
+---Find the valid key closest to `key`, for "did you mean" hints.
+---@param key string
+---@param candidates table<string, unknown>
+---@return string|nil
+function M.nearest_key(key, candidates)
+	local best, best_distance = nil, math.huge
+
+	for _, candidate in ipairs(M.sorted_keys(candidates)) do
+		local distance = edit_distance(key, candidate)
+		-- A suggestion must be closer to the typo than it is long.
+		if distance < best_distance and distance <= math.min(MAX_SUGGESTION_DISTANCE, #candidate) then
+			best, best_distance = candidate, distance
+		end
+	end
+
+	return best
+end
+
+---Collect keys present in `overrides` that the `schema` does not define.
+---Recurses only into map-like tables the schema also defines as maps, so
+---lists and free-form maps (see `open_paths`) keep accepting any content.
+---@param schema table  the defaults table acting as the schema
+---@param overrides table|nil  user-supplied config
+---@param open_paths table<string, true>|nil  dotted paths to leave unchecked
+---@return { path: string, key: string, suggestion: string|nil }[]
+function M.unknown_keys(schema, overrides, open_paths)
+	assert(is_map(schema), "unknown_keys: schema must be a map-like table")
+
+	local open = open_paths or {}
+	local found = {}
+
+	---@param schema_node table
+	---@param override_node table
+	---@param prefix string
+	local function walk(schema_node, override_node, prefix)
+		for key, override_value in pairs(override_node) do
+			local path = prefix == "" and tostring(key) or (prefix .. "." .. tostring(key))
+			local schema_value = schema_node[key]
+
+			if schema_value == nil then
+				found[#found + 1] = {
+					path = path,
+					key = tostring(key),
+					suggestion = M.nearest_key(tostring(key), schema_node),
+				}
+			elseif not open[path] and is_map(schema_value) and is_map(override_value) then
+				walk(schema_value, override_value, path)
+			end
+		end
+	end
+
+	if type(overrides) == "table" then
+		walk(schema, overrides, "")
+	end
+
+	-- Sorted so the reported order does not depend on pairs() iteration order.
+	table.sort(found, function(a, b)
+		return a.path < b.path
+	end)
+
+	return found
+end
+
 ---@param message string
 ---@param level integer|nil
 ---@param opts GitflowNotifyOpts|nil

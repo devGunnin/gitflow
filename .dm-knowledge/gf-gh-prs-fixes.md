@@ -1,0 +1,1 @@
+- **[pitfall]** tests/fixtures/bin/gh is a canned stub that ignores flag semantics (no real @-as-filename behavior for --field vs -f); to test that distinction, assert on the GITFLOW_GH_LOG raw invocation line (e.g. contains '-f body=@x' and not '--field'), not on callback success/failure.  _(2026-07-19T23:26:44Z)_

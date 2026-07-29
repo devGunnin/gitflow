@@ -693,15 +693,16 @@ vim.api.nvim_feedkeys(
 	"x", false
 )
 
--- Navigate to Reviewers (field 4) and trigger picker
-vim.api.nvim_feedkeys(tab, "x", false) -- 3 -> 4
+-- Navigate to Reviewers (field 5) and trigger picker
+vim.api.nvim_feedkeys(tab, "x", false) -- 3 -> 4 (closes issues)
+vim.api.nvim_feedkeys(tab, "x", false) -- 4 -> 5 (reviewers)
 vim.api.nvim_feedkeys(
 	vim.api.nvim_replace_termcodes("<C-l>", true, false, true),
 	"x", false
 )
 
--- Navigate to Labels (field 5) and trigger picker
-vim.api.nvim_feedkeys(tab, "x", false) -- 4 -> 5
+-- Navigate to Labels (field 6) and trigger picker
+vim.api.nvim_feedkeys(tab, "x", false) -- 5 -> 6
 vim.api.nvim_feedkeys(
 	vim.api.nvim_replace_termcodes("<C-l>", true, false, true),
 	"x", false

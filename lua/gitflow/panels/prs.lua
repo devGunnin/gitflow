@@ -30,7 +30,7 @@ local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
 local PRS_FLOAT_TITLE = "  Gitflow Pull Requests  "
 local PRS_FLOAT_FOOTER =
 	" <CR> view · c create · m merge · o checkout · v review"
-	.. " · L labels · x close PR · r refresh · q close "
+	.. " · L labels · A assign · x close PR · r refresh · q close "
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -437,6 +437,12 @@ local function render_list(prs)
 			}
 			for _, chunk in ipairs(label_chunks(pr)) do
 				meta[#meta + 1] = chunk
+			end
+			local assignees = join_assignee_names(pr)
+			if assignees ~= "-" then
+				meta[#meta + 1] =
+					{ "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
+				meta[#meta + 1] = { assignees, "GitflowChip" }
 			end
 			local meta_line = B:push(meta)
 

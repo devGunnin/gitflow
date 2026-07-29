@@ -217,22 +217,23 @@ end
 
 vim.api.nvim_set_current_win(branch_panel.state.winid)
 
+-- Resolve via line_entries, not rendered text: the summary header also shows
+-- the current branch name, so a substring search lands on a non-entry line.
 local function move_cursor_to_branch(name)
 	branch_panel.refresh()
 	wait_until(function()
 		if not branch_panel.state.bufnr then
 			return false
 		end
-		local lines = vim.api.nvim_buf_get_lines(branch_panel.state.bufnr, 0, -1, false)
-		local line = find_line(lines, (" %s"):format(name))
-		if not line then
-			line = find_line(lines, ("* %s"):format(name))
+		for line, entry in pairs(branch_panel.state.line_entries or {}) do
+			if entry.name == name then
+				vim.api.nvim_win_set_cursor(
+					branch_panel.state.winid, { line, 0 }
+				)
+				return true
+			end
 		end
-		if not line then
-			return false
-		end
-		vim.api.nvim_win_set_cursor(branch_panel.state.winid, { line, 0 })
-		return true
+		return false
 	end, ("branch '%s' should be visible in panel"):format(name))
 end
 

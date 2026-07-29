@@ -8,6 +8,7 @@ local ISSUE_LIST_FIELDS = table.concat({
 	"state",
 	"labels",
 	"assignees",
+	"milestone",
 	"author",
 	"updatedAt",
 }, ",")
@@ -19,6 +20,7 @@ local ISSUE_VIEW_FIELDS = table.concat({
 	"state",
 	"labels",
 	"assignees",
+	"milestone",
 	"author",
 	"comments",
 	"createdAt",
@@ -100,6 +102,10 @@ function M.list(params, opts, cb)
 	if options.assignee and options.assignee ~= "" then
 		args[#args + 1] = "--assignee"
 		args[#args + 1] = tostring(options.assignee)
+	end
+	if options.milestone and options.milestone ~= "" then
+		args[#args + 1] = "--milestone"
+		args[#args + 1] = tostring(options.milestone)
 	end
 	if options.search and options.search ~= "" then
 		args[#args + 1] = "--search"

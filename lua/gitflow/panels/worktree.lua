@@ -520,7 +520,8 @@ local function run_add(path, opts)
 			("Created worktree at %s (%s)"):format(path, detail),
 			vim.log.levels.INFO
 		)
-		M.refresh()
+		-- emit_post_operation() alone refreshes us: our own GitflowPostOperation
+		-- listener (registered in M.open) already calls M.refresh() when open.
 		emit_post_operation()
 	end)
 end
@@ -648,7 +649,7 @@ function M.remove_under_cursor(force)
 				("Removed worktree '%s'"):format(entry.path),
 				vim.log.levels.INFO
 			)
-			M.refresh()
+			-- emit_post_operation() alone refreshes us via our own listener.
 			emit_post_operation()
 		end
 	)
@@ -741,7 +742,7 @@ function M.move_under_cursor()
 					("Moved worktree to %s"):format(dest),
 					vim.log.levels.INFO
 				)
-				M.refresh()
+				-- emit_post_operation() alone refreshes us via our own listener.
 				emit_post_operation()
 			end)
 		end
@@ -755,7 +756,7 @@ function M.prune()
 			return
 		end
 		utils.notify("Pruned stale worktree entries", vim.log.levels.INFO)
-		M.refresh()
+		-- emit_post_operation() alone refreshes us via our own listener.
 		emit_post_operation()
 	end)
 end
@@ -791,7 +792,7 @@ function M.switch_under_cursor()
 		("Switched to worktree %s"):format(vim.fn.fnamemodify(entry.path, ":~")),
 		vim.log.levels.INFO
 	)
-	M.refresh()
+	-- emit_post_operation() alone refreshes us via our own listener.
 	emit_post_operation()
 end
 

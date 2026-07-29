@@ -116,6 +116,7 @@ require("gitflow").setup({
     modified = "~",
     deleted  = "\u{2212}",      -- minus sign
     conflict = "!",
+    debounce = 300,             -- ms to wait after a write before refreshing
   },
   icons = {
     enable = true,              -- Nerd Font icons; false = ASCII fallback
@@ -157,11 +158,23 @@ require("gitflow").setup({
 | `signs.modified` | `string` | `"~"` | Sign text for modified lines |
 | `signs.deleted` | `string` | `"\u{2212}"` | Sign text for deleted lines |
 | `signs.conflict` | `string` | `"!"` | Sign text for conflict markers |
+| `signs.debounce` | `integer` | `300` | Debounce (ms) after a write before refreshing signs |
 | `icons.enable` | `boolean` | `true` | Use Nerd Font icons; `false` = ASCII |
 | `inline_blame.enable` | `boolean` | `true` | Master switch for inline blame; `false` disables `:Gitflow blame-inline` |
 | `inline_blame.auto` | `boolean` | `false` | Automatically show inline blame in every file buffer |
 | `inline_blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
 | `inline_blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
+
+### Configuration Validation
+
+`setup()` rejects a config it cannot honour rather than silently ignoring it:
+
+- **Unknown options** raise an error naming the full path, with a suggestion
+  when the key looks like a typo — e.g. `inline_blame = { enalbe = false }`
+  reports `unknown option 'inline_blame.enalbe' (did you mean 'enable'?)`.
+  Highlight group names under `highlights` are free-form and never checked.
+- **Duplicate keybindings** raise an error naming the mapping and every action
+  bound to it, so a custom bind cannot silently shadow another feature.
 
 ## Commands
 
@@ -236,8 +249,11 @@ All commands use the `:Gitflow` prefix.
 ## Default Keybindings
 
 See [KEYBINDINGS.md](KEYBINDINGS.md) for the complete keybinding reference
-organized by context, including all panel-local bindings and override
-instructions.
+organized by context, including all panel-local bindings, override
+instructions, keybindings that collide with common plugin/LSP setups (e.g.
+`gc` vs vim-commentary — see its "Known Conflicts" section), and how the
+same key can mean different things across panels ("Cross-Panel
+Inconsistencies").
 
 ### Global Mappings
 
@@ -314,6 +330,14 @@ require("gitflow").setup({
 ```
 
 See `:help gitflow-highlights` for the full group list and palette reference.
+
+## Extending Gitflow
+
+Besides `setup()` and `statusline()` above, `require("gitflow")` exposes
+`get_config()` (the resolved config) and `initialized` (`true` once
+`setup()` has run). To add your own `:Gitflow <name>` subcommand, use
+`require("gitflow.commands").register_subcommand(name, subcommand)`. See
+`:help gitflow-lua-api` for the full contract.
 
 ## License
 

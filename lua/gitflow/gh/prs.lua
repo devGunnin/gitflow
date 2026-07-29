@@ -399,8 +399,19 @@ function M.create(input, opts, cb)
 			)
 			git.git({ "push", "-u", "origin", "HEAD" }, opts or {}, function(push_result)
 				if (push_result.code or 1) ~= 0 then
-					-- Surface the original PR-create error, plus the push failure.
-					cb(error_from_result(result, "create"), nil, result)
+					local push_output = git.output(push_result)
+					local push_error = push_output ~= ""
+						and ("git push failed: %s"):format(push_output)
+						or "git push failed"
+					-- Surface the real push failure; keep the original
+					-- create error too, as context for why we pushed.
+					cb(
+						("%s (%s)"):format(
+							push_error, error_from_result(result, "create")
+						),
+						nil,
+						push_result
+					)
 					return
 				end
 				gh.run(args, opts, function(retry)
@@ -823,7 +834,10 @@ function M.reply_to_review_comment(number, review_id, body, opts, cb)
 		normalize_number(number), review_id
 	)
 	gh.run({
-		"api", endpoint, "--method", "POST", "--field", ("body=%s"):format(normalized_body),
+		-- Raw (-f) fields are always strings: never coerce a body or path.
+		-- A typed --field treats a leading "@" as a FILENAME to read, and
+		-- review replies routinely start with "@username".
+		"api", endpoint, "--method", "POST", "-f", ("body=%s"):format(normalized_body),
 	}, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "reply_to_review_comment"), result)

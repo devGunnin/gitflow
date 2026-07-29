@@ -52,6 +52,24 @@ local function with_temp_git_log(fn)
 	end
 end
 
+---@param fn fun(log_path: string)
+local function with_temp_gh_log(fn)
+	local log_path = vim.fn.tempname()
+	local previous = vim.env.GITFLOW_GH_LOG
+	vim.env.GITFLOW_GH_LOG = log_path
+
+	local ok, err = xpcall(function()
+		fn(log_path)
+	end, debug.traceback)
+
+	vim.env.GITFLOW_GH_LOG = previous
+	pcall(vim.fn.delete, log_path)
+
+	if not ok then
+		error(err, 0)
+	end
+end
+
 -- Generate EXPECTED_SUBCOMMANDS from the live registered set so
 -- new subcommands are automatically covered without manual updates.
 local EXPECTED_SUBCOMMANDS = vim.tbl_keys(commands.subcommands)
@@ -596,6 +614,260 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 				"palette entry should have a description"
 			)
 		end
+	end,
+
+	-- ── Silent failures must surface, never report success ───────────────
+
+	["issue edit with an unrecognized key refuses and calls no gh"] = function()
+		with_temp_gh_log(function(log_path)
+			local result = commands.dispatch(
+				{ "issue", "edit", "7", "mislabel=x" }, cfg
+			)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "mislabel=x", "should name the bad option")
+			T.assert_true(
+				result:find("Updating issue", 1, true) == nil,
+				"should not report an update in progress"
+			)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "issue edit") == nil,
+				"no gh issue edit should be invoked"
+			)
+		end)
+	end,
+
+	["issue edit with no options refuses instead of reporting success"] = function()
+		with_temp_gh_log(function(log_path)
+			local result = commands.dispatch({ "issue", "edit", "7" }, cfg)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "No edits requested", "should refuse an empty edit")
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "issue edit") == nil,
+				"no gh issue edit should be invoked"
+			)
+		end)
+	end,
+
+	["issue edit with a recognized key still dispatches"] = function()
+		with_temp_gh_log(function(log_path)
+			local result = commands.dispatch(
+				{ "issue", "edit", "7", "title=Renamed" }, cfg
+			)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "Updating issue", "valid edit should proceed")
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "issue edit 7 --title Renamed") ~= nil,
+				"gh issue edit should carry the new title"
+			)
+		end)
+	end,
+
+	["pr edit with an unrecognized key refuses and calls no gh"] = function()
+		with_temp_gh_log(function(log_path)
+			local result = commands.dispatch(
+				{ "pr", "edit", "12", "reviewer=alice" }, cfg
+			)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "reviewer=alice", "should name the bad option")
+			T.assert_true(
+				result:find("Updating PR", 1, true) == nil,
+				"should not report an update in progress"
+			)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "pr edit") == nil,
+				"no gh pr edit should be invoked"
+			)
+		end)
+	end,
+
+	["a throwing subcommand yields a clean error keeping the cause"] = function()
+		commands.register_subcommand("e2e-throwing", {
+			description = "test-only handler that always throws",
+			run = function()
+				error("boom from the handler")
+			end,
+		})
+
+		local notifications = {}
+		local orig_notify = vim.notify
+		vim.notify = function(msg, level, ...)
+			notifications[#notifications + 1] = { message = msg, level = level }
+			return orig_notify(msg, level, ...)
+		end
+
+		local ok, result = pcall(commands.dispatch, { "e2e-throwing" }, cfg)
+
+		vim.notify = orig_notify
+		commands.subcommands["e2e-throwing"] = nil
+
+		T.assert_true(ok, "dispatch should not propagate a raw handler error")
+		T.assert_contains(result, "e2e-throwing", "error should name the subcommand")
+		T.assert_contains(result, "boom from the handler", "error should keep the cause")
+		T.assert_contains(result, "stack traceback", "error should keep the traceback")
+
+		local notified = false
+		for _, n in ipairs(notifications) do
+			if n.message
+				and n.message:find("boom from the handler", 1, true)
+				and n.level == vim.log.levels.ERROR
+			then
+				notified = true
+			end
+		end
+		T.assert_true(notified, "handler failure should notify at ERROR level")
+	end,
+
+	["stash pop with a non-numeric index refuses instead of popping"] = function()
+		with_temp_git_log(function(log_path)
+			local result = commands.dispatch({ "stash", "pop", "3x" }, cfg)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "Invalid stash index", "should refuse the bad index")
+			T.assert_contains(result, "3x", "should name the bad index")
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "stash pop") == nil,
+				"no git stash pop should be invoked for an invalid index"
+			)
+		end)
+	end,
+
+	["stash apply with a non-numeric index refuses instead of applying"] = function()
+		with_temp_git_log(function(log_path)
+			local result = commands.dispatch({ "stash", "apply", "oops" }, cfg)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "Invalid stash index", "should refuse the bad index")
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "stash apply") == nil,
+				"no git stash apply should be invoked for an invalid index"
+			)
+		end)
+	end,
+
+	["stash pop with a valid index still dispatches"] = function()
+		with_temp_git_log(function(log_path)
+			commands.dispatch({ "stash", "pop", "2" }, cfg)
+			T.drain_jobs(2000)
+
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "stash pop") ~= nil,
+				"a valid index should still pop"
+			)
+		end)
+	end,
+
+	["worktree add -b without a branch name errors and runs no git"] = function()
+		with_temp_git_log(function(log_path)
+			local result = commands.dispatch(
+				{ "worktree", "add", "/tmp/gitflow-wt-nob", "-b" }, cfg
+			)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "requires a branch name", "should reject the bare -b")
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "worktree add") == nil,
+				"no git worktree add should be invoked"
+			)
+		end)
+	end,
+
+	-- ── per-area registration seam ───────────────────────────────────────
+
+	["register_subcommand refuses a non-function complete"] = function()
+		local ok, err = pcall(commands.register_subcommand, "e2e-bad-complete", {
+			description = "test-only handler with a broken completer",
+			run = function() end,
+			complete = "not-a-function",
+		})
+		commands.subcommands["e2e-bad-complete"] = nil
+
+		T.assert_true(not ok, "a non-function complete should be refused")
+		T.assert_contains(
+			tostring(err),
+			"complete must be a function",
+			"refusal should name the offending field"
+		)
+		T.assert_true(
+			commands.subcommands["e2e-bad-complete"] == nil,
+			"a refused subcommand should not be registered"
+		)
+	end,
+
+	["a registered complete function drives :Gitflow completion"] = function()
+		local seen
+		commands.register_subcommand("e2e-completing", {
+			description = "test-only handler with a completer",
+			run = function()
+				return "ok"
+			end,
+			complete = function(arglead, cmdline, args)
+				seen = { arglead = arglead, cmdline = cmdline, args = args }
+				return { "alpha", "beta" }
+			end,
+		})
+
+		local candidates = commands.complete("al", "Gitflow e2e-completing al", 25)
+		commands.subcommands["e2e-completing"] = nil
+
+		T.assert_deep_equals(
+			candidates,
+			{ "alpha", "beta" },
+			"completion should come from the subcommand's own completer"
+		)
+		T.assert_true(seen ~= nil, "the completer should have been called")
+		T.assert_equals(seen.arglead, "al", "completer should receive the arglead")
+		T.assert_equals(seen.args[2], "e2e-completing", "completer should receive the split cmdline")
+	end,
+
+	["a subcommand without a completer completes to nothing"] = function()
+		T.assert_deep_equals(
+			commands.complete("", "Gitflow status ", 16),
+			{},
+			"a subcommand that registers no completer should offer no candidates"
+		)
+	end,
+
+	["close closes panels owned by every area"] = function()
+		local status_panel = require("gitflow.panels.status")
+		local conflict_panel = require("gitflow.panels.conflict")
+		local palette_panel = require("gitflow.panels.palette")
+
+		commands.dispatch({ "status" }, cfg)
+		commands.dispatch({ "conflicts" }, cfg)
+		commands.dispatch({ "palette" }, cfg)
+		T.drain_jobs(3000)
+
+		T.assert_true(status_panel.is_open(), "status panel should be open before close")
+		T.assert_true(conflict_panel.is_open(), "conflict panel should be open before close")
+		T.assert_true(palette_panel.is_open(), "palette panel should be open before close")
+
+		commands.dispatch({ "close" }, cfg)
+
+		-- One panel per area proves close walks every registered area, not a
+		-- hand-maintained list inside the dispatcher.
+		T.assert_true(not status_panel.is_open(), "close should close the workspace area's panels")
+		T.assert_true(not conflict_panel.is_open(), "close should close the history area's panels")
+		T.assert_true(not palette_panel.is_open(), "close should close the shell area's panels")
+		T.cleanup_panels()
+	end,
+
+	["worktree add -b followed by a flag errors"] = function()
+		with_temp_git_log(function(log_path)
+			local result = commands.dispatch(
+				{ "worktree", "add", "/tmp/gitflow-wt-nob2", "-b", "--force" }, cfg
+			)
+			T.drain_jobs(2000)
+
+			T.assert_contains(result, "requires a branch name", "should reject a flag as branch")
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "worktree add") == nil,
+				"no git worktree add should be invoked"
+			)
+		end)
 	end,
 })
 

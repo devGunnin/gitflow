@@ -110,6 +110,27 @@ T.run_suite("E2E: Reflog Panel", {
 		reflog_panel.close()
 	end,
 
+	-- Split is the test-suite default layout; this proves the reflog
+	-- panel's split hint bar actually renders (not just that opening it
+	-- doesn't throw — a *_HINTS table can be deleted while its call site
+	-- remains, which only breaks the split path since the float path
+	-- returns early).
+	["reflog panel renders keybind hints in split layout"] = function()
+		local reflog_panel = require("gitflow.panels.reflog")
+		commands.dispatch({ "reflog" }, cfg)
+		T.drain_jobs(3000)
+
+		local bufnr = ui.buffer.get("reflog")
+		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
+		local lines = T.buf_lines(bufnr)
+		T.assert_true(
+			T.find_line(lines, "quick checkout") ~= nil,
+			"reflog panel split layout should render its keybind hints"
+		)
+
+		reflog_panel.close()
+	end,
+
 	-- ── Panel content ───────────────────────────────────────────────
 
 	["reflog panel renders entries from stub"] = function()

@@ -16,8 +16,10 @@ local cfg = _G.TestConfig
 
 local ui = require("gitflow.ui")
 local commands = require("gitflow.commands")
+local gh = require("gitflow.gh")
 local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
+local git = require("gitflow.git")
 local form = require("gitflow.ui.form")
 local input = require("gitflow.ui.input")
 local utils = require("gitflow.utils")
@@ -681,6 +683,74 @@ T.run_suite("E2E: PR Creation Flow", {
 		end)
 
 		T.cleanup_panels()
+	end,
+
+	-- ── Push-retry surfaces the real push failure ─────────────────────
+
+	["push-retry surfaces the actual push failure, not the stale create error"] = function()
+		local push_call_count = 0
+		local create_call_count = 0
+		local captured_err = nil
+
+		with_temporary_patches({
+			{
+				table = gh,
+				key = "run",
+				value = function(_, _, cb)
+					create_call_count = create_call_count + 1
+					-- Every gh pr create attempt looks like the branch is
+					-- simply unpushed, so the code always tries push+retry.
+					cb({
+						code = 1, signal = 0, stdout = "",
+						stderr = "pull request create failed: must first "
+							.. "push the branch to a remote, e.g. "
+							.. "git push -u origin HEAD",
+						cmd = { "gh", "pr", "create" },
+					})
+				end,
+			},
+			{
+				table = git,
+				key = "git",
+				value = function(args, _, cb)
+					push_call_count = push_call_count + 1
+					T.assert_equals(
+						args[1], "push",
+						"needs-push path should attempt a git push"
+					)
+					cb({
+						code = 1, signal = 128, stdout = "",
+						stderr = "! [remote rejected] HEAD -> feat "
+							.. "(protected branch hook declined)",
+						cmd = { "git", "push", "-u", "origin", "HEAD" },
+					})
+				end,
+			},
+		}, function()
+			gh_prs.create({ title = "Needs push PR", body = "" }, {},
+				function(err)
+					captured_err = err
+				end
+			)
+			T.drain_jobs(2000)
+		end)
+
+		T.assert_true(
+			captured_err ~= nil,
+			"create should report an error when the push retry fails"
+		)
+		T.assert_contains(
+			captured_err, "protected branch hook declined",
+			"error must surface the ACTUAL push failure, not just the "
+				.. "stale original create error"
+		)
+		T.assert_equals(
+			push_call_count, 1, "push should be attempted exactly once"
+		)
+		T.assert_equals(
+			create_call_count, 1,
+			"create should not be retried once the push itself failed"
+		)
 	end,
 
 	-- ── PR create via :Gitflow pr create command dispatch ─────────────

@@ -431,20 +431,20 @@ local function reset_state()
 	M.state.on_closed = nil
 end
 
-function M.close()
-	if not M.state.active then
-		return
-	end
-	local path = M.state.path
-	local flush_err = flush_merged_to_disk()
-	if flush_err then
-		utils.notify(flush_err, vim.log.levels.ERROR)
-	end
-	refresh_hunks_from_buffer()
+-- Bumped per opened view so a deferred teardown cannot reach a newer one.
+local generation = 0
+
+--- Everything that can wait until after the file is safe on disk: the
+--- resolved prompt, tab/buffer teardown, and the caller's callback.
+---@param close_tab boolean
+local function finish_shutdown(close_tab)
 	maybe_mark_resolved()
 
+	local path = M.state.path
 	local merged_bufnr = M.state.merged_bufnr
-	if M.state.tabid and vim.api.nvim_tabpage_is_valid(M.state.tabid) then
+	local on_closed = M.state.on_closed
+
+	if close_tab and M.state.tabid and vim.api.nvim_tabpage_is_valid(M.state.tabid) then
 		pcall(vim.api.nvim_set_current_tabpage, M.state.tabid)
 		pcall(vim.cmd, "tabclose")
 	end
@@ -452,11 +452,47 @@ function M.close()
 		ui.buffer.teardown(merged_bufnr)
 	end
 
-	local on_closed = M.state.on_closed
 	reset_state()
 	if path and on_closed then
 		on_closed(path)
 	end
+end
+
+--- Close the view, writing the buffer — hand-edited hunks included — to disk
+--- first. `from_hook` is the WinClosed route: the window is already going
+--- away, and prompting or deleting buffers inside that autocmd is not safe,
+--- so only the disk flush runs synchronously there.
+---@param from_hook boolean
+local function shutdown(from_hook)
+	if not M.state.active then
+		return
+	end
+	-- Latch before anything re-enters: closing the tab below raises
+	-- WinClosed, which routes straight back here.
+	M.state.active = false
+
+	local flush_err = flush_merged_to_disk()
+	if flush_err then
+		utils.notify(flush_err, vim.log.levels.ERROR)
+	end
+	refresh_hunks_from_buffer()
+
+	if not from_hook then
+		finish_shutdown(true)
+		return
+	end
+
+	local view = generation
+	vim.schedule(function()
+		if view ~= generation then
+			return
+		end
+		finish_shutdown(false)
+	end)
+end
+
+function M.close()
+	shutdown(false)
 end
 
 ---@param direction 1|-1
@@ -587,6 +623,17 @@ local function open_single_pane(path, lines, callbacks)
 
 	set_keymaps(merged_bufnr)
 
+	-- Plain `:q`, `<C-w>c` or a layout change must not drop hand-edited hunks.
+	-- ui.window fires this exactly once, so the `q` bind (which already saved
+	-- and closed) does not run teardown twice.
+	ui.window.register(merged_winid, {
+		name = "gitflow_conflict",
+		on_close = function()
+			shutdown(true)
+		end,
+	})
+
+	generation = generation + 1
 	M.state.active = true
 	M.state.path = path
 	M.state.cfg = callbacks.cfg

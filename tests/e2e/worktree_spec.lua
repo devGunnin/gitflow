@@ -58,6 +58,26 @@ local function with_prompt_answers(answers, fn)
 	end
 end
 
+-- Stub ui.input.confirm so a confirmation dialog answers deterministically.
+-- Headless nvim's vim.fn.confirm() returns the default choice (no prompt UI),
+-- which is "&Cancel" for remove/move — tests that expect the mutation to
+-- proceed must stub this to simulate the user confirming.
+---@param answer boolean
+---@param fn fun()
+local function with_confirm_answer(answer, fn)
+	local input = require("gitflow.ui.input")
+	local original = input.confirm
+	input.confirm = function()
+		return answer
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+	input.confirm = original
+	if not ok then
+		error(err, 0)
+	end
+end
+
 -- Stub the branch picker so the base ref is chosen deterministically.
 ---@param ref string
 ---@param fn fun()
@@ -475,6 +495,76 @@ T.run_suite("E2E: Worktree Panel", {
 			end
 			T.assert_false(removed,
 				"a non-force remove of a locked worktree must not run")
+		end)
+
+		worktree_panel.close()
+	end,
+
+	-- ── Refresh-exactly-once (GitflowPostOperation double-refresh) ───
+
+	["prune refreshes the open panel exactly once"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		with_temp_git_log(function(log_path)
+			worktree_panel.prune()
+			T.drain_jobs(2000)
+
+			local lines = T.read_file(log_path)
+			local list_calls = 0
+			for _, line in ipairs(lines) do
+				if line:find("worktree list", 1, true) then
+					list_calls = list_calls + 1
+				end
+			end
+			T.assert_equals(
+				list_calls, 1,
+				"prune should refresh the worktree list exactly once"
+			)
+		end)
+
+		worktree_panel.close()
+	end,
+
+	["removing a worktree refreshes the open panel exactly once"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		-- The detached entry is neither the cwd nor locked, so remove proceeds.
+		local target_line
+		for line, entry in pairs(worktree_panel.state.line_entries) do
+			if entry.is_detached then
+				target_line = line
+			end
+		end
+		T.assert_true(target_line ~= nil, "fixture should have a detached worktree")
+
+		with_temp_git_log(function(log_path)
+			with_confirm_answer(true, function()
+				vim.api.nvim_set_current_win(worktree_panel.state.winid)
+				vim.api.nvim_win_set_cursor(
+					worktree_panel.state.winid, { target_line, 0 })
+				worktree_panel.remove_under_cursor(false)
+				T.drain_jobs(2000)
+			end)
+
+			local lines = T.read_file(log_path)
+			local remove_ran, list_calls = false, 0
+			for _, line in ipairs(lines) do
+				if line:find("worktree remove", 1, true) then
+					remove_ran = true
+				end
+				if line:find("worktree list", 1, true) then
+					list_calls = list_calls + 1
+				end
+			end
+			T.assert_true(remove_ran, "remove should have run `git worktree remove`")
+			T.assert_equals(
+				list_calls, 1,
+				"remove should refresh the worktree list exactly once"
+			)
 		end)
 
 		worktree_panel.close()

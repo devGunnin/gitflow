@@ -17,6 +17,15 @@ local M = {}
 local TAG_FLOAT_TITLE = "  Gitflow Tags  "
 local TAG_FLOAT_FOOTER =
 	" c create · D delete · X remote del · P push · r refresh · q close "
+-- Split-layout counterpart of TAG_FLOAT_FOOTER; keep the two in sync.
+local TAG_HINTS = {
+	{ "c", "create" },
+	{ "D", "delete" },
+	{ "X", "remote del" },
+	{ "P", "push" },
+	{ "r", "refresh" },
+	{ "q", "close" },
+}
 local TAG_HIGHLIGHT_NS =
 	vim.api.nvim_create_namespace("gitflow_tag_hl")
 
@@ -164,6 +173,10 @@ local function render(entries, current_branch)
 			line_entries[line_no] = entry
 		end
 	end
+
+	-- In-buffer hints for split layout (floats advertise the same keys in
+	-- their window footer).
+	components.split_hint_bar(B, render_opts, TAG_HINTS)
 
 	ui.buffer.update("tag", B.lines)
 	M.state.line_entries = line_entries

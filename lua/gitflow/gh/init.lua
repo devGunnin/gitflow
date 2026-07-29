@@ -30,6 +30,64 @@ local function build_command(args)
 	return cmd
 end
 
+---@alias GitflowGhFailureKind
+---| '"missing"'    gh is not on PATH
+---| '"auth"'       not logged in, or the token was rejected
+---| '"network"'    gh could not reach the GitHub host
+---| '"permission"' authenticated, but the token lacks rights (HTTP 403)
+---| '"not_found"'  absent, or invisible to this account (HTTP 404)
+---| '"unknown"'    no signal we can classify — report raw output only
+
+--- Classify a failed `gh` invocation from its combined output.
+--- Every pattern here was observed from a real gh (2.95.0); none are guessed.
+--- Network is tested first: a connection failure otherwise reads as auth.
+---@param output string
+---@return GitflowGhFailureKind
+function M.classify_failure(output)
+	local text = (output or ""):lower()
+
+	if
+		text:find("error connecting to", 1, true)
+		or text:find("check your internet connection", 1, true)
+	then
+		return "network"
+	end
+	if
+		text:find("not logged into any github hosts", 1, true)
+		or text:find("failed to log in to", 1, true)
+		or text:find("bad credentials", 1, true)
+		or text:find("(http 401)", 1, true)
+	then
+		return "auth"
+	end
+	if text:find("(http 403)", 1, true) then
+		return "permission"
+	end
+	if text:find("(http 404)", 1, true) then
+		return "not_found"
+	end
+
+	return "unknown"
+end
+
+---@type table<GitflowGhFailureKind, string>
+local FAILURE_HINTS = {
+	missing = "Install the GitHub CLI (https://cli.github.com) and make sure `gh` is on your PATH.",
+	auth = "Run `gh auth login` to authenticate, then retry.",
+	network = "Could not reach GitHub — check your connection or https://www.githubstatus.com.",
+	permission = "Your token lacks the required permission. `gh auth status` lists its scopes; `gh auth refresh -s <scope>` adds one.",
+	-- GitHub answers 404 for private resources too, so "absent" and
+	-- "invisible to you" are indistinguishable and stay deliberately merged.
+	not_found = "Not found — it may not exist, or your account may not have access to it. Check the name and your permissions.",
+}
+
+--- Actionable recovery step for a failure kind, or nil when we cannot tell.
+---@param kind GitflowGhFailureKind
+---@return string|nil
+function M.failure_hint(kind)
+	return FAILURE_HINTS[kind]
+end
+
 ---@param result GitflowGitResult
 ---@return string
 function M.output(result)
@@ -47,7 +105,17 @@ function M.run(args, opts, on_exit)
 		error("gitflow gh error: run(args, opts, on_exit) requires callback", 2)
 	end
 
-	git.run(build_command(args), opts, on_exit)
+	git.run(build_command(args), opts, function(result)
+		-- An auth-shaped failure means the cached verdict went stale (token
+		-- expired, `gh auth logout` elsewhere) — re-check on next use.
+		if
+			result.code ~= 0
+			and M.classify_failure(M.output(result)) == "auth"
+		then
+			M.state.checked = false
+		end
+		on_exit(result)
+	end)
 end
 
 ---@param result GitflowGitResult
@@ -58,7 +126,14 @@ local function error_from_result(result, action)
 	if output == "" then
 		return ("gh %s failed"):format(action)
 	end
-	return ("gh %s failed: %s"):format(action, output)
+
+	-- Hint is appended, never substituted: the raw gh output always survives.
+	local message = ("gh %s failed: %s"):format(action, output)
+	local hint = M.failure_hint(M.classify_failure(output))
+	if hint == nil then
+		return message
+	end
+	return message .. "\n" .. hint
 end
 
 ---@param args string[]
@@ -211,47 +286,88 @@ local function notify_prerequisite_error(message, opts)
 	utils.notify(message, vim.log.levels.ERROR)
 end
 
+--- Compose "what happened / the raw output / what to do", skipping empty parts.
+---@param summary string
+---@param output string
+---@param kind GitflowGhFailureKind
+---@return string
+local function prerequisite_message(summary, output, kind)
+	local parts = { summary }
+	if output ~= "" then
+		parts[#parts + 1] = output
+	end
+	local hint = M.failure_hint(kind)
+	if hint ~= nil then
+		parts[#parts + 1] = hint
+	end
+	return table.concat(parts, "\n")
+end
+
+---@param available boolean
+---@param message string
+---@param opts GitflowGhPrerequisiteCheckOpts
+---@return false, string
+local function fail_prerequisites(available, message, opts)
+	M.state = {
+		checked = true,
+		available = available,
+		authenticated = false,
+		message = message,
+	}
+	notify_prerequisite_error(message, opts)
+	return false, message
+end
+
+--- Probe gh once, synchronously. `gh auth status` calls the GitHub API, so
+--- this must stay off the startup path — see M.ensure_prerequisites.
 ---@param opts GitflowGhPrerequisiteCheckOpts|nil
 ---@return boolean, string|nil
 function M.check_prerequisites(opts)
 	local options = opts or {}
 
 	if vim.fn.executable("gh") ~= 1 then
-		local message = "GitHub CLI (gh) is not installed or not in PATH. Install gh to use GitHub commands."
-		M.state = {
-			checked = true,
-			available = false,
-			authenticated = false,
-			message = message,
-		}
-		notify_prerequisite_error(message, options)
-		return false, message
+		return fail_prerequisites(
+			false,
+			prerequisite_message(
+				"GitHub CLI (gh) was not found on your PATH.",
+				"",
+				"missing"
+			),
+			options
+		)
 	end
 
 	local version_result = run_sync({ "--version" })
 	if version_result.code ~= 0 then
-		local message = error_from_result(version_result, "--version")
-		M.state = {
-			checked = true,
-			available = false,
-			authenticated = false,
-			message = message,
-		}
-		notify_prerequisite_error(message, options)
-		return false, message
+		local output = M.output(version_result)
+		return fail_prerequisites(
+			false,
+			prerequisite_message(
+				"`gh --version` failed, so the GitHub CLI is not usable.",
+				output,
+				M.classify_failure(output)
+			),
+			options
+		)
 	end
 
 	local auth_result = run_sync({ "auth", "status" })
 	if auth_result.code ~= 0 then
-		local message = "GitHub CLI is not authenticated. Run `gh auth login` and try again."
-		M.state = {
-			checked = true,
-			available = true,
-			authenticated = false,
-			message = message,
-		}
-		notify_prerequisite_error(message, options)
-		return false, message
+		local output = M.output(auth_result)
+		local kind = M.classify_failure(output)
+		local summary = "GitHub CLI is not authenticated."
+		if kind == "network" then
+			summary = "Could not reach GitHub to check your GitHub CLI login."
+		elseif kind == "unknown" then
+			-- `gh auth status` only fails for login reasons; an unrecognised
+			-- message is still an auth problem, and the output is shown as-is.
+			kind = "auth"
+		end
+		return fail_prerequisites(
+			true,
+			prerequisite_message(summary, output, kind),
+			options
+		)
 	end
 
 	M.state = {
@@ -264,6 +380,10 @@ function M.check_prerequisites(opts)
 	return true, nil
 end
 
+--- Gate for every GitHub-dependent command. The first call pays the probe;
+--- later calls reuse the cached verdict until an auth-shaped failure in M.run
+--- clears it. Nothing checks gh at startup, so this is where an
+--- unauthenticated user finds out.
 ---@return boolean, string|nil
 function M.ensure_prerequisites()
 	if not M.state.checked then

@@ -372,7 +372,11 @@ local function resolve_single_file(path, side, expected, opts)
 
 		local merged_buf = conflict_view.state.merged_bufnr
 		assert_true(merged_buf ~= nil, "merged buffer should be created")
-		assert_keymaps(merged_buf, { "1", "2", "3", "o", "t", "b", "a", "e", "]x", "[x", "q" })
+		-- resolution actions are c-prefixed so plain vim motions stay usable
+		assert_keymaps(
+			merged_buf,
+			{ "co", "ct", "cB", "cb", "ca", "ce", "cr", "cx", "]c", "[c", "q" }
+		)
 		asserted_view_shape = true
 	end
 
