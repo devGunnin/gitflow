@@ -228,9 +228,11 @@ local function complete_issue(subaction, arglead)
 			"--state",
 			"--label",
 			"--assignee",
+			"--milestone",
 			"--limit",
 			"label=",
 			"assignee=",
+			"milestone=",
 		}
 		return shared.filter_candidates(arglead, candidates)
 	end
