@@ -80,11 +80,12 @@ local refresh_links
 ---Scope the cache is only valid under: `gh` resolves the repo from the cwd,
 ---and the server-side query decides which issues it holds. (The client-side
 ---filters re-derive from the same cache, so they are not part of the key.)
+---@param cwd string|nil  defaults to the live cwd
 ---@return string
-local function cache_key()
+local function cache_key(cwd)
 	local fetch = M.state.fetch or {}
 	return table.concat({
-		vim.fn.getcwd(),
+		cwd or vim.fn.getcwd(),
 		fetch.state or "",
 		tostring(fetch.limit or ""),
 		fetch.search or "",
@@ -228,6 +229,18 @@ local function panel_cwd()
 		return vim.fn.getcwd(winid)
 	end
 	return vim.fn.getcwd()
+end
+
+---Run options that BIND a spawn to `scope`. `gh` and `git` resolve the
+---repository from the process cwd, so naming it here makes the target a
+---property of the call instead of a property of wherever the cwd happens to be
+---when the process finally starts — including the second and third process of
+---a chain that spawns again after a round trip.
+---@param scope string  cwd the target was resolved under
+---@return GitflowGitRunOpts
+local function in_scope(scope)
+	assert(type(scope) == "string" and scope ~= "", "a spawn must name the repo it runs in")
+	return { cwd = scope }
 end
 
 ---@param issue table
@@ -652,9 +665,11 @@ end
 ---the cue — so it warns and leaves the cards bare rather than blanking a
 ---panel that loaded fine.
 ---@param request_id integer  generation the issue fetch was issued under
+---@param requested_cwd string  cwd that fetch was bound to
 ---@param requested_key string  scope that fetch was issued under
-refresh_links = function(request_id, requested_key)
-	gh_prs.list_links({ state = "open", limit = LINKED_PR_LIMIT }, {}, function(err, prs)
+refresh_links = function(request_id, requested_cwd, requested_key)
+	local params = { state = "open", limit = LINKED_PR_LIMIT }
+	gh_prs.list_links(params, in_scope(requested_cwd), function(err, prs)
 		if not P:is_active(request_id) or requested_key ~= cache_key() then
 			return
 		end
@@ -685,13 +700,15 @@ function M.refresh()
 	end
 
 	local request_id = P:next_request()
-	-- The scope this fetch is issued under: a cwd or query change while it is
-	-- in flight must not stamp its rows as belonging to the new scope.
-	local requested_key = cache_key()
+	-- The scope this fetch is issued under: the fetch is bound to it, and a cwd
+	-- or query change while it is in flight must not stamp its rows as
+	-- belonging to the new scope.
+	local requested_cwd = vim.fn.getcwd()
+	local requested_key = cache_key(requested_cwd)
 	if not scoped_cache() then
 		P:render_loading("Loading issues…")
 	end
-	gh_issues.list(M.state.fetch, {}, function(err, issues)
+	gh_issues.list(M.state.fetch, in_scope(requested_cwd), function(err, issues)
 		if not P:is_active(request_id) then
 			return
 		end
@@ -718,7 +735,7 @@ function M.refresh()
 		M.state.cache = issues or {}
 		M.state.cache_key = requested_key
 		render_derived()
-		refresh_links(request_id, requested_key)
+		refresh_links(request_id, requested_cwd, requested_key)
 	end)
 end
 
@@ -758,7 +775,7 @@ function M.open_view(number, cfg)
 	-- verb against the new one.
 	local requested_cwd = vim.fn.getcwd()
 	P:render_loading(("Loading issue #%s…"):format(tostring(number)))
-	gh_issues.view(number, {}, function(err, issue)
+	gh_issues.view(number, in_scope(requested_cwd), function(err, issue)
 		if not P:is_active(request_id) then
 			return
 		end
@@ -973,10 +990,11 @@ function M.suggested_branch_name(issue)
 	return ("%s-%s"):format(number, slug)
 end
 
----Guard an async continuation about to spawn `gh`: prompts and forms are
----async, so the cwd can move between choosing the target and the spawn, and
----`gh` resolves the repo from the live cwd. Compared against the live cwd,
----not the panel's, because that is what the spawn will inherit.
+---Refuse an async continuation whose target the user can no longer see:
+---prompts and forms are async, so the cwd can move between choosing the target
+---and submitting, and acting on rows from a repo you have left is a surprise
+---even when the spawn itself lands in the right place. Where the process runs
+---is `in_scope`'s job, not this one's.
 ---@param scope string  cwd the target was resolved under
 ---@return boolean
 local function scope_intact(scope)
@@ -1016,7 +1034,7 @@ end
 ---@field in_progress_message string
 ---@field done_message string
 ---@field scope string  cwd the target was resolved under
----@field call fun(cb: fun(err: string|nil))
+---@field call fun(run_opts: GitflowGitRunOpts, cb: fun(err: string|nil))
 ---@param opts GitflowGhMutation
 local function perform_mutation(opts)
 	assert(type(opts.scope) == "string", "a mutation must carry the scope it was chosen under")
@@ -1053,7 +1071,9 @@ local function perform_mutation(opts)
 	M.state.busy = opts.in_progress_message
 	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
 
-	opts.call(function(err)
+	-- The scope is handed to the call rather than left for it to remember: a
+	-- mutation that spawns again after a round trip must land in the same repo.
+	opts.call(in_scope(opts.scope), function(err)
 		M.state.busy = nil
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
@@ -1095,7 +1115,7 @@ function M.create_branch_under_cursor()
 			return
 		end
 
-		git_branch.create(name, nil, {}, function(err)
+		git_branch.create(name, nil, in_scope(scope), function(err)
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				return
@@ -1304,6 +1324,10 @@ function M.create_interactive()
 		return
 	end
 
+	-- The repo this form is being built for: its labels and its assignees fill
+	-- the fields, so the issue must be filed there and nowhere else.
+	local scope = vim.fn.getcwd()
+
 	local function names_completer(names)
 		return function(lead)
 			local query = vim.trim(tostring(lead or "")):lower()
@@ -1384,12 +1408,19 @@ function M.create_interactive()
 				},
 			},
 			on_submit = function(values)
+				-- The form is async: filing repo A's title, labels and
+				-- assignees into a repo the operator has since moved to would
+				-- mean an issue nothing on screen described.
+				if not scope_intact(scope) then
+					return
+				end
+
 				gh_issues.create({
 					title = values.title,
 					body = values.body,
 					labels = parse_csv_input(values.labels),
 					assignees = parse_csv_input(values.assignees),
-				}, {}, function(err, response)
+				}, in_scope(scope), function(err, response)
 					if err then
 						utils.notify(err, vim.log.levels.ERROR)
 						return
@@ -1422,7 +1453,7 @@ function M.create_interactive()
 		end)
 	end
 
-	gh_labels.list({ limit = LABEL_PICK_LIMIT }, {}, function(err, labels)
+	gh_labels.list({ limit = LABEL_PICK_LIMIT }, in_scope(scope), function(err, labels)
 		if err then
 			utils.notify(
 				("Failed to load labels: %s"):format(err),
@@ -1439,6 +1470,8 @@ function M.create_interactive()
 		try_open()
 	end)
 
+	-- The one prep fetch that cannot be bound: it is the shared completion
+	-- cache's own synchronous spawn. Names offered only; the create is bound.
 	local assignee_comp = require("gitflow.completion.assignees")
 	vim.schedule(function()
 		local names = assignee_comp.list_repo_assignee_candidates()
@@ -1451,7 +1484,6 @@ function M.create_interactive()
 	end)
 end
 
----@param number integer|string
 ---@param number integer|string
 ---@param scope string  cwd the issue was resolved under
 local function comment_on_issue(number, scope)
@@ -1470,7 +1502,7 @@ local function comment_on_issue(number, scope)
 			return
 		end
 
-		gh_issues.comment(number, normalized, {}, function(err)
+		gh_issues.comment(number, normalized, in_scope(scope), function(err)
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				return
@@ -1511,7 +1543,7 @@ end
 ---@param number integer|string
 ---@param scope string  cwd the issue was resolved under
 local function edit_issue(number, scope)
-	gh_issues.view(number, {}, function(err, issue)
+	gh_issues.view(number, in_scope(scope), function(err, issue)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
@@ -1547,7 +1579,7 @@ local function edit_issue(number, scope)
 				gh_issues.edit(number, {
 					title = values.title,
 					body = values.body,
-				}, {}, function(edit_err)
+				}, in_scope(scope), function(edit_err)
 					if edit_err then
 						utils.notify(edit_err, vim.log.levels.ERROR)
 						return
@@ -1599,8 +1631,8 @@ function M.close_under_cursor()
 		confirm_message = ("Close issue #%s as %s?"):format(tostring(number), reason),
 		in_progress_message = ("Closing issue #%s"):format(tostring(number)),
 		done_message = ("Closed issue #%s as %s"):format(tostring(number), reason),
-		call = function(cb)
-			gh_issues.close(number, { reason = reason }, {}, cb)
+		call = function(run_opts, cb)
+			gh_issues.close(number, { reason = reason }, run_opts, cb)
 		end,
 	})
 end
@@ -1619,8 +1651,8 @@ function M.reopen_under_cursor()
 		confirm_message = ("Reopen issue #%s?"):format(tostring(number)),
 		in_progress_message = ("Reopening issue #%s"):format(tostring(number)),
 		done_message = ("Reopened issue #%s"):format(tostring(number)),
-		call = function(cb)
-			gh_issues.reopen(number, {}, cb)
+		call = function(run_opts, cb)
+			gh_issues.reopen(number, run_opts, cb)
 		end,
 	})
 end
@@ -1639,7 +1671,7 @@ function M.set_milestone_under_cursor()
 	end
 	local number = issue.number
 
-	gh_issues.list_milestones({ state = "all" }, {}, function(err, milestones)
+	gh_issues.list_milestones({ state = "all" }, in_scope(scope), function(err, milestones)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
@@ -1683,10 +1715,10 @@ function M.set_milestone_under_cursor()
 					done_message = clearing
 						and ("Cleared the milestone on issue #%s"):format(tostring(number))
 						or ("Issue #%s is now in '%s'"):format(tostring(number), chosen),
-					call = function(cb)
+					call = function(run_opts, cb)
 						gh_issues.edit(number, clearing
 							and { remove_milestone = true }
-							or { milestone = chosen }, {}, cb)
+							or { milestone = chosen }, run_opts, cb)
 					end,
 				})
 			end,
@@ -1758,8 +1790,8 @@ function M.edit_comment_under_cursor()
 			confirm_message = "Save this edit to the comment?",
 			in_progress_message = "Updating comment",
 			done_message = "Comment updated",
-			call = function(cb)
-				gh_issues.edit_comment(comment_id, normalized, {}, cb)
+			call = function(run_opts, cb)
+				gh_issues.edit_comment(comment_id, normalized, run_opts, cb)
 			end,
 		})
 	end)
@@ -1779,8 +1811,8 @@ function M.delete_comment_under_cursor()
 			:format(author, tostring(M.state.active_issue_number)),
 		in_progress_message = "Deleting comment",
 		done_message = "Comment deleted",
-		call = function(cb)
-			gh_issues.delete_comment(comment_id, {}, cb)
+		call = function(run_opts, cb)
+			gh_issues.delete_comment(comment_id, run_opts, cb)
 		end,
 	})
 end
@@ -1855,7 +1887,7 @@ function M.edit_labels_under_cursor()
 		gh_issues.edit(number, {
 			add_labels = add_labels,
 			remove_labels = remove_labels,
-		}, {}, function(err)
+		}, in_scope(scope), function(err)
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				return
@@ -1919,7 +1951,7 @@ function M.edit_assignees_under_cursor()
 		gh_issues.edit(number, {
 			add_assignees = add_assignees,
 			remove_assignees = remove_assignees,
-		}, {}, function(err)
+		}, in_scope(scope), function(err)
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				return
