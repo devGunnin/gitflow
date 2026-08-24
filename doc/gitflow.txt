@@ -361,6 +361,8 @@ PR list ~
     x       Close PR
     o       Checkout PR branch
     v       Open review panel
+    <C-n>   Next page (list mode)
+    <C-p>   Previous page (list mode)
     r       Refresh
     b       Back to list (detail view)
     q       Close
@@ -451,6 +453,8 @@ Merge conflict resolver ~
 Label panel ~
     c       Create new label
     d       Delete label under cursor
+    <C-n>   Next page
+    <C-p>   Previous page
     r       Refresh
     q       Close
 
