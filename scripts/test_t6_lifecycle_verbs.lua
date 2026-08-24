@@ -57,6 +57,8 @@ local gh_issues = require("gitflow.gh.issues")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local list_picker = require("gitflow.ui.list_picker")
+local form = require("gitflow.ui.form")
+local git_branch = require("gitflow.git.branch")
 local pr_panel = require("gitflow.panels.prs")
 local issue_panel = require("gitflow.panels.issues")
 
@@ -64,6 +66,11 @@ local issue_panel = require("gitflow.panels.issues")
 
 ---@type string[][]
 local calls = {}
+
+---The cwd each `calls` entry was spawned in — `gh` resolves the repository
+---from it, so a wrong-repo fire shows up here and nowhere else.
+---@type string[]
+local call_cwds = {}
 
 local PR_ROWS = {
 	{
@@ -154,19 +161,27 @@ local real = {
 	prompt = input.prompt,
 	picker = list_picker.open,
 	vim_confirm = vim.fn.confirm,
+	form_open = form.open,
+	branch_create = git_branch.create,
 }
 
+---@param args string[]
+local function record(args)
+	calls[#calls + 1] = vim.deepcopy(args)
+	call_cwds[#call_cwds + 1] = vim.fn.getcwd()
+end
+
 local function install_stubs()
-	calls = {}
+	calls, call_cwds = {}, {}
 	gh.ensure_prerequisites = function()
 		return true, nil
 	end
 	gh.run = function(args, _opts, cb)
-		calls[#calls + 1] = vim.deepcopy(args)
+		record(args)
 		cb({ code = 0, signal = 0, stdout = "", stderr = "", cmd = args })
 	end
 	gh.json = function(args, _opts, cb)
-		calls[#calls + 1] = vim.deepcopy(args)
+		record(args)
 		cb(nil, json_answer(args), { code = 0, signal = 0, stdout = "", stderr = "", cmd = args })
 	end
 	utils.notify = function() end
@@ -174,6 +189,7 @@ end
 
 local function restore_stubs()
 	gh.run, gh.json, gh.ensure_prerequisites = real.run, real.json, real.ensure
+	form.open, git_branch.create = real.form_open, real.branch_create
 	utils.notify = real.notify
 	input.confirm, input.prompt = real.confirm, real.prompt
 	list_picker.open = real.picker
@@ -205,6 +221,23 @@ local function capture(fn)
 	local out = {}
 	for i = before + 1, #calls do
 		out[#out + 1] = table.concat(calls[i], " ")
+	end
+	return out
+end
+
+---Every gh invocation `fn` causes that would run in `cwd` — what a wrapper
+---`gh` logging its own pwd counts. Must be zero for the repo we moved to.
+---@param cwd string
+---@param fn fun()
+---@return string[]
+local function capture_in(cwd, fn)
+	local before = #calls
+	fn()
+	local out = {}
+	for i = before + 1, #calls do
+		if call_cwds[i] == cwd then
+			out[#out + 1] = table.concat(calls[i], " ")
+		end
 	end
 	return out
 end
@@ -464,7 +497,39 @@ test("the PR list card shows per-state check counts", function()
 			text:find("✓1", 1, true) ~= nil and text:find("✗1", 1, true) ~= nil,
 			("per-state counts should be visible: %q"):format(text)
 		)
+		-- Counts alone let the card read greener than its worst check, and
+		-- this is the surface m/D/M are pressed from.
+		assert_true(
+			text:find("failure", 1, true) ~= nil,
+			("the card should carry the verdict: %q"):format(text)
+		)
 	end)
+	pr_panel.close()
+	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("a cancelled check never renders as a benign skip on the card", function()
+	install_stubs()
+	local original = PR_ROWS[1].statusCheckRollup
+	PR_ROWS[1].statusCheckRollup = {
+		{ __typename = "CheckRun", name = "a", status = "COMPLETED", conclusion = "CANCELLED" },
+		{ __typename = "CheckRun", name = "b", status = "COMPLETED", conclusion = "SKIPPED" },
+	}
+	local ok, err = pcall(function()
+		open_prs()
+		local text = buffer_text(pr_panel.state.bufnr)
+		assert_true(
+			text:find("cancelled", 1, true) ~= nil,
+			("the card should name the cancelled verdict: %q"):format(text)
+		)
+		assert_true(
+			text:find("⊗1", 1, true) ~= nil and text:find("⊘1", 1, true) ~= nil,
+			("cancelled and skipped must not share a glyph: %q"):format(text)
+		)
+	end)
+	PR_ROWS[1].statusCheckRollup = original
 	pr_panel.close()
 	pr_panel.state.cache = nil
 	restore_stubs()
@@ -979,13 +1044,13 @@ end
 local function hold_gh_answers()
 	local held, next_index = {}, 1
 	gh.json = function(args, _opts, cb)
-		calls[#calls + 1] = vim.deepcopy(args)
+		record(args)
 		held[#held + 1] = function()
 			cb(nil, json_answer(args), { code = 0, signal = 0, stdout = "", stderr = "", cmd = args })
 		end
 	end
 	gh.run = function(args, _opts, cb)
-		calls[#calls + 1] = vim.deepcopy(args)
+		record(args)
 		held[#held + 1] = function()
 			cb({ code = 0, signal = 0, stdout = "", stderr = "", cmd = args })
 		end
@@ -1116,6 +1181,223 @@ test("a cd between the prompt and the spawn cancels the mutation", function()
 	assert_true(ok, tostring(err))
 end)
 
+---The cwd string vim reports for `dir`: a scope comparison is string
+---equality, and a tempname path need not be what `getcwd()` answers.
+---@param dir string
+---@return string
+local function canonical(dir)
+	local before = vim.fn.getcwd()
+	vim.cmd("cd " .. vim.fn.fnameescape(dir))
+	local resolved = vim.fn.getcwd()
+	vim.cmd("cd " .. vim.fn.fnameescape(before))
+	return resolved
+end
+
+---Answer an `input.prompt` from `repo`. Prompts are async, so this is the
+---window a `cd` — a timer, an autocmd, the user — can slip through.
+---@param repo string
+local function prompt_answered_from(repo)
+	input.prompt = function(_opts, on_confirm)
+		vim.cmd("cd " .. vim.fn.fnameescape(repo))
+		on_confirm("+someone")
+	end
+end
+
+---Same, for the async edit form.
+---@param repo string
+local function form_submitted_from(repo)
+	form.open = function(opts)
+		vim.cmd("cd " .. vim.fn.fnameescape(repo))
+		opts.on_submit({ title = "REPO-A TITLE", body = "REPO-A BODY" })
+	end
+end
+
+---Drive each form/prompt verb twice: answered in place it must still reach
+---`gh` in repo A (no over-refusal), answered after a `cd` it must reach repo B
+---zero times — the wrong-repo count a wrapper `gh` logs.
+---@param panel table
+---@param focus fun()
+---@param verbs table[]  { name, press, arm }
+---@param repo_a string
+---@param repo_b string
+local function assert_verbs_stay_in_scope(panel, focus, verbs, repo_a, repo_b)
+	local cwd_a, cwd_b = canonical(repo_a), canonical(repo_b)
+	-- Every verb is driven before anything is asserted, so one hole does not
+	-- hide the others.
+	local vacuous, offenders = {}, {}
+	for _, verb in ipairs(verbs) do
+		local name, press, arm = verb[1], verb[2], verb[3]
+
+		vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+		focus()
+		arm(repo_a)
+		if #capture_in(cwd_a, press) == 0 then
+			vacuous[#vacuous + 1] = name
+		end
+
+		vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+		focus()
+		arm(repo_b)
+		local fired = capture_in(cwd_b, press)
+		if #fired > 0 then
+			offenders[#offenders + 1] = ("%s → %s"):format(name, table.concat(fired, "; "))
+		end
+	end
+	assert_true(panel.is_open(), "the panel should still be open")
+	assert_equals(
+		#offenders, 0,
+		("these verbs reached repo B: %s"):format(table.concat(offenders, " | "))
+	)
+	assert_equals(
+		#vacuous, 0,
+		("these verbs never reached gh at all, so their guard is untested: %s")
+			:format(table.concat(vacuous, ", "))
+	)
+end
+
+test("no PR form or prompt verb reaches the repo cd'd to while it was open", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+			open_prs()
+			assert_verbs_stay_in_scope(pr_panel, function()
+				focus_first(pr_panel, "line_entries")
+			end, {
+				{ "comment", pr_panel.comment_under_cursor, prompt_answered_from },
+				{ "labels", pr_panel.edit_labels_under_cursor, prompt_answered_from },
+				{ "assignees", pr_panel.edit_assignees_under_cursor, prompt_answered_from },
+				{ "reviewers", pr_panel.edit_reviewers_under_cursor, prompt_answered_from },
+				{ "edit title/body", pr_panel.edit_under_cursor, form_submitted_from },
+			}, repo_a, repo_b)
+		end)
+	end)
+	pr_panel.close()
+	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("no issue form or prompt verb reaches the repo cd'd to while it was open", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+			open_issues()
+			assert_verbs_stay_in_scope(issue_panel, function()
+				focus_first(issue_panel, "line_entries")
+			end, {
+				{ "comment", issue_panel.comment_under_cursor, prompt_answered_from },
+				{ "labels", issue_panel.edit_labels_under_cursor, prompt_answered_from },
+				{ "assignees", issue_panel.edit_assignees_under_cursor, prompt_answered_from },
+				{ "edit title/body", issue_panel.edit_under_cursor, form_submitted_from },
+			}, repo_a, repo_b)
+
+			-- Branch creation is git, not gh, but it is the same class: repo
+			-- A's issue must not name a branch in repo B.
+			local cwd_b = canonical(repo_b)
+			local created = {}
+			git_branch.create = function(name, _base, _opts, cb)
+				created[#created + 1] = { name = name, cwd = vim.fn.getcwd() }
+				cb(nil)
+			end
+			for _, target in ipairs({ repo_a, repo_b }) do
+				vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+				focus_first(issue_panel, "line_entries")
+				prompt_answered_from(target)
+				issue_panel.create_branch_under_cursor()
+			end
+			local in_b = {}
+			for _, entry in ipairs(created) do
+				if entry.cwd == cwd_b then
+					in_b[#in_b + 1] = entry.name
+				end
+			end
+			assert_equals(
+				#in_b, 0,
+				("create branch reached repo B: %s"):format(table.concat(in_b, ", "))
+			)
+			assert_true(#created > 0, "the in-place branch create should still run")
+		end)
+	end)
+	issue_panel.close()
+	issue_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("focus leaving a window-scoped panel during a fetch does not discard it", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			-- The global cwd is repo B; the panel's own window is :lcd'd to
+			-- repo A, which is where its fetch runs. Merely focusing another
+			-- window must not read as "the repository changed".
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+			pr_panel.close()
+			pr_panel.state.cache = nil
+			pr_panel.open_view(12, cfg)
+			vim.api.nvim_set_current_win(pr_panel.state.winid)
+			vim.cmd("lcd " .. vim.fn.fnameescape(repo_a))
+			local cwd_a = vim.fn.getcwd()
+
+			local other
+			for _, winid in ipairs(vim.api.nvim_list_wins()) do
+				if winid ~= pr_panel.state.winid then
+					other = winid
+				end
+			end
+			assert_true(other ~= nil, "the test needs a second window to focus")
+
+			local release = hold_gh_answers()
+			pr_panel.open_view(12, cfg)
+			vim.api.nvim_set_current_win(other)
+			release()
+
+			local text = buffer_text(pr_panel.state.bufnr)
+			assert_true(
+				text:find("Add the thing", 1, true) ~= nil,
+				("a good fetch was thrown away on a focus change: %q"):format(text)
+			)
+			assert_equals(pr_panel.state.view_cwd, cwd_a, "the scope stamp should be the panel's")
+			vim.api.nvim_set_current_win(pr_panel.state.winid)
+			vim.cmd("lcd " .. vim.fn.fnameescape(repo_b))
+		end)
+	end)
+	pr_panel.close()
+	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("a target whose repo already moved is refused before the gate is raised", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+			issue_panel.close()
+			issue_panel.state.cache = nil
+			issue_panel.open_view(7, cfg)
+			focus_first(issue_panel, "line_comments")
+
+			local gated = 0
+			input.confirm = function()
+				gated = gated + 1
+				return true, 1
+			end
+			prompt_answered_from(repo_b)
+			issue_panel.edit_comment_under_cursor()
+			-- A gate that can only be declined into nothing is worse than no
+			-- gate: it asks about an action that was never going to be sent.
+			assert_equals(gated, 0, "the operator was asked to authorise a dead mutation")
+		end)
+	end)
+	issue_panel.close()
+	issue_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
 test("every destructive confirm names the repository it will act on", function()
 	install_stubs()
 	local seen = {}
@@ -1150,7 +1432,7 @@ test("every destructive confirm names the repository it will act on", function()
 	assert_true(ok, tostring(err))
 end)
 
-test("repo_label reads the origin slug, and falls back to the directory", function()
+test("repo_label resolves the repo gh will act on, or names the directory", function()
 	local original_cwd = vim.fn.getcwd()
 	local dir = vim.fn.tempname()
 	vim.fn.mkdir(dir, "p")
@@ -1171,6 +1453,39 @@ test("repo_label reads the origin slug, and falls back to the directory", functi
 			"https://github.com/octo/thing.git",
 		})
 		assert_equals(gh.repo_label(), "octo/thing", "an https remote yields owner/repo")
+		assert_equals(gh.repo_label(dir), "octo/thing", "an explicit cwd resolves the same")
+
+		-- The ordinary fork checkout: gh acts on upstream, not on your fork.
+		vim.fn.system({
+			"git", "-C", dir, "remote", "add", "upstream",
+			"https://github.com/canonical/thing.git",
+		})
+		assert_equals(gh.repo_label(), "canonical/thing", "gh prefers upstream over origin")
+
+		-- `gh repo set-default` writes gh-resolved, and it wins outright.
+		vim.fn.system({
+			"git", "-C", dir, "config", "remote.origin.gh-resolved",
+			"other-owner/other-repo",
+		})
+		assert_equals(
+			gh.repo_label(), "other-owner/other-repo",
+			"a gh repo set-default override outranks every remote"
+		)
+		vim.fn.system({ "git", "-C", dir, "config", "--unset", "remote.origin.gh-resolved" })
+
+		-- Hosts gh does not serve, and paths that are not owner/repo, must
+		-- name the directory rather than assert a slug gh will never act on.
+		vim.fn.system({ "git", "-C", dir, "remote", "remove", "upstream" })
+		vim.fn.system({
+			"git", "-C", dir, "remote", "set-url", "origin",
+			"git@my-work-alias:octo/thing.git",
+		})
+		assert_equals(gh.repo_label(), vim.fn.getcwd(), "an ssh alias is not a GitHub host")
+		vim.fn.system({
+			"git", "-C", dir, "remote", "set-url", "origin",
+			"git@gitlab.com:grp/sub/proj.git",
+		})
+		assert_equals(gh.repo_label(), vim.fn.getcwd(), "a nested group is not owner/repo")
 	end)
 	vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
 	vim.fn.delete(dir, "rf")
