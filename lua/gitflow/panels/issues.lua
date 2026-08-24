@@ -1482,7 +1482,8 @@ function M.close_under_cursor()
 
 	local _, choice = input.confirm(
 		("Close issue #%s as:"):format(tostring(number)),
-		{ choices = { "&Completed", "&Not planned", "&Cancel" }, default_choice = 3 }
+		-- Distinct accelerators: "&Cancel" would collide with "&Completed".
+		{ choices = { "&Completed", "&Not planned", "Cance&l" }, default_choice = 3 }
 	)
 	if choice ~= 1 and choice ~= 2 then
 		return

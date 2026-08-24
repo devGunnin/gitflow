@@ -106,7 +106,11 @@ local P = panel.new({
 		{ key = "E", desc = "edit", run = function()
 			M.edit_under_cursor()
 		end },
-		{ key = "m", desc = "merge", destructive = true, run = function()
+		-- `m` is what the PR panel is FOR, so it is essential rather than
+		-- destructive: the base drops destructive hints first, and a cramped
+		-- bar must not advertise `x close` while hiding merge. The two
+		-- irreversible *variants* below carry the destructive tag instead.
+		{ key = "m", desc = "merge", essential = true, run = function()
 			M.merge_under_cursor()
 		end },
 		{ key = "D", desc = "merge+del branch", destructive = true, run = function()
