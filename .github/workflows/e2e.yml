@@ -54,14 +54,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Every scripts/test_*.lua runs automatically — a hardcoded allowlist
-          # here let two scripts rot out of CI silently before (#403, #416).
-          # These two are dofile'd helper libraries, not standalone tests: run
-          # alone they do nothing (no assertions, exit 0), so they're excluded
-          # explicitly rather than mistaken for passing coverage.
+          # here let four real test scripts (test_assign, test_blame,
+          # test_reflog, test_revert) rot out of CI silently before (#403,
+          # #416). The two below are dofile'd helper libraries, not
+          # standalone tests: run alone they do nothing (no assertions, exit
+          # 0), so they stay excluded explicitly rather than being mistaken
+          # for passing coverage.
           exclude=(
             scripts/test_compose_form.lua
             scripts/test_real_git.lua
           )
+          # test_blame.lua: panels/blame.lua's async refresh has a
+          # documented ~1/12 flake on Neovim 0.11.x (.dm-knowledge/
+          # gf-dead-tests.md) that we can't root-cause here without an
+          # 0.11.x runtime to reproduce against. Give it — and only it — a
+          # bounded retry rather than a silent exclude or a weakened assert.
+          retry_scripts=(scripts/test_blame.lua)
           exit_code=0
           for t in scripts/test_*.lua; do
             skip=0
@@ -74,9 +82,26 @@ jobs:
             if [ "$skip" = "1" ]; then
               continue
             fi
+            max_attempts=1
+            for r in "${retry_scripts[@]}"; do
+              if [ "$t" = "$r" ]; then
+                max_attempts=2
+                break
+              fi
+            done
             echo ""
             echo "::group::$(basename "$t")"
-            if nvim --headless -u NONE -l "$t" 2>&1; then
+            attempt=1
+            passed=0
+            while [ "$attempt" -le "$max_attempts" ]; do
+              if nvim --headless -u NONE -l "$t" 2>&1; then
+                passed=1
+                break
+              fi
+              echo "::warning::attempt $attempt/$max_attempts failed: $t"
+              attempt=$((attempt + 1))
+            done
+            if [ "$passed" = "1" ]; then
               echo "::endgroup::"
             else
               echo "::endgroup::"
