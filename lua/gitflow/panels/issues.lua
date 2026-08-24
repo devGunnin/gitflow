@@ -1,8 +1,7 @@
-local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local form = require("gitflow.ui.form")
 local gh_issues = require("gitflow.gh.issues")
 local gh_labels = require("gitflow.gh.labels")
@@ -14,7 +13,6 @@ local derive = require("gitflow.issues.derive")
 local views_store = require("gitflow.issues.views")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local highlights = require("gitflow.highlights")
 
 ---@class GitflowIssuePanelState
 ---@field bufnr integer|nil
@@ -32,21 +30,12 @@ local highlights = require("gitflow.highlights")
 ---@field active_issue_number integer|nil
 
 local M = {}
-local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
-local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
-local ISSUES_FLOAT_FOOTER =
-	" <CR> view · c create · C comment · E edit · x close · L labels"
-	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · G group · <Tab> fold group · o/O/D views · B branch"
-	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
 
 ---@type GitflowIssuePanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	fetch = { state = "all", limit = DEFAULT_FETCH_LIMIT },
 	cache = nil,
@@ -60,161 +49,101 @@ M.state = {
 	active_issue_number = nil,
 }
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("issues", {
-			filetype = "markdown",
-			lines = components.loading_lines("Loading issues…"),
-		})
-		M.state.bufnr = bufnr
-	end
+-- Forward-declared: the "b" (back) keymap below closes over it before its
+-- definition later in the file.
+local render_derived
 
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "issues",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = ISSUES_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and ISSUES_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "issues",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_set_option_value(
-			"cursorline", true, { win = M.state.winid }
-		)
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.view_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "c", function()
-		M.create_interactive()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "C", function()
-		M.comment_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "E", function()
-		M.edit_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "x", function()
-		M.close_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "L", function()
-		M.edit_labels_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "A", function()
-		M.edit_assignees_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "f", function()
-		M.open_filter_menu()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "X", function()
-		M.clear_filters()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "s", function()
-		M.cycle_sort()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "S", function()
-		M.toggle_sort_direction()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "G", function()
-		M.cycle_group_by()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "<Tab>", function()
-		M.toggle_group_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	-- o/O (not v/V): v/V are vim's visual/visual-line mode, needed to
-	-- highlight and yank panel text (#428).
-	vim.keymap.set("n", "o", function()
-		M.switch_view()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "O", function()
-		M.save_view()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "D", function()
-		M.delete_view()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "B", function()
-		M.create_branch_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		if M.state.mode == "view" and M.state.active_issue_number then
-			M.open_view(M.state.active_issue_number)
-			return
-		end
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "b", function()
-		if M.state.mode == "view" then
-			M.state.mode = "list"
-			M.rerender()
-		end
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
----@param value string|nil
----@return string
-local function maybe_text(value)
-	local text = vim.trim(tostring(value or ""))
-	if text == "" then
-		return "-"
-	end
-	return text
-end
+local P = panel.new({
+	name = "issues",
+	title = "Gitflow Issues",
+	filetype = "markdown",
+	loading = "Loading issues…",
+	state = M.state,
+	entry_maps = { "line_entries", "line_groups" },
+	keymaps = {
+		{ key = "<CR>", desc = "view", views = { "list" }, essential = true,
+			run = function()
+				M.view_under_cursor()
+			end },
+		{ key = "c", desc = "create", views = { "list" }, run = function()
+			M.create_interactive()
+		end },
+		{ key = "C", desc = "comment", run = function()
+			M.comment_under_cursor()
+		end },
+		{ key = "E", desc = "edit", run = function()
+			M.edit_under_cursor()
+		end },
+		{ key = "x", desc = "close", run = function()
+			M.close_under_cursor()
+		end },
+		{ key = "L", desc = "labels", run = function()
+			M.edit_labels_under_cursor()
+		end },
+		{ key = "A", desc = "assign", run = function()
+			M.edit_assignees_under_cursor()
+		end },
+		{ key = "f", desc = "filter", views = { "list" }, run = function()
+			M.open_filter_menu()
+		end },
+		{ key = "X", desc = "clear", views = { "list" }, run = function()
+			M.clear_filters()
+		end },
+		{ key = "s", desc = "sort", views = { "list" }, run = function()
+			M.cycle_sort()
+		end },
+		{ key = "S", desc = "sort dir", views = { "list" }, run = function()
+			M.toggle_sort_direction()
+		end },
+		{ key = "G", desc = "group", views = { "list" }, run = function()
+			M.cycle_group_by()
+		end },
+		{ key = "<Tab>", desc = "fold group", views = { "list" }, run = function()
+			M.toggle_group_under_cursor()
+		end },
+		-- o/O (not v/V): v/V are vim's visual/visual-line mode, needed to
+		-- highlight and yank panel text (#428).
+		{ key = "o/O/D", keys = { "o", "O", "D" }, desc = "views",
+			views = { "list" }, run = function(key)
+				if key == "o" then
+					M.switch_view()
+				elseif key == "O" then
+					M.save_view()
+				else
+					M.delete_view()
+				end
+			end },
+		{ key = "B", desc = "branch", views = { "list" }, run = function()
+			M.create_branch_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			if M.state.mode == "view" and M.state.active_issue_number then
+				M.open_view(M.state.active_issue_number)
+				return
+			end
+			M.refresh()
+		end },
+		{ key = "b", desc = "back", views = { "view" }, run = function()
+			if M.state.mode ~= "view" then
+				return
+			end
+			-- Instant paint from cache (if any), then reconcile in the
+			-- background — same cached-first-paint contract as M.open.
+			if M.state.cache then
+				render_derived()
+			end
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@param issue table
 ---@return string
 local function issue_state(issue)
-	local state = maybe_text(issue.state):lower()
+	local state = components.maybe_text(issue.state):lower()
 	if state == "open" then
 		return "open"
 	end
@@ -231,28 +160,6 @@ local function issue_highlight_group(state)
 		return "GitflowIssueOpen"
 	end
 	return "GitflowIssueClosed"
-end
-
----@param issue table
----@return string
-local function join_label_names(issue)
-	local labels = issue.labels or {}
-	if type(labels) ~= "table" or #labels == 0 then
-		return "-"
-	end
-
-	local names = {}
-	for _, label in ipairs(labels) do
-		if type(label) == "table" and label.name then
-			names[#names + 1] = label.name
-		elseif type(label) == "string" then
-			names[#names + 1] = label
-		end
-	end
-	if #names == 0 then
-		return "-"
-	end
-	return table.concat(names, ", ")
 end
 
 ---@param issue table
@@ -296,91 +203,34 @@ local function split_lines(text)
 	return vim.split(text, "\n", { plain = true, trimempty = false })
 end
 
----Build colored chip chunks for an issue's labels.
----@param issue table
----@return table[]
-local function label_chunks(issue)
-	local labels = issue.labels or {}
-	if type(labels) ~= "table" or #labels == 0 then
-		return { { "\u{2014}", "GitflowMeta" } }
-	end
-	local chunks = {}
-	for _, label in ipairs(labels) do
-		local name = type(label) == "table" and label.name
-			or (type(label) == "string" and label or nil)
-		if name then
-			if #chunks > 0 then
-				chunks[#chunks + 1] = { " ", "GitflowMeta" }
-			end
-			local color = type(label) == "table" and label.color
-			local group = color and highlights.label_color_group(color)
-				or "GitflowChip"
-			chunks[#chunks + 1] = { name, group }
-		end
-	end
-	if #chunks == 0 then
-		return { { "\u{2014}", "GitflowMeta" } }
-	end
-	return chunks
-end
-
----Push a section header line with a thin underline.
----@param B GitflowRenderBuilder
----@param icon string
----@param title string
----@return integer  the header line number
-local function section_header(B, icon, title)
-	return components.section(B, icon, title)
-end
-
----@param B GitflowRenderBuilder
----@param render_opts table
-local function push_header(B, title, render_opts)
-	components.header(B, title, render_opts)
-end
-
-local function render_loading(message)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	push_header(B, "Gitflow Issues", render_opts)
-	B:blank()
-	components.loading(B, message)
-	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
-	M.state.line_entries = {}
-	M.state.line_groups = {}
-end
-
 ---Summary bar: the rendered count plus every active filter.
 ---@param count integer
 ---@return table[]
 local function summary_chunks(count)
 	local chunks = {
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("github", "issue_open") .. "  ", "GitflowSectionIcon" },
 		{
 			("%d issue%s"):format(count, count == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     state ", "GitflowMetaKey" },
-		{ maybe_text(M.state.filters.state), "GitflowMeta" },
+		{ components.separators.field .. "state ", "GitflowMetaKey" },
+		{ components.maybe_text(M.state.filters.state), "GitflowMeta" },
 	}
 	for _, key in ipairs({ "label", "assignee", "milestone" }) do
 		local value = M.state.filters[key]
 		if value and vim.trim(tostring(value)) ~= "" then
-			chunks[#chunks + 1] = { ("   %s "):format(key), "GitflowMetaKey" }
-			chunks[#chunks + 1] = { maybe_text(value), "GitflowMeta" }
+			chunks[#chunks + 1] = { components.separators.field .. key .. " ", "GitflowMetaKey" }
+			chunks[#chunks + 1] = { components.maybe_text(value), "GitflowMeta" }
 		end
 	end
-	chunks[#chunks + 1] = { "   sort ", "GitflowMetaKey" }
+	chunks[#chunks + 1] = { components.separators.field .. "sort ", "GitflowMetaKey" }
 	chunks[#chunks + 1] = {
 		("%s %s"):format(M.state.sort.key, M.state.sort.direction),
 		"GitflowMeta",
 	}
 	if M.state.group_by ~= "none" then
-		chunks[#chunks + 1] = { "   group ", "GitflowMetaKey" }
+		chunks[#chunks + 1] = { components.separators.field .. "group ", "GitflowMetaKey" }
 		chunks[#chunks + 1] = { M.state.group_by, "GitflowMeta" }
 	end
 	return chunks
@@ -395,20 +245,20 @@ local function push_issue_card(B, issue, width, line_entries)
 	local number = tostring(issue.number or "?")
 	local state = issue_state(issue)
 	local state_icon = icons.get("github", "issue_" .. state)
-	local title = maybe_text(issue.title)
-	local time = ui_render.relative_time(issue.updatedAt)
+	local title = components.maybe_text(issue.title)
+	local time = components.relative_time(issue.updatedAt)
 	local left = (" %s  #%s  "):format(state_icon, number)
 	local left_w = vim.fn.strdisplaywidth(left)
 	local time_w = vim.fn.strdisplaywidth(time)
 	local title_max = math.max(8, width - left_w - time_w - 2)
-	title = ui_render.truncate(title, title_max)
+	title = components.truncate(title, title_max)
 	local gap = math.max(
 		2, width - left_w - vim.fn.strdisplaywidth(title) - time_w
 	)
 	local title_group = state == "closed"
 		and "GitflowCardTitleDim" or "GitflowCardTitle"
 	local title_line = B:push({
-		{ " ", nil },
+		{ components.spacing.edge, nil },
 		{ state_icon .. "  ", issue_highlight_group(state) },
 		{ "#" .. number, "GitflowNumber" },
 		{ "  ", nil },
@@ -418,23 +268,23 @@ local function push_issue_card(B, issue, width, line_entries)
 	})
 
 	local meta = {
-		{ "     ", nil },
+		{ components.spacing.gutter .. components.spacing.indent, nil },
 		{ icons.get("ui", "author") .. " ", "GitflowMeta" },
 		{
-			issue.author and maybe_text(issue.author.login) or "\u{2014}",
+			issue.author and components.maybe_text(issue.author.login) or "\u{2014}",
 			"GitflowAuthor",
 		},
-		{ "    labels: ", "GitflowMetaKey" },
+		{ components.separators.field .. "labels: ", "GitflowMetaKey" },
 	}
-	for _, chunk in ipairs(label_chunks(issue)) do
+	for _, chunk in ipairs(components.label_chunks(issue.labels)) do
 		meta[#meta + 1] = chunk
 	end
 	local assignees = join_assignee_names(issue)
 	if assignees ~= "-" then
-		meta[#meta + 1] = { "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
+		meta[#meta + 1] = { components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" }
 		meta[#meta + 1] = { assignees, "GitflowChip" }
 	end
-	meta[#meta + 1] = { "    milestone: ", "GitflowMetaKey" }
+	meta[#meta + 1] = { components.separators.field .. "milestone: ", "GitflowMetaKey" }
 	meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
 	local meta_line = B:push(meta)
 
@@ -463,26 +313,18 @@ end
 ---@param groups table[]
 ---@param total integer
 local function render_list(groups, total)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	push_header(B, "Gitflow Issues", render_opts)
+	local B = P:begin_render()
 
 	B:push(summary_chunks(total))
 	B:blank()
 
 	local line_entries = {}
 	local line_groups = {}
-	local width = ui_render.content_width(render_opts)
+	local width = components.content_width(P:render_opts())
 	local grouped = M.state.group_by ~= "none"
 
 	if total == 0 then
-		B:push({
-			{ "   ", nil },
-			{ "No issues match these filters.", "GitflowMeta" },
-		})
+		components.empty(B, "No issues match these filters.")
 	end
 
 	for _, group in ipairs(groups) do
@@ -491,7 +333,7 @@ local function render_list(groups, total)
 			local heading = ("%s (%d)"):format(group_heading(group.key), #group.issues)
 			local icon = collapsed and icons.get("ui", "chevron")
 				or icons.get("ui", "dot")
-			line_groups[section_header(B, icon, heading)] = group.key
+			line_groups[components.section(B, icon, heading)] = group.key
 		end
 		if not collapsed then
 			for _, issue in ipairs(group.issues) do
@@ -503,15 +345,13 @@ local function render_list(groups, total)
 		end
 	end
 
-	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
-	M.state.line_entries = line_entries
-	M.state.line_groups = line_groups
+	P:push_hints(B, "list")
+
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B) then
+		M.state.line_entries = line_entries
+		M.state.line_groups = line_groups
 	end
 
 	-- Place the cursor on the first card.
@@ -521,117 +361,83 @@ local function render_list(groups, total)
 			first_line = line_no
 		end
 	end
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_set_option_value(
-			"cursorline", true, { win = M.state.winid }
-		)
-		if first_line then
-			pcall(vim.api.nvim_win_set_cursor, M.state.winid, { first_line, 0 })
-		end
+	if first_line and M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { first_line, 0 })
 	end
-end
-
----@param B GitflowRenderBuilder
----@param key string
----@param value_chunks table[]
-local function meta_row(B, key, value_chunks)
-	local chunks = {
-		{ "  ", nil },
-		{ ui_render.pad_right(key, 11), "GitflowMetaKey" },
-	}
-	for _, chunk in ipairs(value_chunks) do
-		chunks[#chunks + 1] = chunk
-	end
-	return B:push(chunks)
 end
 
 ---@param issue table
 local function render_view(issue)
 	local view_state = issue_state(issue)
 	local view_icon = icons.get("github", "issue_" .. view_state)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	push_header(
-		B,
-		("Issue #%s: %s"):format(
-			maybe_text(issue.number), maybe_text(issue.title)
-		),
-		render_opts
-	)
+	local B = P:begin_render(("Issue #%s: %s"):format(
+		components.maybe_text(issue.number), components.maybe_text(issue.title)
+	))
 	B:blank()
 
-	meta_row(B, "Title:", { { maybe_text(issue.title), "GitflowCardTitle" } })
-	meta_row(B, "State:", {
+	components.meta_row(B, "Title:", { { components.maybe_text(issue.title), "GitflowCardTitle" } })
+	components.meta_row(B, "State:", {
 		{ view_icon .. " " .. view_state, issue_highlight_group(view_state) },
 	})
-	meta_row(B, "Author:", {
-		{ issue.author and maybe_text(issue.author.login) or "\u{2014}", "GitflowAuthor" },
+	components.meta_row(B, "Author:", {
+		{ issue.author and components.maybe_text(issue.author.login) or "\u{2014}", "GitflowAuthor" },
 	})
-	meta_row(B, "Labels:", label_chunks(issue))
-	meta_row(B, "Assignees:", {
+	components.meta_row(B, "Labels:", components.label_chunks(issue.labels))
+	components.meta_row(B, "Assignees:", {
 		{ join_assignee_names(issue), "GitflowChip" },
 	})
-	meta_row(B, "Milestone:", {
+	components.meta_row(B, "Milestone:", {
 		{ milestone_text(issue), "GitflowChip" },
 	})
 	B:blank()
 
-	section_header(B, icons.get("ui", "comment"), "Body")
+	components.section(B, icons.get("ui", "comment"), "Body")
 	local body_lines = split_lines(tostring(issue.body or ""))
 	if #body_lines == 0 then
-		B:raw("   (no description)", "GitflowMeta")
+		components.empty(B, "(no description)")
 	else
 		for _, body_line in ipairs(body_lines) do
-			B:raw("   " .. body_line)
+			B:raw(components.spacing.indent .. body_line)
 		end
 	end
 	B:blank()
 
 	local comments = issue.comments or {}
 	local count = type(comments) == "table" and #comments or 0
-	section_header(B, icons.get("ui", "comment"), ("Comments (%d)"):format(count))
+	components.section(B, icons.get("ui", "comment"), ("Comments (%d)"):format(count))
 	if count == 0 then
-		B:raw("   (none)", "GitflowMeta")
+		components.empty(B, "(none)")
 	else
 		for _, comment in ipairs(comments) do
 			local author = comment.author
-				and maybe_text(comment.author.login) or "unknown"
+				and components.maybe_text(comment.author.login) or "unknown"
 			B:push({
-				{ "   ", nil },
+				{ components.spacing.indent, nil },
 				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
 				{ author .. ":", "GitflowAuthor" },
 			})
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
-				B:raw("     (empty)", "GitflowMeta")
+				components.empty(B, "(empty)")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					B:raw("     " .. comment_line)
+					B:raw(components.spacing.indent .. components.spacing.gutter .. comment_line)
 				end
 			end
 			B:blank()
 		end
 	end
 
-	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
-	M.state.line_entries = {}
-	M.state.line_groups = {}
+	P:push_hints(B, "view")
+
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
-
+	P:paint(B)
+	M.state.line_entries = {}
+	M.state.line_groups = {}
+	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_set_option_value(
-			"cursorline", false, { win = M.state.winid }
-		)
 		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { 1, 0 })
-	end
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
 	end
 end
 
@@ -646,7 +452,7 @@ local function entry_under_cursor()
 end
 
 ---Run the full derivation — filter, sort, group — and render it.
-local function render_derived()
+render_derived = function()
 	local issues = derive.apply(M.state.cache or {}, M.state.filters, M.state.sort)
 	render_list(derive.group(issues, M.state.group_by), #issues)
 end
@@ -675,9 +481,14 @@ end
 function M.open(cfg, filters)
 	M.state.cfg = cfg
 	set_query(filters or {})
-	M.state.cache = nil
 
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
+	-- Instant paint from what we already have (if any), then reconcile below.
+	if M.state.cache then
+		render_derived()
+	end
 	M.refresh()
 end
 
@@ -697,11 +508,23 @@ function M.refresh()
 		return
 	end
 
-	render_loading("Loading issues…")
+	local request_id = P:next_request()
+	if not M.state.cache then
+		P:render_loading("Loading issues…")
+	end
 	gh_issues.list(M.state.fetch, {}, function(err, issues)
+		if not P:is_active(request_id) then
+			return
+		end
 		if err then
-			render_loading("Failed to load issues")
 			utils.notify(err, vim.log.levels.ERROR)
+			if not M.state.cache then
+				P:render_error("Failed to load issues", {
+					detail = err,
+					hint = "r retries",
+					view = "list",
+				})
+			end
 			return
 		end
 		M.state.cache = issues or {}
@@ -718,13 +541,23 @@ function M.open_view(number, cfg)
 	if not M.state.cfg then
 		return
 	end
-	ensure_window(M.state.cfg)
+	if not P:ensure_window(M.state.cfg) then
+		return
+	end
 
-	render_loading(("Loading issue #%s…"):format(tostring(number)))
+	local request_id = P:next_request()
+	P:render_loading(("Loading issue #%s…"):format(tostring(number)))
 	gh_issues.view(number, {}, function(err, issue)
+		if not P:is_active(request_id) then
+			return
+		end
 		if err then
-			render_loading("Failed to load issue")
 			utils.notify(err, vim.log.levels.ERROR)
+			P:render_error("Failed to load issue", {
+				detail = err,
+				hint = "b returns to the list",
+				view = "view",
+			})
 			return
 		end
 		render_view(issue or {})
@@ -913,7 +746,7 @@ function M.suggested_branch_name(issue)
 	local number = vim.trim(tostring(issue.number or ""))
 	assert(number ~= "", "suggested_branch_name: issue must have a number")
 
-	local slug = maybe_text(issue.title):lower()
+	local slug = components.maybe_text(issue.title):lower()
 	slug = (slug:gsub("[^%w]+", "-"))
 	slug = (slug:gsub("^%-+", ""):gsub("%-+$", ""))
 	if #slug > MAX_BRANCH_SLUG then
@@ -1286,7 +1119,7 @@ function M.create_interactive()
 		end)
 	end
 
-	gh_labels.list({}, function(err, labels)
+	gh_labels.list({ limit = 1000 }, {}, function(err, labels)
 		if err then
 			utils.notify(
 				("Failed to load labels: %s"):format(err),
@@ -1619,20 +1452,7 @@ function M.edit_assignees_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("issues")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("issues")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.line_groups = {}
 	M.state.mode = "list"
@@ -1641,7 +1461,7 @@ end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

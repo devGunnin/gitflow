@@ -68,16 +68,26 @@ local function normalize_color(color)
 	return value:lower()
 end
 
+---@param params { limit?: integer }|nil
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, labels: table[]|nil, result: GitflowGitResult)
-function M.list(opts, cb)
+function M.list(params, opts, cb)
 	local ok, message = gh.ensure_prerequisites()
 	if not ok then
 		cb(message, nil, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
 		return
 	end
 
-	gh.json({ "label", "list", "--json", LABEL_FIELDS }, opts, function(err, data, result)
+	local options = params or {}
+	local args = { "label", "list", "--json", LABEL_FIELDS }
+	-- `gh label list` defaults to 30; without an explicit limit a repo with
+	-- more labels silently loses the rest.
+	if options.limit and tonumber(options.limit) then
+		args[#args + 1] = "--limit"
+		args[#args + 1] = tostring(options.limit)
+	end
+
+	gh.json(args, opts, function(err, data, result)
 		if err then
 			cb(err, nil, result)
 			return
