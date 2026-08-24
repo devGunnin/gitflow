@@ -175,6 +175,14 @@ inline_blame ~
     delay           number      200             Debounce (ms) before blaming
     date_format     string      "%Y-%m-%d"      os.date() format for the date
 
+                                                    *gitflow-config-actions*
+actions ~
+
+    Option              Type        Default     Description ~
+    watch_interval      number      10000       Poll interval (ms) for the
+                                                 actions panel's live-watch
+                                                 (`w`); minimum 1000
+
                                                   *gitflow-config-validation*
 validation ~
 
