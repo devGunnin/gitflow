@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local form = require("gitflow.ui.form")
 local gh_issues = require("gitflow.gh.issues")
 local gh_labels = require("gitflow.gh.labels")
@@ -65,7 +66,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("issues", {
 			filetype = "markdown",
-			lines = { "Loading issues..." },
+			lines = components.loading_lines("Loading issues…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -329,24 +330,13 @@ end
 ---@param title string
 ---@return integer  the header line number
 local function section_header(B, icon, title)
-	local line_no = B:push({
-		{ " ", nil },
-		{ icon .. "  ", "GitflowSectionIcon" },
-		{ title, "GitflowSectionTitle" },
-	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
-		"GitflowSeparator"
-	)
-	return line_no
+	return components.section(B, icon, title)
 end
 
 ---@param B GitflowRenderBuilder
 ---@param render_opts table
 local function push_header(B, title, render_opts)
-	for _, line in ipairs(ui_render.panel_header(title, render_opts)) do
-		B:raw(line, ui_render.is_separator(line) and "GitflowSeparator" or "GitflowTitle")
-	end
+	components.header(B, title, render_opts)
 end
 
 local function render_loading(message)
@@ -357,15 +347,10 @@ local function render_loading(message)
 	local B = ui_render.builder()
 	push_header(B, "Gitflow Issues", render_opts)
 	B:blank()
-	B:push({
-		{ "  ", nil },
-		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
-		{ message, "GitflowMeta" },
-	})
-	ui.buffer.update("issues", B.lines)
+	components.loading(B, message)
+	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.line_groups = {}
-	B:apply(M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
 ---Summary bar: the rendered count plus every active filter.
@@ -518,7 +503,7 @@ local function render_list(groups, total)
 		end
 	end
 
-	ui.buffer.update("issues", B.lines)
+	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.line_groups = line_groups
 	M.state.mode = "list"
@@ -528,7 +513,6 @@ local function render_list(groups, total)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ISSUES_HIGHLIGHT_NS)
 
 	-- Place the cursor on the first card.
 	local first_line = nil
@@ -632,7 +616,7 @@ local function render_view(issue)
 		end
 	end
 
-	ui.buffer.update("issues", B.lines)
+	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.line_groups = {}
 	M.state.mode = "view"
@@ -649,7 +633,6 @@ local function render_view(issue)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
 ---@return table|nil
@@ -714,7 +697,7 @@ function M.refresh()
 		return
 	end
 
-	render_loading("Loading issues...")
+	render_loading("Loading issues…")
 	gh_issues.list(M.state.fetch, {}, function(err, issues)
 		if err then
 			render_loading("Failed to load issues")
@@ -737,7 +720,7 @@ function M.open_view(number, cfg)
 	end
 	ensure_window(M.state.cfg)
 
-	render_loading(("Loading issue #%s..."):format(tostring(number)))
+	render_loading(("Loading issue #%s…"):format(tostring(number)))
 	gh_issues.view(number, {}, function(err, issue)
 		if err then
 			render_loading("Failed to load issue")

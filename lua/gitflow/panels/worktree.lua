@@ -184,13 +184,12 @@ local function render_state(paint)
 	components.header(B, "Gitflow Worktrees", render_opts)
 	B:blank()
 	paint(B)
-	ui.buffer.update("worktree", B.lines)
+	B:flush("worktree", M.state.bufnr, WORKTREE_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
 end
 
 local function render_loading()
@@ -348,14 +347,13 @@ local function render(entries)
 
 	components.split_hint_bar(B, render_opts, WORKTREE_HINTS)
 
-	ui.buffer.update("worktree", B.lines)
+	B:flush("worktree", M.state.bufnr, WORKTREE_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

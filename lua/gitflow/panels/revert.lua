@@ -52,7 +52,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("revert", {
 			filetype = "gitflowrevert",
-			lines = { "Loading commits..." },
+			lines = components.loading_lines("Loading commits…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -179,7 +179,7 @@ local function render(entries, merge_base_sha, current_branch)
 		end
 	end
 
-	ui.buffer.update("revert", B.lines)
+	B:flush("revert", M.state.bufnr, REVERT_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.merge_base_sha = merge_base_sha
 
@@ -187,7 +187,6 @@ local function render(entries, merge_base_sha, current_branch)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, REVERT_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

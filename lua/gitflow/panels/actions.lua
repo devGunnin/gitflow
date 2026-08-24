@@ -124,7 +124,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("actions", {
 			filetype = "gitflowactions",
-			lines = { "Loading workflow runs..." },
+			lines = components.loading_lines("Loading workflow runs…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -189,8 +189,9 @@ end
 ---@return string
 local function format_duration_range(started_at, completed_at)
 	if started_at ~= "" and completed_at ~= "" then
-		return ("  (%s → %s)"):format(
+		return ("  (%s %s %s)"):format(
 			started_at:sub(12, 19) or "",
+			ui_render.glyphs.arrow,
 			completed_at:sub(12, 19) or ""
 		)
 	end
@@ -279,14 +280,13 @@ local function render_list(runs, current_branch)
 		end
 	end
 
-	ui.buffer.update("actions", B.lines)
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 
@@ -384,14 +384,13 @@ local function render_detail(run)
 		end
 	end
 
-	ui.buffer.update("actions", B.lines)
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

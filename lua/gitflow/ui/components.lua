@@ -19,6 +19,8 @@ M.content_width = ui_render.content_width
 M.separator = ui_render.separator
 M.is_separator = ui_render.is_separator
 M.is_floating = ui_render.is_floating
+M.spacing = ui_render.spacing
+M.glyphs = ui_render.glyphs
 
 ---@param value any
 ---@return string
@@ -30,34 +32,34 @@ function M.maybe_text(value)
 	return text
 end
 
----Push a panel header (inline title + separator for splits, separator for
----floats) into the builder, styling the title and rule.
+---Push a panel header: an inline title for splits (floats already show it in
+---their frame chrome) followed by the panel rule.
 ---@param B GitflowRenderBuilder
 ---@param title string
 ---@param render_opts table|nil  { winid?, bufnr? }
 function M.header(B, title, render_opts)
-	for _, line in ipairs(ui_render.panel_header(title, render_opts)) do
-		B:raw(
-			line,
-			ui_render.is_separator(line) and "GitflowSeparator" or "GitflowTitle"
-		)
+	if ui_render.wants_inline_title(render_opts) then
+		B:raw(title, "GitflowTitle")
 	end
+	B:raw(ui_render.separator(render_opts), "GitflowSeparator")
 end
 
----Push an icon-led section header with a thin underline.
+---Push an icon-led section header with a thin rule beneath it.
 ---@param B GitflowRenderBuilder
 ---@param icon string
 ---@param title string
-function M.section(B, icon, title)
-	B:push({
-		{ " ", nil },
+---@param opts table|nil  { title_hl = string }  override the title highlight
+---@return integer line_no  the header line
+function M.section(B, icon, title, opts)
+	local edge = ui_render.spacing.edge
+	local line_no = B:push({
+		{ edge, nil },
 		{ (icon ~= "" and icon .. "  " or ""), "GitflowSectionIcon" },
-		{ title, "GitflowSectionTitle" },
+		{ title, (opts and opts.title_hl) or "GitflowSectionTitle" },
 	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
-		"GitflowSeparator"
-	)
+	local width = math.max(8, vim.fn.strdisplaywidth(title) + 4)
+	B:raw(edge .. string.rep(ui_render.glyphs.rule, width), "GitflowSeparator")
+	return line_no
 end
 
 ---Push a single-line summary/header bar: ` <icon>  <Title>   key value …`.
@@ -68,7 +70,7 @@ end
 ---@return integer line_no
 function M.summary(B, icon, title, extras)
 	local chunks = {
-		{ "  ", nil },
+		{ ui_render.spacing.gutter, nil },
 		{ (icon ~= "" and icon .. "  " or ""), "GitflowSectionIcon" },
 		{ title, "GitflowSectionTitle" },
 	}
@@ -76,7 +78,8 @@ function M.summary(B, icon, title, extras)
 		local key = extra.key or extra[1]
 		local value = extra.value or extra[2]
 		if key then
-			chunks[#chunks + 1] = { "     " .. key .. " ", "GitflowMetaKey" }
+			chunks[#chunks + 1] =
+				{ ui_render.separators.field .. key .. " ", "GitflowMetaKey" }
 		end
 		if value ~= nil then
 			chunks[#chunks + 1] = { tostring(value), "GitflowMeta" }
@@ -94,7 +97,7 @@ end
 function M.meta_row(B, key, value_chunks, opts)
 	local width = (opts and opts.width) or 12
 	local chunks = {
-		{ "  ", nil },
+		{ ui_render.spacing.gutter, nil },
 		{ ui_render.pad_right(key, width), "GitflowMetaKey" },
 	}
 	for _, chunk in ipairs(value_chunks) do
@@ -143,20 +146,21 @@ end
 ---@return integer line_no
 function M.empty(B, text, opts)
 	opts = opts or {}
+	local gutter = ui_render.spacing.gutter
 	if opts.icon == nil and opts.hint == nil then
-		return B:push({ { "   ", nil }, { text, "GitflowMeta" } })
+		return B:push({ { gutter, nil }, { text, "GitflowMeta" } })
 	end
 	local icon = opts.icon
 	if icon == nil then
 		icon = icons.get("ui", "empty")
 	end
 	local line_no = B:push({
-		{ "   ", nil },
+		{ gutter, nil },
 		{ (icon ~= "" and icon .. "  " or ""), "GitflowEmptyIcon" },
 		{ text, "GitflowEmptyText" },
 	})
 	if opts.hint and opts.hint ~= "" then
-		B:push({ { "   ", nil }, { opts.hint, "GitflowEmptyHint" } })
+		B:push({ { gutter, nil }, { opts.hint, "GitflowEmptyHint" } })
 	end
 	return line_no
 end
@@ -174,7 +178,7 @@ function M.loading(B, label, opts)
 	if icon == nil then
 		icon = icons.get("ui", "loading")
 	end
-	local lead = opts.leading or "  "
+	local lead = opts.leading or ui_render.spacing.gutter
 	local line_no = B:push({
 		{ lead, nil },
 		{ (icon ~= "" and icon .. "  " or ""), "GitflowLoadingIcon" },
@@ -191,7 +195,10 @@ end
 ---@param label string|nil
 ---@return string[]
 function M.loading_lines(label)
-	return { "", "  " .. icons.get("ui", "loading") .. "  " .. (label or "Loading…") }
+	return {
+		ui_render.spacing.gutter
+			.. icons.get("ui", "loading") .. "  " .. (label or "Loading…"),
+	}
 end
 
 ---Push a real in-buffer error state: an error glyph + message, with an optional
@@ -203,21 +210,22 @@ end
 ---@return integer line_no
 function M.error_state(B, message, opts)
 	opts = opts or {}
+	local gutter, indent = ui_render.spacing.gutter, ui_render.spacing.indent
 	local line_no = B:push({
-		{ "  ", nil },
+		{ gutter, nil },
 		{ icons.get("ui", "error") .. "  ", "GitflowStateErrorIcon" },
 		{ message, "GitflowStateError" },
 	})
 	if opts.detail and opts.detail ~= "" then
 		for _, detail_line in ipairs(vim.split(opts.detail, "\n", { plain = true })) do
 			if vim.trim(detail_line) ~= "" then
-				B:push({ { "     ", nil }, { detail_line, "GitflowStateErrorDetail" } })
+				B:push({ { indent, nil }, { detail_line, "GitflowStateErrorDetail" } })
 			end
 		end
 	end
 	if opts.hint and opts.hint ~= "" then
 		B:blank()
-		B:push({ { "  ", nil }, { opts.hint, "GitflowEmptyHint" } })
+		B:push({ { gutter, nil }, { opts.hint, "GitflowEmptyHint" } })
 	end
 	return line_no
 end
@@ -231,10 +239,10 @@ end
 ---@return integer line_no
 function M.hint_group(B, label, pairs)
 	B:push({
-		{ "  ", nil },
+		{ ui_render.spacing.gutter, nil },
 		{ label, "GitflowHintGroupLabel" },
 	})
-	return B:push(ui_render.hint_chunks(pairs, { leading = "    " }))
+	return B:push(ui_render.hint_chunks(pairs, { leading = ui_render.spacing.indent }))
 end
 
 ---Push a styled inline key-hint bar.
@@ -244,7 +252,7 @@ end
 ---@return integer line_no
 function M.hint_bar(B, pairs, opts)
 	return B:push(ui_render.hint_chunks(pairs, vim.tbl_extend(
-		"force", { leading = " " }, opts or {}
+		"force", { leading = ui_render.spacing.edge }, opts or {}
 	)))
 end
 

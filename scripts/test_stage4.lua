@@ -377,7 +377,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading issues...") ~= nil
+	return find_line(lines, "Loading issues…") ~= nil
 end, "issue list should show loading indicator", 1000)
 
 wait_until(function()
@@ -406,7 +406,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading issue #1") ~= nil
+	return find_line(lines, "Loading issue #1…") ~= nil
 end, "issue view should show loading indicator", 1000)
 
 wait_until(function()
@@ -613,7 +613,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading pull requests...") ~= nil
+	return find_line(lines, "Loading pull requests…") ~= nil
 end, "pr list should show loading indicator", 1000)
 
 wait_until(function()
@@ -793,7 +793,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading PR #7") ~= nil
+	return find_line(lines, "Loading PR #7…") ~= nil
 end, "pr view should show loading indicator", 1000)
 
 wait_until(function()
@@ -811,7 +811,7 @@ local pr_view_lines = vim.api.nvim_buf_get_lines(pr_view_buf, 0, -1, false)
 
 local comments_header = find_line(pr_view_lines, "Comments")
 assert_true(comments_header ~= nil, "pr view should have Comments section header")
-local comments_divider = find_line(pr_view_lines, "--------", comments_header)
+local comments_divider = find_line(pr_view_lines, ("\u{2500}"):rep(8), comments_header)
 assert_true(comments_divider ~= nil, "pr view should have Comments divider")
 
 local reviewer1_line = find_line(pr_view_lines, "reviewer1:", comments_header)
@@ -879,7 +879,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading labels...") ~= nil
+	return find_line(lines, "Loading labels…") ~= nil
 end, "label list should show loading indicator", 1000)
 
 wait_until(function()

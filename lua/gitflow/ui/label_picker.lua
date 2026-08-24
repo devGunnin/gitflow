@@ -10,6 +10,7 @@ local icons = require("gitflow.icons")
 local M = {}
 
 local PICKER_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_label_picker_hl")
+local PICKER_ACTIVE_NS = vim.api.nvim_create_namespace("gitflow_label_picker_active")
 local SEARCH_AUGROUP = "GitflowLabelPickerSearch"
 
 ---@class GitflowLabelPickerLabel
@@ -247,8 +248,25 @@ local function build_hint()
 	}, { leading = " " })
 end
 
+---Paint the active-line accent. It lives in its own namespace so moving the
+---selection is two extmark calls, not a full re-render of the picker.
 ---@param state table
-local function render(state)
+local function apply_active_line(state)
+	local bufnr = state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	vim.api.nvim_buf_clear_namespace(bufnr, PICKER_ACTIVE_NS, 0, -1)
+	if state.active_line then
+		render.highlight(
+			bufnr, PICKER_ACTIVE_NS, "GitflowFormActiveField",
+			state.active_line - 1, 0, -1
+		)
+	end
+end
+
+---@param state table
+local function render_all(state)
 	local bufnr = state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
@@ -287,12 +305,7 @@ local function render(state)
 	end
 
 	B:apply(bufnr, PICKER_HIGHLIGHT_NS)
-	if state.active_line then
-		pcall(
-			vim.api.nvim_buf_add_highlight, bufnr, PICKER_HIGHLIGHT_NS,
-			"GitflowFormActiveField", state.active_line - 1, 0, -1
-		)
-	end
+	apply_active_line(state)
 
 	if state.winid and vim.api.nvim_win_is_valid(state.winid) and state.active_line then
 		pcall(vim.api.nvim_win_set_cursor, state.winid, { state.active_line, 0 })
@@ -330,13 +343,15 @@ local function render_results_only(state)
 	for line_no, list in pairs(B.spans) do
 		if line_no >= 2 then
 			for _, span in ipairs(list) do
-				pcall(
-					vim.api.nvim_buf_add_highlight, bufnr, PICKER_HIGHLIGHT_NS,
+				render.highlight(
+					bufnr, PICKER_HIGHLIGHT_NS,
 					span[3], line_no - 1, span[1], span[2]
 				)
 			end
 		end
 	end
+
+	apply_active_line(state)
 end
 
 ---@param state table
@@ -368,7 +383,7 @@ local function move_selection(state, delta)
 	state.active_line = lines[next_index]
 
 	pcall(vim.api.nvim_win_set_cursor, state.winid, { state.active_line, 0 })
-	render(state)
+	apply_active_line(state)
 end
 
 ---@param state table
@@ -389,7 +404,7 @@ local function toggle_current(state)
 	end
 
 	state.selected[name] = not state.selected[name] or nil
-	render(state)
+	render_all(state)
 end
 
 ---@param state table
@@ -428,7 +443,7 @@ local function start_search(state)
 		state.searching = false
 		pcall(vim.api.nvim_del_augroup_by_name, SEARCH_AUGROUP)
 		vim.cmd("stopinsert")
-		render(state)
+		render_all(state)
 	end
 
 	vim.keymap.set("i", "<CR>", leave, { buffer = state.bufnr, silent = true })
@@ -531,7 +546,7 @@ function M.open(opts)
 	end
 	vim.api.nvim_set_option_value("cursorline", false, { win = state.winid })
 
-	render(state)
+	render_all(state)
 
 	local function cancel_from_keymap()
 		cancel(false)
@@ -551,7 +566,7 @@ function M.open(opts)
 	map("i", function() start_search(state) end)
 	map("c", function()
 		state.query = ""
-		render(state)
+		render_all(state)
 	end)
 	map("<CR>", confirm)
 	map("q", cancel_from_keymap)

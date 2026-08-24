@@ -39,7 +39,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("stash", {
 			filetype = "gitflowstash",
-			lines = { "Loading stash list..." },
+			lines = components.loading_lines("Loading stash list…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -148,14 +148,13 @@ local function render(entries, current_branch)
 	B:blank()
 	components.branch_footer(B, current_branch)
 
-	ui.buffer.update("stash", B.lines)
+	B:flush("stash", M.state.bufnr, STASH_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, STASH_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

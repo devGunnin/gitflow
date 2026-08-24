@@ -110,7 +110,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("cherry_pick", {
 			filetype = "gitflowcherrypick",
-			lines = { "Loading branches..." },
+			lines = components.loading_lines("Loading branches…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -208,15 +208,9 @@ local function render_commits(commits, source_branch, current_branch)
 	-- Source section header (HARD INVARIANT: a header line containing
 	-- "Source: <branch>" highlighted GitflowCherryPickBranch, then a separator).
 	local source_label = ("Source: %s"):format(source_branch)
-	B:push({
-		{ " ", nil },
-		{ icons.get("branch", "remote") .. "  ", "GitflowSectionIcon" },
-		{ source_label, "GitflowCherryPickBranch" },
+	components.section(B, icons.get("branch", "remote"), source_label, {
+		title_hl = "GitflowCherryPickBranch",
 	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(source_label) + 4)),
-		"GitflowSeparator"
-	)
 
 	local line_entries = {}
 	if #commits == 0 then
@@ -248,14 +242,13 @@ local function render_commits(commits, source_branch, current_branch)
 		{ "q", "close" },
 	})
 
-	ui.buffer.update("cherry_pick", B.lines)
+	B:flush("cherry_pick", M.state.bufnr, CP_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, CP_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

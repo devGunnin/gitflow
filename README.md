@@ -78,6 +78,7 @@ require("gitflow").setup({
   },
   ui = {
     default_layout = "split",   -- "split" or "float"
+    separator_width = 0,        -- fixed panel-rule width; 0 adapts to the window
     split = {
       orientation = "vertical", -- "vertical" or "horizontal"
       size = 50,
@@ -323,7 +324,6 @@ require("gitflow").setup({
     GitflowBorder = { fg = "#98C379" },
     GitflowTitle  = { fg = "#98C379", bold = true },
     -- Or switch accent groups to colorscheme links
-    GitflowHeader = { link = "TabLineSel" },
     GitflowFooter = { link = "Comment" },
   },
 })

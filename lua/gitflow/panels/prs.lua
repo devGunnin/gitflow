@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local form = require("gitflow.ui.form")
 local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
@@ -62,7 +63,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("prs", {
 			filetype = "markdown",
-			lines = { "Loading pull requests..." },
+			lines = components.loading_lines("Loading pull requests…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -305,24 +306,14 @@ end
 ---@param icon string
 ---@param title string
 local function section_header(B, icon, title)
-	B:push({
-		{ " ", nil },
-		{ icon .. "  ", "GitflowSectionIcon" },
-		{ title, "GitflowSectionTitle" },
-	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
-		"GitflowSeparator"
-	)
+	components.section(B, icon, title)
 end
 
 ---@param B GitflowRenderBuilder
 ---@param title string
 ---@param render_opts table
 local function push_header(B, title, render_opts)
-	for _, line in ipairs(ui_render.panel_header(title, render_opts)) do
-		B:raw(line, ui_render.is_separator(line) and "GitflowSeparator" or "GitflowTitle")
-	end
+	components.header(B, title, render_opts)
 end
 
 ---@param B GitflowRenderBuilder
@@ -353,19 +344,9 @@ local function render_loading(message)
 	local B = ui_render.builder()
 	push_header(B, "Gitflow Pull Requests", render_opts)
 	B:blank()
-	B:push({
-		{ "  ", nil },
-		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
-		{ message, "GitflowMeta" },
-	})
-	ui.buffer.update("prs", B.lines)
+	components.loading(B, message)
+	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 end
 
 ---@param prs table[]
@@ -429,7 +410,7 @@ local function render_list(prs)
 				{ "     ", nil },
 				{ icons.get("ui", "ref") .. " ", "GitflowMeta" },
 				{ maybe_text(pr.headRefName), "GitflowChip" },
-				{ " \u{2192} ", "GitflowMeta" },
+				{ " " .. ui_render.glyphs.arrow .. " ", "GitflowMeta" },
 				{ maybe_text(pr.baseRefName), "GitflowChip" },
 				{ "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" },
 				{ pr.author and maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
@@ -452,7 +433,7 @@ local function render_list(prs)
 		end
 	end
 
-	ui.buffer.update("prs", B.lines)
+	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
@@ -461,7 +442,6 @@ local function render_list(prs)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 
 	local first_line = nil
 	for line_no in pairs(line_entries) do
@@ -505,7 +485,7 @@ local function render_view(pr, review_comments)
 	})
 	meta_row(B, "Refs:", {
 		{ maybe_text(pr.headRefName), "GitflowChip" },
-		{ " \u{2192} ", "GitflowMeta" },
+		{ " " .. ui_render.glyphs.arrow .. " ", "GitflowMeta" },
 		{ maybe_text(pr.baseRefName), "GitflowChip" },
 	})
 	meta_row(B, "Labels:", label_chunks(pr))
@@ -606,7 +586,7 @@ local function render_view(pr, review_comments)
 		end
 	end
 
-	ui.buffer.update("prs", B.lines)
+	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
@@ -622,7 +602,6 @@ local function render_view(pr, review_comments)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 end
 
 ---@return table|nil
@@ -656,7 +635,7 @@ function M.refresh()
 	end
 
 	next_view_request_id()
-	render_loading("Loading pull requests...")
+	render_loading("Loading pull requests…")
 	gh_prs.list(M.state.filters, {}, function(err, prs)
 		if err then
 			render_loading("Failed to load pull requests")
@@ -679,7 +658,7 @@ function M.open_view(number, cfg)
 	ensure_window(M.state.cfg)
 
 	local request_id = next_view_request_id()
-	render_loading(("Loading PR #%s..."):format(tostring(number)))
+	render_loading(("Loading PR #%s…"):format(tostring(number)))
 	gh_prs.view(number, {}, function(err, pr)
 		if not is_active_view_request(request_id) then
 			return

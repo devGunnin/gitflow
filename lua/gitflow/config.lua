@@ -15,7 +15,7 @@ local utils = require("gitflow.utils")
 
 ---@class GitflowUiConfig
 ---@field default_layout "split"|"float"
----@field separator_width integer|nil
+---@field separator_width integer|nil  fixed rule width; 0 adapts to the window
 ---@field split GitflowSplitConfig
 ---@field float GitflowFloatConfig
 
@@ -117,6 +117,8 @@ function M.defaults()
 		},
 		ui = {
 			default_layout = "float",
+			-- Fixed width for panel rules; 0 adapts to the window.
+			separator_width = 0,
 			split = {
 				orientation = "vertical",
 				size = 50,
@@ -273,8 +275,13 @@ local function validate_ui(config)
 	end
 
 	if config.ui.separator_width ~= nil then
-		if type(config.ui.separator_width) ~= "number" or config.ui.separator_width < 1 then
-			error("gitflow config error: ui.separator_width must be a positive number", 3)
+		local width = config.ui.separator_width
+		if type(width) ~= "number" or width < 0 or width ~= math.floor(width) then
+			error(
+				"gitflow config error: ui.separator_width must be 0 (adaptive) "
+					.. "or a positive integer",
+				3
+			)
 		end
 	end
 

@@ -9,6 +9,7 @@ local git = require("gitflow.git")
 local inline = require("gitflow.review.inline")
 local icons = require("gitflow.icons")
 local utils = require("gitflow.utils")
+local ui_render = require("gitflow.ui.render")
 
 local M = {}
 
@@ -149,7 +150,7 @@ local function render_file_list()
 
 	vim.api.nvim_buf_clear_namespace(bufnr, LIST_NS, 0, -1)
 	for _, sp in ipairs(spans) do
-		pcall(vim.api.nvim_buf_add_highlight, bufnr, LIST_NS, sp.hl, sp.line, sp.col_start, sp.col_end)
+		ui_render.highlight(bufnr, LIST_NS, sp.hl, sp.line, sp.col_start, sp.col_end)
 	end
 end
 
@@ -208,7 +209,7 @@ local function render_diff(file)
 
 	vim.api.nvim_buf_clear_namespace(bufnr, DIFF_NS, 0, -1)
 	for _, sp in ipairs(spans) do
-		pcall(vim.api.nvim_buf_add_highlight, bufnr, DIFF_NS, sp.hl, sp.line, 0, -1)
+		ui_render.highlight(bufnr, DIFF_NS, sp.hl, sp.line, 0, -1)
 	end
 	-- old/new line numbers as dim virtual text on the left.
 	for line_idx, nums in pairs(linenr) do

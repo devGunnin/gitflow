@@ -120,6 +120,8 @@ ui ~
 
     Option              Type        Default     Description ~
     default_layout      string      "split"     "split" or "float"
+    separator_width     number      0           Panel content width, clamped to
+                                                 the window; 0 = adapt to window
     split.orientation   string      "vertical"  "vertical" or "horizontal"
     split.size          number      50          Column/row count
     float.width         number      0.8         Fraction or absolute columns
@@ -539,7 +541,7 @@ Palette values are defined in `lua/gitflow/highlights.lua` and can be
 referenced from user highlight overrides:
 
     Name                Dark         Light        Used by ~
-    accent_primary      #56B6C2      #0E7490      Border, Title, Header, Footer, icons
+    accent_primary      #56B6C2      #0E7490      Border, Title, Footer, icons
     accent_secondary    #DCA561      #B5651D      Palette header bar background
     separator_fg        #3E4452      #C8CCD4      Separator lines
     backdrop_bg         #000000      #E8E8E8      Palette backdrop overlay
@@ -554,7 +556,6 @@ group individually: >lua
       highlights = {
         GitflowBorder  = { fg = "#98C379" },
         GitflowTitle   = { fg = "#98C379", bold = true },
-        GitflowHeader  = { fg = "#98C379", bold = true },
         GitflowFooter  = { fg = "#98C379", italic = true },
       },
     })
@@ -614,13 +615,17 @@ affordance: `GitflowLoadingText` styles in-progress labels, the
 `GitflowStateError*` family styles in-buffer error blocks, and the
 `GitflowEmpty*` family styles empty-state placeholders and their action hints.
 
+The two accent tokens (`accent_primary`, `accent_secondary`) are taken from
+the colorscheme's `Special` and `Identifier` foregrounds when it defines them,
+so gitflow inherits your theme instead of stamping its own teal into it. The
+hexes below are the fallback used when it does not.
+
 Accent-colored groups (dark-background defaults shown below; light mode uses
 `PALETTE_LIGHT` values from the table above):
 
     Group                       Default Attrs ~
     GitflowBorder               fg=#56B6C2
     GitflowTitle                fg=#56B6C2, bold
-    GitflowHeader               fg=#56B6C2, bold
     GitflowFooter               fg=#56B6C2, italic
     GitflowSeparator            fg=#3E4452
     GitflowFormLabel            fg=#56B6C2, bold
@@ -643,7 +648,6 @@ colors, override them with link-based definitions: >lua
       highlights = {
         GitflowBorder = { link = "FloatBorder" },
         GitflowTitle  = { link = "Title" },
-        GitflowHeader = { link = "TabLineSel" },
         GitflowFooter = { link = "Comment" },
       },
     })

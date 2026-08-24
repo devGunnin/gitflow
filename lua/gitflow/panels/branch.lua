@@ -93,7 +93,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("branch", {
 			filetype = "gitflowbranch",
-			lines = { "Loading branches..." },
+			lines = components.loading_lines("Loading branches…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -263,7 +263,7 @@ local function render_list(entries)
 	append_section(B, "Local", local_entries, line_entries)
 	append_section(B, "Remote", remote_entries, line_entries)
 
-	ui.buffer.update("branch", B.lines)
+	B:flush("branch", M.state.bufnr, BRANCH_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
@@ -271,7 +271,6 @@ local function render_list(entries)
 		return
 	end
 	clear_graph_highlights(bufnr)
-	B:apply(bufnr, BRANCH_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 
@@ -511,7 +510,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 				local hl_group = ch == GRAPH_NODE
 					and "GitflowGraphNode"
 					or lane_group_for_column(lane_idx)
-				vim.api.nvim_buf_add_highlight(
+				ui_render.highlight(
 					bufnr,
 					GRAPH_HIGHLIGHT_NS,
 					hl_group,
@@ -523,7 +522,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 		end
 
 		if row.hash_start and row.hash_end then
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr,
 				GRAPH_HIGHLIGHT_NS,
 				"GitflowGraphHash",
@@ -534,7 +533,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 		end
 
 		if row.subject_start and row.subject_end then
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr,
 				GRAPH_HIGHLIGHT_NS,
 				"GitflowGraphSubject",
@@ -553,7 +552,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 			else
 				hl_group = lane_group_for_text(badge.text)
 			end
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr,
 				GRAPH_HIGHLIGHT_NS,
 				hl_group,
@@ -575,34 +574,33 @@ local function render_graph(graph_entries, current_branch)
 	}
 
 	local rows, lane_width = build_graph_rows(graph_entries, current_branch)
-	local lines = ui_render.panel_header("Branch Flowchart", render_opts)
-	local column_line = #lines + 1
+	local B = ui_render.builder()
+	components.header(B, "Branch Flowchart", render_opts)
 	local lane_header = pad_graph_text("Flow", lane_width)
-	lines[#lines + 1] = ("  %s  Commit    Message / Branches"):format(lane_header)
-	lines[#lines + 1] = ui_render.separator(render_opts)
+	B:raw(
+		("  %s  Commit    Message / Branches"):format(lane_header),
+		"GitflowTitle"
+	)
+	B:raw(ui_render.separator(render_opts), "GitflowSeparator")
 
-	local first_row_line = #lines + 1
+	local first_row_line = B:count() + 1
 	for _, row in ipairs(rows) do
-		lines[#lines + 1] = row.line
+		B:raw(row.line)
 	end
 	if #rows == 0 then
-		lines[#lines + 1] = ui_render.empty("No commits to visualize")
+		components.empty(B, "No commits to visualize")
 	end
 
-	ui.buffer.update("branch", lines)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		clear_graph_highlights(bufnr)
+	end
+	B:flush("branch", bufnr, BRANCH_HIGHLIGHT_NS)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	clear_graph_highlights(bufnr)
-
-	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {
-		entry_highlights = {
-			[column_line] = "GitflowHeader",
-		},
-	})
 
 	if #rows > 0 then
 		apply_graph_highlights(bufnr, rows, first_row_line)

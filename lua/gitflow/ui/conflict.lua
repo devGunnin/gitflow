@@ -10,9 +10,11 @@
 ---   q save & close
 
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
+local icons = require("gitflow.icons")
 
 ---@class GitflowConflictViewState
 ---@field active boolean
@@ -122,14 +124,16 @@ local function set_winbar(winid)
 	end
 	local short = vim.fn.fnamemodify(M.state.path or "", ":t")
 	local left = #M.state.hunks
-	local status = left == 0 and "all resolved \u{f42e}"
+	local status = left == 0
+		and ("all resolved %s"):format(icons.get("ui", "check"))
 		or ("%d conflict%s left"):format(left, left == 1 and "" or "s")
+	local bullet = "%#GitflowConflictMarker#  " .. ui_render.glyphs.bullet .. "  "
 	local bar = table.concat({
-		"%#GitflowConflictMarker#  \u{f071} ",
+		("%%#GitflowConflictMarker#  %s "):format(icons.get("ui", "warning")),
 		"%#GitflowTitle#" .. short,
-		"%#GitflowConflictMarker#  ·  ",
+		bullet,
 		"%#GitflowHintText#" .. status,
-		"%#GitflowConflictMarker#  ·  ",
+		bullet,
 		"%#GitflowHintKey#co%#GitflowHintText# ours  ",
 		"%#GitflowHintKey#ct%#GitflowHintText# theirs  ",
 		"%#GitflowHintKey#cb%#GitflowHintText# both  ",
@@ -153,7 +157,7 @@ local function apply_highlights()
 	local line_count = vim.api.nvim_buf_line_count(bufnr)
 	local function hl(line, group)
 		if line >= 1 and line <= line_count then
-			pcall(vim.api.nvim_buf_add_highlight, bufnr, ns, group, line - 1, 0, -1)
+			ui_render.highlight(bufnr, ns, group, line - 1, 0, -1)
 		end
 	end
 	local function label(line, text, group)

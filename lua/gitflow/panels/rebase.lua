@@ -160,7 +160,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("rebase", {
 			filetype = "gitflowrebase",
-			lines = { "Loading branches..." },
+			lines = components.loading_lines("Loading branches…"),
 		})
 		M.state.bufnr = bufnr
 
@@ -400,14 +400,13 @@ render_todo = function()
 
 	components.split_hint_bar(B, render_opts, REBASE_HINTS)
 
-	ui.buffer.update("rebase", B.lines)
+	B:flush("rebase", M.state.bufnr, REBASE_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 	refresh_float_footer()
 end
@@ -483,14 +482,13 @@ render_normal = function()
 
 	components.split_hint_bar(B, render_opts, NORMAL_HINTS)
 
-	ui.buffer.update("rebase", B.lines)
+	B:flush("rebase", M.state.bufnr, REBASE_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 	refresh_float_footer()
 end
@@ -729,14 +727,13 @@ local function render_base_picker(branches)
 
 	components.split_hint_bar(B, render_opts, BASE_HINTS)
 
-	ui.buffer.update("rebase", B.lines)
+	B:flush("rebase", M.state.bufnr, REBASE_HIGHLIGHT_NS)
 	M.state.base_line_branches = base_line_branches
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, REBASE_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 	refresh_float_footer()
 end

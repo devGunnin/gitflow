@@ -475,24 +475,43 @@ assert_equals(
 	"active_line should be 3 (first item after header + separator)"
 )
 
-local hl_ns = vim.api.nvim_create_namespace("gitflow_list_picker_hl")
-local hl_marks = vim.api.nvim_buf_get_extmarks(
-	hl_state.bufnr, hl_ns,
-	{ hl_state.active_line - 1, 0 },
-	{ hl_state.active_line - 1, -1 },
-	{ details = true }
-)
-local has_active_hl = false
-for _, mark in ipairs(hl_marks) do
-	local details = mark[4]
-	if details and details.hl_group == "GitflowFormActiveField" then
-		has_active_hl = true
-		break
+-- The active-line accent lives in its own namespace so moving the selection
+-- costs two extmark calls instead of a full re-render.
+local active_ns = vim.api.nvim_create_namespace("gitflow_list_picker_active")
+local function active_accent_line()
+	local marks = vim.api.nvim_buf_get_extmarks(
+		hl_state.bufnr, active_ns, 0, -1, { details = true }
+	)
+	for _, mark in ipairs(marks) do
+		if mark[4] and mark[4].hl_group == "GitflowFormActiveField" then
+			return mark[2] + 1
+		end
 	end
+	return nil
 end
-assert_true(
-	has_active_hl,
+
+assert_equals(
+	active_accent_line(), hl_state.active_line,
 	"active line should have GitflowFormActiveField highlight"
+)
+
+-- Moving the selection must move the accent without rewriting the buffer.
+local before_tick = vim.api.nvim_buf_get_changedtick(hl_state.bufnr)
+local before_line = hl_state.active_line
+vim.api.nvim_win_call(hl_state.winid, function()
+	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("j", true, false, true), "x", false)
+end)
+assert_equals(
+	vim.api.nvim_buf_get_changedtick(hl_state.bufnr), before_tick,
+	"moving the picker selection should not rewrite the buffer"
+)
+assert_true(
+	hl_state.active_line ~= before_line,
+	"j should actually move the active line"
+)
+assert_equals(
+	active_accent_line(), hl_state.active_line,
+	"the accent should follow the moved selection"
 )
 
 pcall(vim.api.nvim_win_close, hl_state.winid, true)
