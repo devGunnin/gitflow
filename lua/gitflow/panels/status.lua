@@ -1,6 +1,6 @@
 local ui = require("gitflow.ui")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local devicons = require("gitflow.ui.devicons")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
@@ -37,46 +37,81 @@ local icons = require("gitflow.icons")
 ---@field cfg GitflowConfig|nil
 ---@field opts GitflowStatusPanelOpts
 ---@field line_entries table<integer, GitflowStatusLineEntry>
----@field active boolean
----@field generation integer
+---@field request_id integer
 
 local M = {}
-local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
-local STATUS_FLOAT_TITLE = "  Gitflow Status  "
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
-local STATUS_FLOAT_FOOTER = " s/u stage · V then s/u batch · a/A all · cc commit"
-	.. " · dd diff · cx conflict · X discard changes · p push · r refresh · q close "
--- Compact in-buffer hints for split layout (floats use the footer above).
-local STATUS_HINTS = {
-	{ "s/u", "stage/unstage" },
-	{ "a/A", "all" },
-	{ "<CR>", "open" },
-	{ "cc", "commit" },
-	{ "dd", "diff" },
-	{ "X", "discard changes" },
-	{ "p", "push" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
 
 ---@type GitflowStatusPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	opts = {},
 	line_entries = {},
-	active = false,
-	-- Monotonic refresh counter. Every callback in a refresh chain checks it
-	-- and bails if a newer refresh has started, so a slow stale response can
-	-- never repaint over fresher data (#283).
-	generation = 0,
 	-- Cached commit-section data from the last full refresh, so staging /
 	-- unstaging (which never changes commits or upstream) can repaint from a
 	-- single `git status` call instead of re-running upstream + two git logs
 	-- on every keypress (#362).
 	last = nil,
 }
+
+local P = panel.new({
+	name = "status",
+	title = "Gitflow Status",
+	filetype = "gitflowstatus",
+	loading = "Loading git status…",
+	state = M.state,
+	on_close = function()
+		M.state.last = nil
+	end,
+	keymaps = {
+		{ key = "s", desc = "stage/unstage", run = function()
+			M.stage_under_cursor()
+		end },
+		{ key = "u", hint = false, run = function()
+			M.unstage_under_cursor()
+		end },
+		{ key = "s", mode = "x", hint = false, run = function()
+			M.stage_visual()
+		end },
+		{ key = "u", mode = "x", hint = false, run = function()
+			M.unstage_visual()
+		end },
+		{ key = "a", desc = "all", run = function()
+			M.stage_all()
+		end },
+		{ key = "A", hint = false, run = function()
+			M.unstage_all()
+		end },
+		{ key = "<CR>", desc = "open", run = function()
+			M.open_file_under_cursor()
+		end },
+		{ key = "cc", desc = "commit", run = function()
+			if M.state.opts.on_commit then
+				M.state.opts.on_commit()
+			else
+				utils.notify("Commit handler is not configured", vim.log.levels.WARN)
+			end
+		end },
+		{ key = "dd", desc = "diff", run = function()
+			M.open_diff_under_cursor()
+		end },
+		{ key = "cx", hint = false, run = function()
+			M.open_conflict_under_cursor()
+		end },
+		{ key = "X", desc = "discard changes", essential = true, run = function()
+			M.revert_under_cursor()
+		end },
+		{ key = "p", desc = "push", run = function()
+			M.push_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 -- Porcelain codes that indicate an unmerged (conflicted) path.
 local UNMERGED_STATUS = {
@@ -121,7 +156,7 @@ local function append_file_section(B, title, entries, line_entries, diff_staged)
 
 		-- ●  <ft-icon>  [CODE  ]<dir><name>
 		local chunks = {
-			{ "   ", nil },
+			{ components.spacing.gutter .. " ", nil },
 			{ "\u{25cf}  ", state_hl },
 			{ glyph .. "  ", glyph_hl },
 		}
@@ -171,7 +206,7 @@ local function append_commit_section(B, title, entries, line_entries, pushable)
 			summary = summary:gsub("^" .. vim.pesc(sha) .. "%s*", "")
 		end
 		local line_no = B:push({
-			{ " ", nil },
+			{ components.spacing.edge, nil },
 			{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
 			{ sha ~= "" and (sha .. "  ") or "", "GitflowLogHash" },
 			{ summary, "GitflowCardTitle" },
@@ -250,113 +285,6 @@ local function resolve_upstream(cb)
 	end)
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("status", {
-			filetype = "gitflowstatus",
-			lines = components.loading_lines("Loading git status…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "status",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = STATUS_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STATUS_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-				M.state.active = false
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "status",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-				M.state.active = false
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "s", function()
-		M.stage_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "u", function()
-		M.unstage_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "a", function()
-		M.stage_all()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "A", function()
-		M.unstage_all()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	-- Visual-line batch staging: press V to select rows, then s / u.
-	vim.keymap.set("x", "s", function()
-		M.stage_visual()
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("x", "u", function()
-		M.unstage_visual()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "cc", function()
-		if M.state.opts.on_commit then
-			M.state.opts.on_commit()
-		else
-			utils.notify("Commit handler is not configured", vim.log.levels.WARN)
-		end
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "dd", function()
-		M.open_diff_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "cx", function()
-		M.open_conflict_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "p", function()
-		M.push_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "X", function()
-		M.revert_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "<CR>", function()
-		M.open_file_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@return GitflowStatusLineEntry|nil
 local function entry_under_cursor()
 	local bufnr = M.state.bufnr
@@ -395,9 +323,7 @@ end
 ---@param upstream_name string|nil
 ---@param current_branch string
 local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
-	local bufnr = M.state.bufnr
-	-- Async callbacks can land after the panel closed; never paint a dead buffer.
-	if not M.state.active or not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+	if not P:is_open() then
 		return
 	end
 
@@ -410,21 +336,16 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		branch = current_branch,
 	}
 
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Status", render_opts)
+	local B = P:begin_render()
 
 	-- Branch + change-count summary bar.
 	local total_changes = #grouped.staged + #grouped.unstaged + #grouped.untracked
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
 		{ current_branch ~= "" and current_branch or "(detached)", "GitflowSectionTitle" },
 		{
-			upstream_name and ("   " .. ui_render.glyphs.arrow .. " " .. upstream_name) or "",
+			upstream_name and ("   " .. components.glyphs.arrow .. " " .. upstream_name) or "",
 			"GitflowMeta",
 		},
 		{
@@ -442,15 +363,15 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	append_file_section(B, ("Untracked (%d)"):format(#grouped.untracked), grouped.untracked, line_entries, false)
 
 	if upstream_name then
-		if #outgoing_entries > 0 then
-			append_commit_section(B, "Commit History (oldest -> newest)", outgoing_entries, line_entries, true)
-		end
+		-- One section per direction: outgoing commits were listed twice before
+		-- (a "Commit History" copy of the same entries), doubling every row.
+		local flow = ("oldest %s newest"):format(components.glyphs.arrow)
 		append_commit_section(
-			B, ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name),
+			B, ("Outgoing (%s, not on %s)"):format(flow, upstream_name),
 			outgoing_entries, line_entries, true
 		)
 		append_commit_section(
-			B, ("Incoming (oldest -> newest, only on %s)"):format(upstream_name),
+			B, ("Incoming (%s, only on %s)"):format(flow, upstream_name),
 			incoming_entries, line_entries, false
 		)
 	else
@@ -459,27 +380,25 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		B:blank()
 	end
 
-	-- In-buffer hints for split layout (floats advertise the same keys in their
-	-- window footer). Kept above the branch footer so the final line stays the
-	-- exact "Current branch: <branch>" string other panels/tests rely on.
-	components.split_hint_bar(B, render_opts, STATUS_HINTS)
+	-- Hints sit above the branch footer so the final line stays the exact
+	-- "Current branch: <branch>" string other panels and tests rely on.
+	P:push_hints(B)
 
 	-- Final line must be exactly "Current branch: <branch>".
 	components.branch_footer(B, current_branch)
 
-	B:flush("status", M.state.bufnr, STATUS_HIGHLIGHT_NS)
-	M.state.line_entries = line_entries
-
-	components.cursorline(M.state.winid, true)
+	if P:paint(B) then
+		M.state.line_entries = line_entries
+	end
 end
 
 --- True once a newer refresh has started, meaning this chain's result is stale
 --- and belongs to nobody. Checked before error reporting so a superseded chain
 --- stays silent, while a failure in the current chain still surfaces.
----@param generation integer
+---@param request_id integer
 ---@return boolean
-local function superseded(generation)
-	return M.state.generation ~= generation
+local function superseded(request_id)
+	return not P:is_active(request_id)
 end
 
 ---@param err string|nil
@@ -489,6 +408,22 @@ local function notify_if_error(err)
 		return true
 	end
 	return false
+end
+
+---Refresh-chain failure: notify AND paint the panel, so a fetch that died is
+---never left looking like one still in flight.
+---@param err string|nil
+---@return boolean handled
+local function refresh_failed(err)
+	if not err then
+		return false
+	end
+	utils.notify(err, vim.log.levels.ERROR)
+	P:render_error("Could not read repository status", {
+		detail = err,
+		hint = "r retries",
+	})
+	return true
 end
 
 local function emit_post_operation()
@@ -512,9 +447,10 @@ end
 function M.open(cfg, opts)
 	M.state.cfg = cfg
 	M.state.opts = opts or {}
-	M.state.active = true
 
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -527,8 +463,7 @@ function M.refresh(opts)
 
 	-- This refresh owns a generation; every callback below abandons its work if
 	-- a newer refresh has since started.
-	local generation = M.state.generation + 1
-	M.state.generation = generation
+	local generation = P:next_request()
 
 	-- Fast path: staging/unstaging only moves files between sections; the
 	-- commit history and upstream are unchanged, so reuse the cached commit
@@ -540,7 +475,7 @@ function M.refresh(opts)
 			if superseded(generation) then
 				return
 			end
-			if notify_if_error(err) then
+			if refresh_failed(err) then
 				return
 			end
 			render(grouped, last.outgoing or {}, last.incoming or {},
@@ -557,7 +492,7 @@ function M.refresh(opts)
 			if superseded(generation) then
 				return
 			end
-			if notify_if_error(err) then
+			if refresh_failed(err) then
 				return
 			end
 
@@ -567,7 +502,7 @@ function M.refresh(opts)
 				if superseded(generation) then
 					return
 				end
-				if notify_if_error(upstream_err) then
+				if refresh_failed(upstream_err) then
 					return
 				end
 
@@ -585,7 +520,7 @@ function M.refresh(opts)
 					if superseded(generation) then
 						return
 					end
-					if notify_if_error(outgoing_err) then
+					if refresh_failed(outgoing_err) then
 						return
 					end
 
@@ -598,7 +533,7 @@ function M.refresh(opts)
 						if superseded(generation) then
 							return
 						end
-						if notify_if_error(incoming_err) then
+						if refresh_failed(incoming_err) then
 							return
 						end
 
@@ -869,29 +804,15 @@ function M.open_file_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("status")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("status")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.cfg = nil
 	M.state.line_entries = {}
-	M.state.active = false
 	M.state.last = nil
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

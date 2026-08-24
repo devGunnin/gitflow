@@ -22,6 +22,7 @@ local components = require("gitflow.ui.components")
 ---@field views string[]|nil  views this key belongs to (nil = every view)
 ---@field nowait boolean|nil  default true
 ---@field hint boolean|nil  false to bind without advertising
+---@field essential boolean|nil  never dropped when the float footer overflows
 
 ---@class GitflowPanelSpec
 ---@field name string  buffer/window registry name
@@ -95,6 +96,14 @@ function Panel:is_open()
 	return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
 end
 
+---Whether the panel currently has a live window. Distinct from `is_open`:
+---a `:q` leaves the buffer (and its state) alive with no window.
+---@return boolean
+function Panel:has_window()
+	local winid = self.state.winid
+	return winid ~= nil and vim.api.nvim_win_is_valid(winid)
+end
+
 ---@return integer|nil
 function Panel:bufnr()
 	if self:is_open() then
@@ -134,7 +143,9 @@ function Panel:hints(view)
 	local pairs_out = {}
 	for _, entry in ipairs(self.keymaps) do
 		if entry.hint ~= false and entry.desc and shows_in_view(entry, view) then
-			pairs_out[#pairs_out + 1] = { entry.key, entry.desc }
+			pairs_out[#pairs_out + 1] = {
+				entry.key, entry.desc, essential = entry.essential,
+			}
 		end
 	end
 	return pairs_out
@@ -161,34 +172,54 @@ end
 ---@return string
 function Panel:footer(view, width)
 	local sep = " " .. ui_render.glyphs.bullet .. " "
-	local parts = {}
-	for _, pair in ipairs(self:hints(view)) do
-		parts[#parts + 1] = pair[1] .. " " .. pair[2]
-	end
-	if #parts == 0 then
+	local hints = self:hints(view)
+	if #hints == 0 then
 		return ""
 	end
 
-	local function wrap(list, truncated)
-		local text = " " .. table.concat(list, sep)
+	---@param keep boolean[]  which hints are still shown
+	---@param truncated boolean
+	---@return string
+	local function build(keep, truncated)
+		local parts = {}
+		for index, hint in ipairs(hints) do
+			if keep[index] then
+				parts[#parts + 1] = hint[1] .. " " .. hint[2]
+			end
+		end
+		local text = " " .. table.concat(parts, sep)
 		if truncated then
 			text = text .. sep .. ui_render.glyphs.ellipsis
 		end
 		return text .. " "
 	end
 
-	local text = wrap(parts, false)
+	local keep = {}
+	for index = 1, #hints do
+		keep[index] = true
+	end
+	local text = build(keep, false)
 	if not width or vim.fn.strdisplaywidth(text) <= width then
 		return text
 	end
-	while #parts > 1 do
-		parts[#parts] = nil
-		text = wrap(parts, true)
-		if vim.fn.strdisplaywidth(text) <= width then
-			return text
+
+	-- Overflow: drop conveniences from the end, but never an essential key --
+	-- a destructive verb or the way out must stay advertised, not clip away.
+	local shown = #hints
+	for index = #hints, 1, -1 do
+		if shown <= 1 then
+			break
+		end
+		if not hints[index].essential then
+			keep[index] = false
+			shown = shown - 1
+			text = build(keep, true)
+			if vim.fn.strdisplaywidth(text) <= width then
+				return text
+			end
 		end
 	end
-	return wrap(parts, true)
+	return text
 end
 
 ---Usable footer width for the panel's float, or nil when it isn't one.

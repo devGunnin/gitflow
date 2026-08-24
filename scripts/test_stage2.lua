@@ -477,17 +477,25 @@ end, 25)
 assert_true(outgoing_ready, "outgoing section should include local commits not on upstream")
 
 local outgoing_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
-local history_header_after_refresh = find_line(outgoing_lines, "Commit History")
 local outgoing_header_line = find_line(outgoing_lines, "Outgoing")
-assert_true(history_header_after_refresh ~= nil, "commit history should appear with outgoing commits")
+local incoming_header_after_refresh = find_line(outgoing_lines, "Incoming")
 assert_true(outgoing_header_line ~= nil, "outgoing header should remain visible")
+assert_true(
+	find_line(outgoing_lines, "Commit History") == nil,
+	"outgoing commits are listed once, under Outgoing — no Commit History copy"
+)
 local push_one_history_line = find_line_in_range(
 	outgoing_lines,
 	"push one",
-	history_header_after_refresh + 1,
-	outgoing_header_line - 1
+	outgoing_header_line + 1,
+	incoming_header_after_refresh and (incoming_header_after_refresh - 1)
+		or #outgoing_lines
 )
-assert_true(push_one_history_line ~= nil, "push target commit should be selectable in history section")
+assert_true(push_one_history_line ~= nil, "push target commit should be selectable in the outgoing section")
+assert_true(
+	find_line(outgoing_lines, "push one", push_one_history_line + 1) == nil,
+	"each outgoing commit should be rendered exactly once"
+)
 
 captured_diff_request = nil
 vim.api.nvim_win_set_cursor(status_panel.state.winid, { push_one_history_line, 0 })
