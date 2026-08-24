@@ -8,6 +8,9 @@
 -- It is green on overhaul/v2 as well: the reported symptom does not reproduce
 -- there, so this locks the behaviour down rather than proving a fix. It is the
 -- guard the panel-base rewrite of the refresh path needed.
+--
+-- Every case runs in BOTH layouts: the float is where the base changed the
+-- geometry and generated the footer, so a split-only run would not cover it.
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -78,9 +81,17 @@ gitflow.setup({
 		split = { orientation = "vertical", size = 60 },
 	},
 })
-local cfg = require("gitflow.config").current
+local base_cfg = require("gitflow.config").current
 local branch_panel = require("gitflow.panels.branch")
 local commands = require("gitflow.commands")
+
+---@param layout string  "split" or "float"
+---@return GitflowConfig
+local function layout_cfg(layout)
+	return vim.tbl_deep_extend("force", vim.deepcopy(base_cfg), {
+		ui = { default_layout = layout },
+	})
+end
 
 ---@param needle string
 ---@param timeout_ms integer
@@ -111,67 +122,97 @@ local function peer_pushes_branch(name)
 	git(peer_dir, { "checkout", "main" })
 end
 
-branch_panel.open(cfg)
-assert_true(wait_for_line("origin/main", 10000), "panel should list the seed branch")
-local panel_bufnr = branch_panel.state.bufnr
+---Every case, against one layout. The panel is opened fresh each time so the
+---float really goes through window.open_float and its generated footer.
+---@param layout string
+local function run_layout(layout)
+	local cfg = layout_cfg(layout)
+	local function case(name)
+		return ("%s [%s]"):format(name, layout)
+	end
+	local function branch_name(name)
+		return ("%s-%s"):format(name, layout)
+	end
 
-test("f picks up a new remote branch without reopening the panel", function()
-	peer_pushes_branch("from-keymap")
-	branch_panel.fetch_remotes()
+	branch_panel.open(cfg)
 	assert_true(
-		wait_for_line("origin/from-keymap", 15000),
-		"fetch from the panel should repaint it with the new branch"
+		wait_for_line("origin/main", 10000),
+		case("panel should list the seed branch")
 	)
+	local panel_bufnr = branch_panel.state.bufnr
+	local winid = branch_panel.state.winid
+	assert_true(winid ~= nil, case("the panel should have a window"))
+	local is_float = vim.api.nvim_win_get_config(winid).relative ~= ""
 	assert_true(
-		branch_panel.state.bufnr == panel_bufnr,
-		"the panel should refresh in place, not be torn down and rebuilt"
+		is_float == (layout == "float"),
+		case("the panel should open in the layout under test")
 	)
-end)
 
-test("R (fetch + refresh) picks up a new remote branch in place", function()
-	peer_pushes_branch("from-refresh")
-	branch_panel.refresh_with_fetch()
-	assert_true(
-		wait_for_line("origin/from-refresh", 15000),
-		"R should fetch and repaint the open panel"
-	)
-end)
-
-test(":Gitflow fetch repaints the open branch panel", function()
-	peer_pushes_branch("from-command")
-	commands.dispatch({ "fetch" }, cfg)
-	assert_true(
-		wait_for_line("origin/from-command", 15000),
-		"the fetch command should repaint the open panel"
-	)
-end)
-
-test("a pruned remote branch disappears from the open panel", function()
-	git(peer_dir, { "push", "origin", "--delete", "from-command" })
-	branch_panel.fetch_remotes()
-	local gone = vim.wait(15000, function()
-		local lines = vim.api.nvim_buf_get_lines(panel_bufnr, 0, -1, false)
-		for _, line in ipairs(lines) do
-			if line:find("origin/from-command", 1, true) then
-				return false
-			end
-		end
-		return true
-	end, 25)
-	assert_true(gone, "fetch --prune should drop the deleted branch from the panel")
-end)
-
-test("a fetch landing after the panel closed does not resurrect it", function()
-	branch_panel.close()
-	branch_panel.fetch_remotes()
-	vim.wait(2000, function()
-		return false
+	test(case("f picks up a new remote branch without reopening the panel"), function()
+		local name = branch_name("from-keymap")
+		peer_pushes_branch(name)
+		branch_panel.fetch_remotes()
+		assert_true(
+			wait_for_line("origin/" .. name, 15000),
+			"fetch from the panel should repaint it with the new branch"
+		)
+		assert_true(
+			branch_panel.state.bufnr == panel_bufnr,
+			"the panel should refresh in place, not be torn down and rebuilt"
+		)
 	end)
-	assert_true(
-		not branch_panel.is_open(),
-		"a fetch completing after close must not reopen the panel"
-	)
-end)
+
+	test(case("R (fetch + refresh) picks up a new remote branch in place"), function()
+		local name = branch_name("from-refresh")
+		peer_pushes_branch(name)
+		branch_panel.refresh_with_fetch()
+		assert_true(
+			wait_for_line("origin/" .. name, 15000),
+			"R should fetch and repaint the open panel"
+		)
+	end)
+
+	test(case(":Gitflow fetch repaints the open branch panel"), function()
+		local name = branch_name("from-command")
+		peer_pushes_branch(name)
+		commands.dispatch({ "fetch" }, cfg)
+		assert_true(
+			wait_for_line("origin/" .. name, 15000),
+			"the fetch command should repaint the open panel"
+		)
+	end)
+
+	test(case("a pruned remote branch disappears from the open panel"), function()
+		local name = branch_name("from-command")
+		git(peer_dir, { "push", "origin", "--delete", name })
+		branch_panel.fetch_remotes()
+		local gone = vim.wait(15000, function()
+			local lines = vim.api.nvim_buf_get_lines(panel_bufnr, 0, -1, false)
+			for _, line in ipairs(lines) do
+				if line:find("origin/" .. name, 1, true) then
+					return false
+				end
+			end
+			return true
+		end, 25)
+		assert_true(gone, "fetch --prune should drop the deleted branch from the panel")
+	end)
+
+	test(case("a fetch landing after the panel closed does not resurrect it"), function()
+		branch_panel.close()
+		branch_panel.fetch_remotes()
+		vim.wait(2000, function()
+			return false
+		end)
+		assert_true(
+			not branch_panel.is_open(),
+			"a fetch completing after close must not reopen the panel"
+		)
+	end)
+end
+
+run_layout("split")
+run_layout("float")
 
 vim.fn.delete(root, "rf")
 
