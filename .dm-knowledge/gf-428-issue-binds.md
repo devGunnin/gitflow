@@ -1,0 +1,1 @@
+- **[convention]** Issue-view title/body editing never existed (checked history back to 104468b, the file's introduction) - only labels/assignees had edit UIs. gh_issues.edit already accepted title/body; #428 added a form-based E keybind on top of it. Comment-adding (C) already worked but had zero test coverage.  _(2026-08-24T08:15:57Z)_
