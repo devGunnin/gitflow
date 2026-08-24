@@ -333,13 +333,13 @@ end)
 -- Verify highlights are applied on the buffer
 test("blame highlights should be applied to buffer", function()
 	local bufnr = blame_panel.state.bufnr
+	-- nvim_create_namespace is idempotent by name, so this recovers the
+	-- same ns id blame.lua uses internally without exporting it.
+	local ns = vim.api.nvim_create_namespace("gitflow_blame_hl")
 	local extmarks = vim.api.nvim_buf_get_extmarks(
-		bufnr, BLAME_HIGHLIGHT_NS or -1, 0, -1, { details = true }
+		bufnr, ns, 0, -1, { details = true }
 	)
-	-- Even if we can't access the namespace directly, check via
-	-- nvim_get_hl_ns; at minimum the buffer should have highlights
-	-- applied. We test the highlight groups are defined above.
-	assert_true(bufnr ~= nil, "blame buffer should exist")
+	assert_true(#extmarks > 0, "blame buffer should have highlights applied")
 end)
 
 -- Test refresh
