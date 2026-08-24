@@ -334,6 +334,18 @@ for _, expected in ipairs({
 	assert_true(contains(pr_actions, expected), ("missing pr action '%s'"):format(expected))
 end
 
+local issue_list_tokens = commands.complete("", "Gitflow issue list ", 0)
+assert_true(contains(issue_list_tokens, "--label"), "issue list completion should include --label")
+assert_true(
+	contains(issue_list_tokens, "--milestone"),
+	"issue list completion should include --milestone"
+)
+assert_true(contains(issue_list_tokens, "label="), "issue list completion should include label=")
+assert_true(
+	contains(issue_list_tokens, "milestone="),
+	"issue list completion should include milestone="
+)
+
 local issue_edit_tokens = commands.complete("", "Gitflow issue edit 1 ", 0)
 assert_true(contains(issue_edit_tokens, "add="), "issue edit completion should include add=")
 assert_true(contains(issue_edit_tokens, "remove="), "issue edit completion should include remove=")

@@ -459,6 +459,40 @@ T.run_suite("E2E: Command Exposure & Dispatch", {
 		T.cleanup_panels()
 	end,
 
+	["issue list --milestone parses into the panel filters, like --label"] = function()
+		local issues_panel = require("gitflow.panels.issues")
+		local ok, err = T.pcall_message(function()
+			commands.dispatch(
+				{ "issue", "list", "--milestone", "v1.0", "--label", "bug" }, cfg
+			)
+		end)
+		T.assert_true(ok, "issue list --milestone should not crash: " .. (err or ""))
+		T.drain_jobs(3000)
+		T.assert_equals(
+			issues_panel.state.filters.milestone, "v1.0",
+			"--milestone should populate filters.milestone"
+		)
+		T.assert_equals(
+			issues_panel.state.filters.label, "bug",
+			"--label should still populate filters.label"
+		)
+		T.cleanup_panels()
+	end,
+
+	["issue list milestone= form parses into the panel filters"] = function()
+		local issues_panel = require("gitflow.panels.issues")
+		local ok, err = T.pcall_message(function()
+			commands.dispatch({ "issue", "list", "milestone=v2.0" }, cfg)
+		end)
+		T.assert_true(ok, "issue list milestone= should not crash: " .. (err or ""))
+		T.drain_jobs(3000)
+		T.assert_equals(
+			issues_panel.state.filters.milestone, "v2.0",
+			"milestone= should populate filters.milestone"
+		)
+		T.cleanup_panels()
+	end,
+
 	-- ── pr subcommand ───────────────────────────────────────────────────
 
 	["pr list opens panel without crash"] = function()
