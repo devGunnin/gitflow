@@ -869,9 +869,10 @@ test("hints and footer honour per-view filtering", function()
 		},
 	})
 
-	assert_equals(#P:hints("one"), 2, "view one should see its own key plus the shared one")
-	assert_equals(#P:hints("two"), 2, "view two should see its own key plus the shared one")
-	assert_equals(#P:hints(), 1, "no view should see only the unrestricted key")
+	-- Counts include the `?` help entry the base injects into every panel.
+	assert_equals(#P:hints("one"), 3, "view one should see its own key plus the shared one and ?")
+	assert_equals(#P:hints("two"), 3, "view two should see its own key plus the shared one and ?")
+	assert_equals(#P:hints(), 2, "no view should see the unrestricted key and ?")
 	assert_true(
 		P:footer("one", nil):find("o only one", 1, true) ~= nil,
 		"the footer should follow the same view filter"
@@ -894,7 +895,7 @@ test("a range entry binds every key but advertises one label", function()
 				end },
 		},
 	})
-	assert_equals(#P:hints(), 1, "a range advertises one entry")
+	assert_equals(#P:hints(), 2, "a range advertises one entry, plus the injected ?")
 	assert_equals(P:hints()[1][1], "1-3", "the label is the range, not a single key")
 
 	local bufnr = vim.api.nvim_create_buf(false, true)

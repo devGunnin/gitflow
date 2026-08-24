@@ -12,6 +12,7 @@ local buffer = require("gitflow.ui.buffer")
 local window = require("gitflow.ui.window")
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local help = require("gitflow.ui.help")
 
 ---@class GitflowPanelKeymap
 ---@field key string  the key sequence, also the hint's key label
@@ -39,6 +40,98 @@ local components = require("gitflow.ui.components")
 
 local M = {}
 
+-- ── key surfaces ───────────────────────────────────────────────────────
+-- Every surface that binds keys registers its registry here. Two things read
+-- it: the `?` overlay, which renders one surface, and the cross-panel
+-- collision spec, which reads them all to prove no key means a destructive
+-- thing in one panel and a benign thing in another. A surface that is not a
+-- `Panel` (the actions panel's per-view maps, review mode's two key
+-- surfaces, the merge-conflict resolver) registers itself.
+
+---@class GitflowKeySurface
+---@field name string  stable id; also the `panel_keybindings` config key
+---@field title string  the `?` overlay's title
+---@field keymaps GitflowPanelKeymap[]
+
+---@type table<string, GitflowKeySurface>
+local surfaces = {}
+---@type string[]
+local surface_order = {}
+
+---@param surface GitflowKeySurface
+function M.register_surface(surface)
+	assert(type(surface.name) == "string" and surface.name ~= "", "surface needs a name")
+	assert(type(surface.title) == "string" and surface.title ~= "", "surface needs a title")
+	assert(type(surface.keymaps) == "table", "surface needs keymaps")
+	if not surfaces[surface.name] then
+		surface_order[#surface_order + 1] = surface.name
+	end
+	surfaces[surface.name] = surface
+end
+
+---Every registered key surface, in registration order.
+---@return GitflowKeySurface[]
+function M.surfaces()
+	local out = {}
+	for _, name in ipairs(surface_order) do
+		out[#out + 1] = surfaces[name]
+	end
+	return out
+end
+
+---@param name string
+---@return GitflowKeySurface|nil
+function M.surface(name)
+	return surfaces[name]
+end
+
+-- ── panel-local key overrides ──────────────────────────────────────────
+
+---A surface's overrides from `config.panel_keybindings`, keyed by the
+---entry's DEFAULT key label. A `false` value unbinds the entry entirely.
+---@param cfg GitflowConfig|nil
+---@param name string
+---@return table<string, string|false>
+local function overrides_for(cfg, name)
+	local panels = cfg and cfg.panel_keybindings
+	if type(panels) ~= "table" or type(panels[name]) ~= "table" then
+		return {}
+	end
+	return panels[name]
+end
+
+---Apply `panel_keybindings` overrides to a registry.
+---
+---An override replaces the whole entry's key set with the one key given, so a
+---pair or range entry (`s/u`, `1-9`) remapped this way binds exactly that key
+---and advertises it under that label. `false` drops the entry: unbound, and
+---absent from the hints and the `?` overlay, which is what an opt-out has to
+---mean for a key to be genuinely free.
+---@param keymaps GitflowPanelKeymap[]
+---@param cfg GitflowConfig|nil
+---@param name string
+---@return GitflowPanelKeymap[]
+function M.resolve_keymaps(keymaps, cfg, name)
+	local overrides = overrides_for(cfg, name)
+	if next(overrides) == nil then
+		return keymaps
+	end
+
+	local out = {}
+	for _, entry in ipairs(keymaps) do
+		local override = overrides[entry.key]
+		if override == nil then
+			out[#out + 1] = entry
+		elseif override ~= false then
+			local copy = vim.tbl_extend("force", {}, entry)
+			copy.key = override
+			copy.keys = { override }
+			out[#out + 1] = copy
+		end
+	end
+	return out
+end
+
 ---@class GitflowPanel
 ---@field name string
 ---@field title string
@@ -46,6 +139,25 @@ local M = {}
 ---@field state table
 local Panel = {}
 Panel.__index = Panel
+
+---The `?` entry every panel gets for free. Generated from the panel's own
+---registry, so a key that exists is documented and one that does not is not.
+---@param self GitflowPanel
+---@return GitflowPanelKeymap
+local function help_entry(self)
+	return {
+		key = "?",
+		desc = "help",
+		run = function()
+			local cfg = self.cfg or require("gitflow.config").get()
+			help.open(cfg, {
+				title = self.title,
+				sections = help.sections_from_keymaps(self:entries()),
+				note = ("Remap these: panel_keybindings.%s"):format(self.name),
+			})
+		end,
+	}
+end
 
 ---@param spec GitflowPanelSpec
 ---@return GitflowPanel
@@ -67,7 +179,7 @@ function M.new(spec)
 	state.winid = nil
 	state.request_id = 0
 
-	return setmetatable({
+	local instance = setmetatable({
 		name = spec.name,
 		title = spec.title,
 		filetype = spec.filetype,
@@ -78,6 +190,14 @@ function M.new(spec)
 		ns = vim.api.nvim_create_namespace("gitflow_" .. spec.name .. "_hl"),
 		state = state,
 	}, Panel)
+
+	instance.keymaps[#instance.keymaps + 1] = help_entry(instance)
+	M.register_surface({
+		name = instance.name,
+		title = instance.title,
+		keymaps = instance.keymaps,
+	})
+	return instance
 end
 
 -- ── request generation ─────────────────────────────────────────────────
@@ -158,9 +278,17 @@ end
 ---source both hint surfaces (and a future `?` overlay) read.
 ---@param view string|nil
 ---@return table[]
+---The panel's registry with the user's `panel_keybindings` applied — the one
+---view of its keys that binding, hinting and the `?` overlay all read, so an
+---override can never move a key without moving what advertises it.
+---@return GitflowPanelKeymap[]
+function Panel:entries()
+	return M.resolve_keymaps(self.keymaps, self.cfg, self.name)
+end
+
 function Panel:hints(view)
 	local pairs_out = {}
-	for _, entry in ipairs(self.keymaps) do
+	for _, entry in ipairs(self:entries()) do
 		if entry.hint ~= false and entry.desc and shows_in_view(entry, view) then
 			pairs_out[#pairs_out + 1] = {
 				entry.key, entry.desc,
@@ -177,7 +305,7 @@ end
 ---@return GitflowPanelKeymap[]
 function Panel:keymap_entries(view)
 	local entries = {}
-	for _, entry in ipairs(self.keymaps) do
+	for _, entry in ipairs(self:entries()) do
 		if entry.desc and shows_in_view(entry, view) then
 			entries[#entries + 1] = entry
 		end
@@ -371,7 +499,7 @@ end
 
 ---@param bufnr integer
 function Panel:bind_keymaps(bufnr)
-	for _, entry in ipairs(self.keymaps) do
+	for _, entry in ipairs(self:entries()) do
 		for _, key in ipairs(entry.bind == false and {} or M.bound_keys(entry)) do
 			vim.keymap.set(entry.mode or "n", key, function()
 				entry.run(key)
@@ -394,6 +522,9 @@ end
 ---@return boolean opened
 function Panel:ensure_window(cfg, opts)
 	local view = opts and opts.view or nil
+	-- Held for the `?` overlay and for `panel_keybindings` resolution: both
+	-- must see the config the panel was actually opened with.
+	self.cfg = cfg
 
 	local bufnr = self:bufnr()
 	if not bufnr then
