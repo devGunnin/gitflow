@@ -47,35 +47,27 @@ jobs:
       - name: Run stage smoke tests
         if: always()
         run: |
-          passing_stages=(
-            scripts/test_stage1.lua
-            scripts/test_stage2.lua
-            scripts/test_stage3.lua
-            scripts/test_stage4.lua
-            scripts/test_stage5.lua
-            scripts/test_stage6.lua
-            scripts/test_stage7.lua
-            scripts/test_stage8_highlights.lua
-            scripts/test_stage8_icons.lua
-            scripts/test_stage8_signs.lua
-            scripts/test_stage8_statusline.lua
-            scripts/test_stage8_windows.lua
-            scripts/test_stage10_diff.lua
-            scripts/test_stage10_forms.lua
-            scripts/test_stage10_palette.lua
-            scripts/test_stage10_pickers.lua
-            scripts/test_cherry_pick.lua
-            scripts/test_content_width.lua
-            scripts/test_keybinding_docs.lua
-            scripts/test_palette_accent_parity.lua
-            scripts/test_rebase_interactive.lua
-            scripts/test_reset.lua
-            scripts/test_review_loop.lua
-            scripts/test_state_components.lua
-            scripts/test_unified_theme.lua
+          # Every scripts/test_*.lua runs automatically — a hardcoded allowlist
+          # here let two scripts rot out of CI silently before (#403, #416).
+          # These two are dofile'd helper libraries, not standalone tests: run
+          # alone they do nothing (no assertions, exit 0), so they're excluded
+          # explicitly rather than mistaken for passing coverage.
+          exclude=(
+            scripts/test_compose_form.lua
+            scripts/test_real_git.lua
           )
           exit_code=0
-          for t in "${passing_stages[@]}"; do
+          for t in scripts/test_*.lua; do
+            skip=0
+            for x in "${exclude[@]}"; do
+              if [ "$t" = "$x" ]; then
+                skip=1
+                break
+              fi
+            done
+            if [ "$skip" = "1" ]; then
+              continue
+            fi
             echo ""
             echo "::group::$(basename "$t")"
             if nvim --headless -u NONE -l "$t" 2>&1; then
