@@ -811,7 +811,7 @@ local pr_view_lines = vim.api.nvim_buf_get_lines(pr_view_buf, 0, -1, false)
 
 local comments_header = find_line(pr_view_lines, "Comments")
 assert_true(comments_header ~= nil, "pr view should have Comments section header")
-local comments_divider = find_line(pr_view_lines, "--------", comments_header)
+local comments_divider = find_line(pr_view_lines, ("\u{2500}"):rep(8), comments_header)
 assert_true(comments_divider ~= nil, "pr view should have Comments divider")
 
 local reviewer1_line = find_line(pr_view_lines, "reviewer1:", comments_header)

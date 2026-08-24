@@ -208,15 +208,9 @@ local function render_commits(commits, source_branch, current_branch)
 	-- Source section header (HARD INVARIANT: a header line containing
 	-- "Source: <branch>" highlighted GitflowCherryPickBranch, then a separator).
 	local source_label = ("Source: %s"):format(source_branch)
-	B:push({
-		{ " ", nil },
-		{ icons.get("branch", "remote") .. "  ", "GitflowSectionIcon" },
-		{ source_label, "GitflowCherryPickBranch" },
+	components.section(B, icons.get("branch", "remote"), source_label, {
+		title_hl = "GitflowCherryPickBranch",
 	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(source_label) + 4)),
-		"GitflowSeparator"
-	)
 
 	local line_entries = {}
 	if #commits == 0 then

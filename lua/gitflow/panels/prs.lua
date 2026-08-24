@@ -2,6 +2,7 @@ local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local form = require("gitflow.ui.form")
 local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
@@ -305,24 +306,14 @@ end
 ---@param icon string
 ---@param title string
 local function section_header(B, icon, title)
-	B:push({
-		{ " ", nil },
-		{ icon .. "  ", "GitflowSectionIcon" },
-		{ title, "GitflowSectionTitle" },
-	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(title) + 4)),
-		"GitflowSeparator"
-	)
+	components.section(B, icon, title)
 end
 
 ---@param B GitflowRenderBuilder
 ---@param title string
 ---@param render_opts table
 local function push_header(B, title, render_opts)
-	for _, line in ipairs(ui_render.panel_header(title, render_opts)) do
-		B:raw(line, ui_render.is_separator(line) and "GitflowSeparator" or "GitflowTitle")
-	end
+	components.header(B, title, render_opts)
 end
 
 ---@param B GitflowRenderBuilder

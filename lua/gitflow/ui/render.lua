@@ -1,6 +1,34 @@
 local M = {}
 
-local SEPARATOR_CHAR = "\u{2500}" -- ─ box drawing horizontal
+-- ── design tokens ──────────────────────────────────────────────────────
+-- One spacing scale and one glyph set for every gitflow surface. Panels and
+-- components indent and punctuate with these, never with ad-hoc literals, so
+-- the whole plugin reads as one visual language.
+
+---Indent steps. Chrome hugs the frame, content sits in the gutter, anything
+---subordinate to a content row is indented one more step.
+M.spacing = {
+	edge = " ",      -- rules, section headers, hint bars
+	gutter = "  ",   -- content rows: summaries, metadata, state lines
+	indent = "    ", -- nested under a content row: detail, grouped hints
+}
+
+---Shared glyphs. Kept plain-unicode (not Nerd Font) so they render everywhere;
+---Nerd Font glyphs and their ASCII fallbacks live in `gitflow.icons`.
+M.glyphs = {
+	rule = "\u{2500}",     -- ─  panel and section rule
+	bullet = "\u{b7}",     -- ·  inline separator between hint entries
+	arrow = "\u{2192}",    -- →  "from → to"
+	ellipsis = "\u{2026}", -- …  truncation marker
+}
+
+---Separator between entries on a single line (hint bars, summary chips).
+M.separators = {
+	hint = "   ",                             -- between key-hint entries
+	field = "    ",                           -- between fields on a summary bar
+	inline = " " .. M.glyphs.bullet .. " ",   -- between inline metadata values
+}
+
 local DEFAULT_SEPARATOR_WIDTH = 50
 local MIN_SEPARATOR_WIDTH = 24
 
@@ -22,30 +50,6 @@ local function resolve_window_id(opts)
 	end
 
 	return nil
-end
-
----@param opts table|nil
----@return boolean
-local function should_render_inline_title(opts)
-	local options = opts or {}
-	if options.inline_title ~= nil then
-		return options.inline_title == true
-	end
-	if options.include_title ~= nil then
-		return options.include_title == true
-	end
-
-	local winid = resolve_window_id(options)
-	if not winid then
-		return true
-	end
-
-	local ok, config = pcall(vim.api.nvim_win_get_config, winid)
-	if not ok or type(config) ~= "table" then
-		return true
-	end
-
-	return config.relative == nil or config.relative == ""
 end
 
 ---Resolve the static fallback width.
@@ -87,6 +91,14 @@ function M.is_floating(opts)
 	return config.relative ~= nil and config.relative ~= ""
 end
 
+---Whether a panel should draw its title inside the buffer. Floats already show
+---the title in their frame chrome, so only splits need an inline one.
+---@param opts table|nil  { winid?, bufnr? }
+---@return boolean
+function M.wants_inline_title(opts)
+	return not M.is_floating(opts)
+end
+
 ---Resolve content width for a panel buffer/window.
 ---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
 ---@return integer
@@ -119,165 +131,90 @@ function M.separator(width)
 
 	local sep_width = tonumber(resolved) or resolve_fallback(nil)
 	sep_width = math.max(1, math.floor(sep_width))
-	return string.rep(SEPARATOR_CHAR, sep_width)
+	return string.rep(M.glyphs.rule, sep_width)
 end
 
 ---@param line string|nil
 ---@return boolean
 function M.is_separator(line)
-	return type(line) == "string" and vim.startswith(line, SEPARATOR_CHAR)
-end
-
----Format a title bar line with optional icon.
----@param text string
----@return string
-function M.title(text)
-	return text
-end
-
----Format a section header with count and separator.
----@param text string  section name
----@param count integer|nil  optional item count
----@param opts table|nil  separator width context
----@return string header, string separator  two lines
-function M.section(text, count, opts)
-	local header
-	if count then
-		header = ("%s (%d)"):format(text, count)
-	else
-		header = text
-	end
-	return header, M.separator(opts)
-end
-
----Format an empty-state placeholder.
----@param text string|nil  placeholder text (defaults to "(none)")
----@return string
-function M.empty(text)
-	return ("  %s"):format(text or "(none)")
-end
-
----Format a content entry with indentation.
----@param text string
----@return string
-function M.entry(text)
-	return ("  %s"):format(text)
-end
-
----Format key hints for a footer line (inline or float footer).
----@param hints string  raw key hint text, e.g. "q close  r refresh"
----@return string
-function M.footer(hints)
-	return hints
-end
-
----Format key hints as structured pairs for display.
----Each pair is "key=action" separated by double space.
----@param pairs table[]  list of {key, action} pairs
----@return string
-function M.format_key_hints(pairs)
-	local parts = {}
-	for _, pair in ipairs(pairs) do
-		local key = pair.key or pair[1]
-		local action = pair.action or pair[2]
-		if key and action then
-			parts[#parts + 1] = ("%s %s"):format(key, action)
-		end
-	end
-	return table.concat(parts, "  ")
-end
-
----Apply standard panel highlights to a buffer after rendering.
----Applies GitflowTitle to line 0 only when the first line is an inline
----header title, then scans separators and footer metadata lines.
----@param bufnr integer
----@param ns integer  highlight namespace
----@param lines string[]
----@param opts table|nil  { footer_line = integer|nil, entry_highlights = table|nil }
-function M.apply_panel_highlights(bufnr, ns, lines, opts)
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-
-	local options = opts or {}
-	local has_inline_title = options.has_inline_title
-	if has_inline_title == nil then
-		has_inline_title = #lines > 0 and not M.is_separator(lines[1])
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-
-	-- Title bar: line 0
-	if has_inline_title then
-		vim.api.nvim_buf_add_highlight(bufnr, ns, "GitflowTitle", 0, 0, -1)
-	end
-
-	-- Scan for separator lines and section headers
-	for line_no, line in ipairs(lines) do
-		local idx = line_no - 1
-		if M.is_separator(line) then
-			vim.api.nvim_buf_add_highlight(bufnr, ns, "GitflowSeparator", idx, 0, -1)
-		end
-	end
-
-	-- Footer line
-	if options.footer_line then
-		vim.api.nvim_buf_add_highlight(
-			bufnr, ns, "GitflowFooter", options.footer_line - 1, 0, -1
-		)
-	end
-
-	-- Entry-level highlights (panel-specific)
-	if options.entry_highlights then
-		for line_no, group in pairs(options.entry_highlights) do
-			vim.api.nvim_buf_add_highlight(bufnr, ns, group, line_no - 1, 0, -1)
-		end
-	end
-end
-
----Build a standard panel header block.
----Split layout: title + separator.
----Float layout: separator only (frame title already provides chrome).
----@param title_text string
----@param opts table|nil  separator width context
----@return string[]
-function M.panel_header(title_text, opts)
-	local lines = {}
-	if should_render_inline_title(opts) then
-		lines[#lines + 1] = M.title(title_text)
-	end
-	lines[#lines + 1] = M.separator(opts)
-	return lines
-end
-
----Build a standard panel footer block with separator and optional metadata.
----@param current_branch string|nil
----@param key_hints string|nil  inline key hint text
----@param opts table|nil  separator width context
----@return string[]
-function M.panel_footer(current_branch, key_hints, opts)
-	local lines = {}
-	if current_branch or key_hints then
-		lines[#lines + 1] = M.separator(opts)
-		if current_branch then
-			lines[#lines + 1] = ("Current branch: %s"):format(current_branch)
-		end
-		if key_hints then
-			lines[#lines + 1] = M.footer(key_hints)
-		end
-	end
-	return lines
+	return type(line) == "string" and vim.startswith(line, M.glyphs.rule)
 end
 
 -- ── Declarative line + span builder ────────────────────────────────────
 -- Build buffer content as a sequence of lines, each composed of styled
 -- "chunks" ({ text, highlight_group }).  Highlights are recorded as byte
--- spans and applied to a namespace in one pass.  This is the shared
--- rendering primitive behind the issue/PR panels and the pickers.
+-- spans and applied to a namespace as extmarks.  This is the only rendering
+-- primitive: every panel builds a builder and calls B:flush().
 
 ---@class GitflowRenderBuilder
 ---@field lines string[]
 ---@field spans table<integer, table[]>  line_no(1-based) -> { {col_start, col_end, hl}, ... }
+
+-- Snapshot of what render() last wrote to a (buffer, namespace) pair, so an
+-- unchanged re-render can leave both the lines and the extmarks alone. Keyed
+-- by bufnr; dropped when the buffer dies, so a recycled bufnr never inherits
+-- a dead buffer's snapshot.
+local snapshots = {}
+local snapshot_augroup =
+	vim.api.nvim_create_augroup("GitflowRenderSnapshots", { clear = true })
+
+---@param bufnr integer
+---@return table  ns -> { lines = string[], spans = table }
+local function snapshots_for(bufnr)
+	local per_buffer = snapshots[bufnr]
+	if per_buffer then
+		return per_buffer
+	end
+	per_buffer = {}
+	snapshots[bufnr] = per_buffer
+	vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+		group = snapshot_augroup,
+		buffer = bufnr,
+		callback = function()
+			snapshots[bufnr] = nil
+		end,
+	})
+	return per_buffer
+end
+
+local EMPTY_SPANS = {}
+
+---@param a table[]|nil
+---@param b table[]|nil
+---@return boolean
+local function spans_equal(a, b)
+	a = a or EMPTY_SPANS
+	b = b or EMPTY_SPANS
+	if #a ~= #b then
+		return false
+	end
+	for index = 1, #a do
+		local left, right = a[index], b[index]
+		if left[1] ~= right[1] or left[2] ~= right[2] or left[3] ~= right[3] then
+			return false
+		end
+	end
+	return true
+end
+
+---Apply one recorded span as an extmark.
+---@param bufnr integer
+---@param ns integer
+---@param line_no integer  1-based
+---@param text string  the line's text (bounds a col_end of -1)
+---@param span table  { col_start, col_end, hl_group }
+local function set_span(bufnr, ns, line_no, text, span)
+	local col_end = span[2]
+	if col_end == nil or col_end < 0 then
+		col_end = #text
+	end
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, line_no - 1, span[1], {
+		end_row = line_no - 1,
+		end_col = col_end,
+		hl_group = span[3],
+		strict = false,
+	})
+end
 
 ---Create a new line builder.
 ---@return GitflowRenderBuilder
@@ -342,16 +279,76 @@ function M.builder()
 		return #self.lines
 	end
 
-	---Flush lines into a buffer (via ui.buffer.update) and apply highlights.
+	---Render into a buffer, touching only what changed since the last render.
+	---Lines are diffed against the previous render (one nvim_buf_set_lines over
+	---the changed range, none at all when nothing moved) and highlight spans are
+	---re-applied only on lines whose text or spans differ. This is what keeps a
+	---refresh from flickering and from resetting the cursor.
+	---@param buffer_target string|integer  buffer name or bufnr for ui.buffer.update
+	---@param bufnr integer  resolved bufnr to apply highlights on
+	---@param ns integer  highlight namespace
+	function B:render(buffer_target, bufnr, ns)
+		local buffer = require("gitflow.ui.buffer")
+		if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+			buffer.update(buffer_target, self.lines)
+			return
+		end
+
+		local per_buffer = snapshots_for(bufnr)
+		local previous = per_buffer[ns]
+		-- No snapshot (first render, or another writer touched this namespace):
+		-- repaint every span rather than assume what is already on screen.
+		local full_repaint = previous == nil
+
+		local prefix, suffix, old_count = buffer.set_lines_diffed(bufnr, self.lines)
+
+		-- Middle (rewritten text): nvim_buf_set_lines dropped its extmarks.
+		local middle_from, middle_to = prefix + 1, #self.lines - suffix
+		if middle_to >= middle_from then
+			vim.api.nvim_buf_clear_namespace(bufnr, ns, middle_from - 1, middle_to)
+			for line_no = middle_from, middle_to do
+				for _, span in ipairs(self.spans[line_no] or EMPTY_SPANS) do
+					set_span(bufnr, ns, line_no, self.lines[line_no], span)
+				end
+			end
+		end
+
+		-- Unchanged text above and below: their extmarks are still in place and
+		-- shifted with the edit, so repaint only where the spans themselves moved.
+		local old_spans = previous and previous.spans or nil
+		local function repaint_if_spans_changed(line_no, old_line_no)
+			local want = self.spans[line_no]
+			if not full_repaint and spans_equal(want, old_spans[old_line_no]) then
+				return
+			end
+			vim.api.nvim_buf_clear_namespace(bufnr, ns, line_no - 1, line_no)
+			for _, span in ipairs(want or EMPTY_SPANS) do
+				set_span(bufnr, ns, line_no, self.lines[line_no], span)
+			end
+		end
+
+		for line_no = 1, prefix do
+			repaint_if_spans_changed(line_no, line_no)
+		end
+		for offset = 0, suffix - 1 do
+			repaint_if_spans_changed(#self.lines - offset, old_count - offset)
+		end
+
+		per_buffer[ns] = { spans = vim.deepcopy(self.spans) }
+	end
+
+	---Render this builder into a panel buffer. The single flush path: panels
+	---never call ui.buffer.update and apply highlights by hand.
 	---@param buffer_target string|integer  buffer name or bufnr for ui.buffer.update
 	---@param bufnr integer  resolved bufnr to apply highlights on
 	---@param ns integer  highlight namespace
 	function B:flush(buffer_target, bufnr, ns)
-		require("gitflow.ui.buffer").update(buffer_target, self.lines)
-		self:apply(bufnr, ns)
+		self:render(buffer_target, bufnr, ns)
 	end
 
-	---Apply recorded highlight spans to a buffer namespace.
+	---Apply recorded highlight spans to a buffer namespace, replacing whatever
+	---the namespace held. For surfaces that write their own lines (the pickers,
+	---which keep a live prompt line) and so cannot use render().
 	---@param bufnr integer
 	---@param ns integer
 	function B:apply(bufnr, ns)
@@ -361,15 +358,37 @@ function M.builder()
 		vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
 		for line_no, list in pairs(self.spans) do
 			for _, span in ipairs(list) do
-				pcall(
-					vim.api.nvim_buf_add_highlight,
-					bufnr, ns, span[3], line_no - 1, span[1], span[2]
-				)
+				set_span(bufnr, ns, line_no, self.lines[line_no] or "", span)
 			end
 		end
 	end
 
 	return B
+end
+
+---Apply a single highlight span to a buffer namespace as an extmark.
+---The replacement for nvim_buf_add_highlight, deprecated in Neovim 0.11.
+---@param bufnr integer
+---@param ns integer
+---@param group string
+---@param line integer  0-based row
+---@param col_start integer  0-based byte col
+---@param col_end integer  0-based byte col, or -1 for end of line
+function M.highlight(bufnr, ns, group, line, col_start, col_end)
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	local resolved_end = col_end
+	if resolved_end == nil or resolved_end < 0 then
+		local text = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
+		resolved_end = text and #text or 0
+	end
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, line, col_start, {
+		end_row = line,
+		end_col = resolved_end,
+		hl_group = group,
+		strict = false,
+	})
 end
 
 ---Format an ISO-8601 UTC timestamp as a short relative time ("3 days ago").
@@ -429,7 +448,7 @@ function M.truncate(str, max)
 		return str
 	end
 	if max == 1 then
-		return "\u{2026}"
+		return M.glyphs.ellipsis
 	end
 	-- Walk characters until we'd exceed (max - 1) display cells, leaving room
 	-- for the ellipsis.
@@ -443,7 +462,7 @@ function M.truncate(str, max)
 		out = out .. ch
 		width = width + cw
 	end
-	return out .. "\u{2026}"
+	return out .. M.glyphs.ellipsis
 end
 
 ---Pad a string on the right to a display width (truncating if needed).
@@ -467,7 +486,7 @@ end
 ---@return table[]  chunk list
 function M.hint_chunks(pairs, opts)
 	local options = opts or {}
-	local sep = options.sep or "   "
+	local sep = options.sep or M.separators.hint
 	local chunks = {}
 	if options.leading then
 		chunks[#chunks + 1] = { options.leading, "GitflowHintSep" }

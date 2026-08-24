@@ -1,5 +1,6 @@
 local ui = require("gitflow.ui")
 local ui_render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
 local git_branch = require("gitflow.git.branch")
@@ -207,6 +208,38 @@ local function ensure_window(cfg)
 	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
+---Classify one raw diff line into its highlight group.
+---@param line string
+---@return string|nil
+local function diff_line_group(line)
+	if vim.startswith(line, "diff --git")
+		or vim.startswith(line, "index ")
+		or vim.startswith(line, "--- ")
+		or vim.startswith(line, "+++ ")
+		or vim.startswith(line, "new file mode")
+		or vim.startswith(line, "deleted file mode")
+		or vim.startswith(line, "rename from")
+		or vim.startswith(line, "rename to")
+		or vim.startswith(line, "similarity index")
+		or vim.startswith(line, "old mode")
+		or vim.startswith(line, "new mode") then
+		return "GitflowDiffFileHeader"
+	end
+	if vim.startswith(line, "@@") then
+		return "GitflowDiffHunkHeader"
+	end
+	if vim.startswith(line, "+") and not vim.startswith(line, "+++") then
+		return "GitflowAdded"
+	end
+	if vim.startswith(line, "-") and not vim.startswith(line, "---") then
+		return "GitflowRemoved"
+	end
+	if vim.startswith(line, " ") then
+		return "GitflowDiffContext"
+	end
+	return nil
+end
+
 ---@param _title string
 ---@param text string
 ---@param current_branch string
@@ -216,29 +249,27 @@ local function render(title, text, current_branch)
 		bufnr = M.state.bufnr,
 		winid = M.state.winid,
 	}
-	local lines = ui_render.panel_header(title, render_opts)
-	local header_line_count = #lines
+	local B = ui_render.builder()
+	components.header(B, title, render_opts)
 
 	-- Build file summary section
 	local preview_files, preview_hunks =
 		git_diff.collect_markers(diff_lines, 1)
 	if #preview_files > 0 then
-		lines[#lines + 1] = ("Files: %d  Hunks: %d"):format(
-			#preview_files, #preview_hunks
+		B:raw(
+			("Files: %d  Hunks: %d"):format(#preview_files, #preview_hunks),
+			"GitflowTitle"
 		)
 	end
 
-	local diff_start_idx = #lines + 1
+	local diff_start_idx = B:count() + 1
 	for _, line in ipairs(diff_lines) do
-		lines[#lines + 1] = line
+		B:raw(line, diff_line_group(line))
 	end
-	local footer_lines = ui_render.panel_footer(
-		current_branch, nil, render_opts
-	)
-	for _, line in ipairs(footer_lines) do
-		lines[#lines + 1] = line
+	if current_branch then
+		B:raw(ui_render.separator(render_opts), "GitflowSeparator")
+		B:raw(("Current branch: %s"):format(current_branch), "GitflowFooter")
 	end
-	ui.buffer.update("diff", lines)
 
 	-- Collect markers relative to buffer positions
 	M.state.file_markers, M.state.hunk_markers,
@@ -247,55 +278,10 @@ local function render(title, text, current_branch)
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		ui.buffer.update("diff", B.lines)
 		return
 	end
-
-	local entry_highlights = {}
-
-	-- File summary header highlight
-	if #preview_files > 0 then
-		entry_highlights[header_line_count + 1] =
-			"GitflowHeader"
-	end
-
-	for idx, line in ipairs(diff_lines) do
-		local buf_line = idx + diff_start_idx - 1
-		local group = nil
-		if vim.startswith(line, "diff --git")
-			or vim.startswith(line, "index ")
-			or vim.startswith(line, "--- ")
-			or vim.startswith(line, "+++ ") then
-			group = "GitflowDiffFileHeader"
-		elseif vim.startswith(line, "new file mode")
-			or vim.startswith(line, "deleted file mode")
-			or vim.startswith(line, "rename from")
-			or vim.startswith(line, "rename to")
-			or vim.startswith(line, "similarity index")
-			or vim.startswith(line, "old mode")
-			or vim.startswith(line, "new mode") then
-			group = "GitflowDiffFileHeader"
-		elseif vim.startswith(line, "@@") then
-			group = "GitflowDiffHunkHeader"
-		elseif vim.startswith(line, "+")
-			and not vim.startswith(line, "+++") then
-			group = "GitflowAdded"
-		elseif vim.startswith(line, "-")
-			and not vim.startswith(line, "---") then
-			group = "GitflowRemoved"
-		elseif vim.startswith(line, " ") then
-			group = "GitflowDiffContext"
-		end
-		if group then
-			entry_highlights[buf_line] = group
-		end
-	end
-
-	ui_render.apply_panel_highlights(
-		bufnr, DIFF_HIGHLIGHT_NS, lines, {
-			footer_line = #lines,
-			entry_highlights = entry_highlights,
-		}
-	)
+	B:flush("diff", bufnr, DIFF_HIGHLIGHT_NS)
 
 	-- Line numbers via right-aligned virtual text
 	vim.api.nvim_buf_clear_namespace(
