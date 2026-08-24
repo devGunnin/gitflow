@@ -135,39 +135,169 @@ function M.run(args, opts, on_exit)
 	end)
 end
 
----Owner/repo out of a remote url, in either form git writes it:
----`git@host:owner/repo.git` or `https://host/owner/repo(.git)`.
+---Host and `owner/repo` out of a remote url, in either form git writes it:
+---`git@host:owner/repo.git` or `https://host/owner/repo(.git)`. Nested paths
+---(GitLab subgroups) yield no slug: two segments is what GitHub has.
 ---@param url string
----@return string|nil
-local function slug_from_remote_url(url)
-	local path = url:match("^[%w+.-]+://[^/]+/(.+)$") or url:match("^[^/]+:(.+)$")
-	if not path then
-		return nil
+---@return string|nil host
+---@return string|nil slug
+local function parse_remote_url(url)
+	local host, path = url:match("^[%w+.-]+://([^/]+)/(.+)$")
+	if not host then
+		local authority
+		authority, path = url:match("^([^/]+):(.+)$")
+		if not authority then
+			return nil, nil
+		end
+		host = authority
 	end
+	host = (host or ""):gsub("^[^@]*@", ""):gsub(":%d+$", "")
 	path = path:gsub("%.git$", ""):gsub("/+$", "")
-	local owner, repo = path:match("([^/]+)/([^/]+)$")
+	local owner, repo = path:match("^([^/]+)/([^/]+)$")
 	if not owner or not repo then
-		return nil
+		return host, nil
 	end
-	return ("%s/%s"):format(owner, repo)
+	return host, ("%s/%s"):format(owner, repo)
 end
 
----Which repository a `gh` call made from this cwd will act on, for prompts
----that must name it. Read from git, never from `gh` — a confirm gate must not
----spend a request (or fire a process) just to describe itself. Falls back to
----the directory when there is no usable origin, which still tells the user
----where they are.
----@return string
-function M.repo_label()
-	local cwd = vim.fn.getcwd()
-	local out = vim.fn.systemlist({ "git", "-C", cwd, "remote", "get-url", "origin" })
-	if vim.v.shell_error == 0 and out and out[1] then
-		local slug = slug_from_remote_url(vim.trim(out[1]))
-		if slug then
-			return slug
+---@param host string|nil
+---@return boolean
+local function is_github_host(host)
+	if not host or host == "" then
+		return false
+	end
+	host = host:lower():gsub("^www%.", "")
+	if host == "github.com" then
+		return true
+	end
+	local configured = vim.env.GH_HOST
+	return configured ~= nil and configured ~= "" and host == configured:lower()
+end
+
+---Every `remote.<name>.url` and `remote.<name>.gh-resolved` in one git call.
+---@param cwd string
+---@return table<string, string> urls
+---@return table<string, string> resolved  `gh repo set-default` overrides
+local function remote_config(cwd)
+	local urls, resolved = {}, {}
+	local out = vim.fn.systemlist({ "git", "-C", cwd, "config", "--get-regexp", "^remote\\." })
+	if vim.v.shell_error ~= 0 or type(out) ~= "table" then
+		return urls, resolved
+	end
+	for _, line in ipairs(out) do
+		local key, value = line:match("^(%S+)%s+(.*)$")
+		if key then
+			local name = key:match("^remote%.(.+)%.url$")
+			if name then
+				urls[name] = vim.trim(value)
+			else
+				name = key:match("^remote%.(.+)%.gh%-resolved$")
+				if name then
+					resolved[name] = vim.trim(value)
+				end
+			end
 		end
 	end
-	return cwd
+	return urls, resolved
+end
+
+---With no `gh repo set-default`, gh takes the first remote it knows in this
+---order — so a fork checkout (origin=fork, upstream=canonical) resolves to
+---upstream, not origin.
+local REMOTE_PREFERENCE = { "upstream", "github", "origin" }
+
+---@param urls table<string, string>
+---@return string[]
+local function remote_names_in_gh_order(urls)
+	local names, seen = {}, {}
+	for _, name in ipairs(REMOTE_PREFERENCE) do
+		if urls[name] then
+			names[#names + 1] = name
+			seen[name] = true
+		end
+	end
+	local rest = {}
+	for name in pairs(urls) do
+		if not seen[name] then
+			rest[#rest + 1] = name
+		end
+	end
+	table.sort(rest)
+	return vim.list_extend(names, rest)
+end
+
+---The repository a `gh` call from this cwd will act on, or nil when git alone
+---cannot say: no remote gh would serve, a host it does not serve, or a path
+---that is not `owner/repo`.
+---@param cwd string
+---@return string|nil
+local function resolved_repo(cwd)
+	local urls, resolved = remote_config(cwd)
+	local names = remote_names_in_gh_order(urls)
+
+	-- `gh repo set-default` wins outright: either an explicit owner/repo or
+	-- `base`, meaning that remote's own slug.
+	for _, name in ipairs(names) do
+		local override = resolved[name]
+		if override and override ~= "base" then
+			local owner, repo = override:match("([^/]+)/([^/]+)$")
+			return owner and ("%s/%s"):format(owner, repo) or nil
+		end
+	end
+
+	local candidates = {}
+	for _, name in ipairs(names) do
+		local host, slug = parse_remote_url(urls[name])
+		if slug and is_github_host(host) then
+			if resolved[name] == "base" then
+				return slug
+			end
+			candidates[#candidates + 1] = slug
+		end
+	end
+	return candidates[1]
+end
+
+---Which repository a `gh` call made from `cwd` will act on, for prompts that
+---must name it. Read from git, never from `gh` — a confirm gate must not spend
+---a request (or fire a process) just to describe itself. Falls back to the
+---directory whenever git cannot say which repo gh would pick, so the gate
+---never asserts a repo the command would not touch.
+---@param cwd string|nil  defaults to the live cwd
+---@return string
+function M.repo_label(cwd)
+	cwd = cwd or vim.fn.getcwd()
+	return resolved_repo(cwd) or cwd
+end
+
+---@param result GitflowGitResult
+---@return string
+function M.output(result)
+	return git.output(result)
+end
+
+---@param args string[]
+---@param opts GitflowGitRunOpts|nil
+---@param on_exit fun(result: GitflowGitResult)
+function M.run(args, opts, on_exit)
+	if type(args) ~= "table" then
+		error("gitflow gh error: run(args, opts, on_exit) requires args table", 2)
+	end
+	if type(on_exit) ~= "function" then
+		error("gitflow gh error: run(args, opts, on_exit) requires callback", 2)
+	end
+
+	git.run(build_command(args), opts, function(result)
+		-- An auth-shaped failure means the cached verdict went stale (token
+		-- expired, `gh auth logout` elsewhere) — re-check on next use.
+		if
+			result.code ~= 0
+			and M.classify_failure(M.output(result)) == "auth"
+		then
+			M.state.checked = false
+		end
+		on_exit(result)
+	end)
 end
 
 ---@param result GitflowGitResult
