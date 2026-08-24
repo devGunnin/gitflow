@@ -6,7 +6,7 @@
 --- resolution actions are c-prefixed so plain vim motions (o, a, e, b, t, r,
 --- i, …) keep working while you hand-edit a hunk:
 ---   co ours · ct theirs · cb both · cB base · ca all · ce edit
----   cx reset file to conflicted state · ]c/[c jump · cr refresh
+---   cD reset file to conflicted state · ]c/[c jump · cr refresh
 ---   q save & close
 
 local ui = require("gitflow.ui")
@@ -133,7 +133,9 @@ local KEYMAPS = {
 	{ key = "ca", desc = "all", run = function() M.resolve_all_from_prompt() end },
 	{ key = "ce", desc = "edit", run = function() M.edit_current_hunk() end },
 	{ key = "cr", desc = "refresh", hint = false, run = function() M.refresh() end },
-	{ key = "cx", desc = "reset", destructive = true,
+	-- Not `cx`: that opens this resolver from the status panel, and the same
+	-- chord must not also be the key that throws the work in it away.
+	{ key = "cD", desc = "reset", destructive = true,
 		run = function() M.reset_file() end },
 	{ key = "]c/[c", keys = { "]c", "[c" }, desc = "jump",
 		run = function(key)

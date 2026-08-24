@@ -375,7 +375,7 @@ local function resolve_single_file(path, side, expected, opts)
 		-- resolution actions are c-prefixed so plain vim motions stay usable
 		assert_keymaps(
 			merged_buf,
-			{ "co", "ct", "cB", "cb", "ca", "ce", "cr", "cx", "]c", "[c", "q" }
+			{ "co", "ct", "cB", "cb", "ca", "ce", "cr", "cD", "c?", "]c", "[c", "q" }
 		)
 		asserted_view_shape = true
 	end

@@ -93,8 +93,11 @@ local P = panel.new({
 					M.move_up()
 				end
 			end },
+		-- Destructive, not essential: executing rewrites history, and the two
+		-- tiers are exclusive. It drops first from a cramped hint bar; `?`
+		-- always lists it.
 		{ key = "X", desc = "execute", views = { "todo", "normal" },
-			essential = true, run = function()
+			destructive = true, run = function()
 				M.execute()
 			end },
 		{ key = "i", desc = "interactive", views = { "normal" }, run = function()
