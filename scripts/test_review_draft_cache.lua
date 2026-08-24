@@ -255,6 +255,7 @@ end)
 -- ── a failed save must not destroy what is already on disk ────────────
 
 test("a save that cannot be completed leaves the previous drafts on disk", function()
+	-- luacheck: ignore 122
 	-- Opening the target itself truncates it, so the write goes to a
 	-- neighbouring file and is renamed over. Failing the rename is the only
 	-- way to reach a half-done save from a test.
