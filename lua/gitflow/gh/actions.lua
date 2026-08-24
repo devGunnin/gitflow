@@ -301,7 +301,15 @@ function M.status_highlight(run)
 	return "Comment"
 end
 
----@param params table|nil
+---@class GitflowActionListParams
+---@field branch string|nil  nil/"" means all branches
+---@field limit integer|nil
+---@field workflow string|nil  workflow name or filename
+---@field status string|nil  gh's --status enum (e.g. "success", "in_progress")
+---@field event string|nil  triggering event (e.g. "push", "pull_request")
+---@field actor string|nil  triggering GitHub username
+
+---@param params GitflowActionListParams|nil
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, runs: GitflowActionRun[]|nil)
 function M.list(params, opts, cb)
@@ -321,6 +329,22 @@ function M.list(params, opts, cb)
 	if options.limit and tonumber(options.limit) then
 		args[#args + 1] = "--limit"
 		args[#args + 1] = tostring(options.limit)
+	end
+	if options.workflow and options.workflow ~= "" then
+		args[#args + 1] = "--workflow"
+		args[#args + 1] = tostring(options.workflow)
+	end
+	if options.status and options.status ~= "" then
+		args[#args + 1] = "--status"
+		args[#args + 1] = tostring(options.status)
+	end
+	if options.event and options.event ~= "" then
+		args[#args + 1] = "--event"
+		args[#args + 1] = tostring(options.event)
+	end
+	if options.actor and options.actor ~= "" then
+		args[#args + 1] = "--user"
+		args[#args + 1] = tostring(options.actor)
 	end
 
 	gh.json(args, opts, function(err, data)
@@ -384,6 +408,303 @@ function M.view(run_id, opts, cb)
 			end
 			cb(nil, run)
 		end)
+	end)
+end
+
+---GitHub Actions runs only ever settle into "completed" — every other status
+---(queued, in_progress, waiting, pending, requested, action_required) is
+---still in flight. This is the single stop condition the watch poller uses.
+---@param status string
+---@return boolean
+function M.is_terminal_status(status)
+	return status == "completed"
+end
+
+---Strip ANSI SGR/cursor escapes and OSC-8 hyperlink wrappers from raw `gh`
+---log text so a log buffer shows plain readable lines.
+---@param text string
+---@return string
+function M.strip_ansi(text)
+	text = text or ""
+	-- OSC 8 hyperlinks: ESC ] 8 ; params ; uri BEL ... ESC ] 8 ; ; BEL
+	text = text:gsub("\27%]8;[^\7]*\7", "")
+	-- CSI sequences: ESC [ ... <letter> (colors, cursor movement, erase).
+	text = text:gsub("\27%[[%d;]*[A-Za-z]", "")
+	-- Any remaining lone escape byte.
+	text = text:gsub("\27", "")
+	return text
+end
+
+---@param raw_line string
+---@return string|nil job, string|nil step, string message
+local function split_log_line(raw_line)
+	local job, step, message = raw_line:match("^([^\t]+)\t([^\t]+)\t(.+)$")
+	if job and step then
+		return job, step, message
+	end
+	return nil, nil, raw_line
+end
+
+---Format raw tab-separated `gh run view --log[-failed]` text into readable,
+---ANSI-stripped lines with a rule header whenever the job/step changes.
+---@param log_output string
+---@param opts { show_job: boolean }|nil
+---@return string[]
+local function format_log_lines(log_output, opts)
+	local show_job = opts == nil or opts.show_job ~= false
+	local lines = {}
+	local last_job, last_step = nil, nil
+
+	for _, raw_line in ipairs(vim.split(
+		log_output or "", "\n", { plain = true, trimempty = true }
+	)) do
+		local job, step, message = split_log_line(raw_line)
+		if job and (job ~= last_job or step ~= last_step) then
+			local header = show_job
+				and ("── %s / %s "):format(job, step)
+				or ("── %s "):format(step)
+			lines[#lines + 1] = header
+				.. string.rep("─", math.max(0, 70 - #header))
+			last_job, last_step = job, step
+		end
+		lines[#lines + 1] = M.strip_ansi(message)
+	end
+
+	return lines
+end
+
+---Line number (1-based, into `lines`) of the first line that looks like a
+---GitHub Actions error annotation or an "error"/"fail"/"exception" mention.
+---Mirrors the heuristic in parse_failed_log_snippets, applied to a flat log.
+---@param lines string[]
+---@return integer|nil
+function M.find_first_error_line(lines)
+	for index, line in ipairs(lines) do
+		if line:find("##%[error%]") then
+			return index
+		end
+	end
+	for index, line in ipairs(lines) do
+		local lowered = line:lower()
+		if lowered:find("error", 1, true)
+			or lowered:find("fail", 1, true)
+			or lowered:find("exception", 1, true)
+		then
+			return index
+		end
+	end
+	return nil
+end
+
+---Full run log (every job/step), ANSI-stripped and readable in a buffer.
+---@param run_id integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, lines: string[]|nil)
+function M.log(run_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil)
+		return
+	end
+
+	gh.run({ "run", "view", tostring(run_id), "--log" }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, ("view %s --log"):format(run_id)), nil)
+			return
+		end
+		cb(nil, format_log_lines(gh.output(result)))
+	end)
+end
+
+---Single-job log, ANSI-stripped. Step headers only (the job is already fixed).
+---@param run_id integer|string
+---@param job_id integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, lines: string[]|nil)
+function M.job_log(run_id, job_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil)
+		return
+	end
+
+	gh.run({
+		"run", "view", tostring(run_id), "--job", tostring(job_id), "--log",
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(
+				error_from_result(
+					result,
+					("view %s --job %s --log"):format(run_id, job_id)
+				),
+				nil
+			)
+			return
+		end
+		cb(nil, format_log_lines(gh.output(result), { show_job = false }))
+	end)
+end
+
+---@param run_id integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.rerun(run_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run({ "run", "rerun", tostring(run_id) }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, ("rerun %s"):format(run_id)), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@param run_id integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.rerun_failed(run_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run(
+		{ "run", "rerun", tostring(run_id), "--failed" },
+		opts,
+		function(result)
+			if result.code ~= 0 then
+				cb(
+					error_from_result(result, ("rerun %s --failed"):format(run_id)),
+					result
+				)
+				return
+			end
+			cb(nil, result)
+		end
+	)
+end
+
+---@param run_id integer|string
+---@param job_id integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.rerun_job(run_id, job_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run(
+		{ "run", "rerun", tostring(run_id), "--job", tostring(job_id) },
+		opts,
+		function(result)
+			if result.code ~= 0 then
+				cb(
+					error_from_result(
+						result,
+						("rerun %s --job %s"):format(run_id, job_id)
+					),
+					result
+				)
+				return
+			end
+			cb(nil, result)
+		end
+	)
+end
+
+---@param run_id integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.cancel(run_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run({ "run", "cancel", tostring(run_id) }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, ("cancel %s"):format(run_id)), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@class GitflowActionWorkflow
+---@field id integer
+---@field name string
+---@field path string
+---@field state string
+
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, workflows: GitflowActionWorkflow[]|nil)
+function M.workflow_list(opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil)
+		return
+	end
+
+	gh.json(
+		{ "workflow", "list", "--json", "id,name,path,state" },
+		opts,
+		function(err, data)
+			if err then
+				cb(err, nil)
+				return
+			end
+			local workflows = {}
+			for _, raw in ipairs(data or {}) do
+				workflows[#workflows + 1] = {
+					id = tonumber(raw.id) or 0,
+					name = raw.name or "",
+					path = raw.path or "",
+					state = raw.state or "",
+				}
+			end
+			cb(nil, workflows)
+		end
+	)
+end
+
+---Dispatch a `workflow_dispatch` event. No interactive inputs are collected —
+---only workflow-level `on.workflow_dispatch` triggers with no required inputs
+---are supported this way (a scoped decision, see the PR description).
+---@param workflow string  workflow id, filename, or name
+---@param ref string|nil  branch/tag to dispatch on; nil uses the default
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.workflow_run(workflow, ref, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local args = { "workflow", "run", tostring(workflow) }
+	if ref and ref ~= "" then
+		args[#args + 1] = "--ref"
+		args[#args + 1] = tostring(ref)
+	end
+
+	gh.run(args, opts, function(result)
+		if result.code ~= 0 then
+			cb(
+				error_from_result(result, ("workflow run %s"):format(workflow)),
+				result
+			)
+			return
+		end
+		cb(nil, result)
 	end)
 end
 
