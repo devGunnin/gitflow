@@ -226,32 +226,143 @@ for _, name in ipairs(LIFECYCLE_PANELS) do
 			ui_buffer.get(name), nil, "buffer registry should be empty after close"
 		)
 	end)
+end
 
-	test(("%s: a superseded callback is dropped"):format(name), function()
+-- ── stale requests: drive each panel's own async path ─────────────────
+-- Asserting on P:next_request()/P:is_active() alone proves the base's counter
+-- works, not that a panel consults it: every guard could be deleted and such
+-- a test would still pass. So each panel below is driven through its real
+-- refresh chain with its git lister stubbed, and the superseded callback is
+-- released by hand.
+--
+-- The callback is delivered as a failure, which is the one shape every panel
+-- handles identically (notify + render_error) — so an unguarded panel paints
+-- a marker we can see. The live callback is released the same way right
+-- after, and its marker MUST appear: that is what keeps the stale assertion
+-- from passing vacuously.
+
+---@class GitflowStaleGuardCase
+---@field name string  panel module name
+---@field module string  git module whose lister the refresh chain calls
+---@field fn string  the lister; its last argument is the callback
+---@field prepare fun(mod: table)|nil  state a refresh needs before it will run
+
+---@type GitflowStaleGuardCase[]
+local STALE_GUARD_PANELS = {
+	{ name = "status", module = "gitflow.git.status", fn = "fetch" },
+	{ name = "log", module = "gitflow.git.log", fn = "list" },
+	{ name = "branch", module = "gitflow.git.branch", fn = "list" },
+	{ name = "stash", module = "gitflow.git.stash", fn = "list" },
+	{ name = "tag", module = "gitflow.git.tag", fn = "list" },
+	{ name = "reflog", module = "gitflow.git.reflog", fn = "list" },
+	{ name = "reset", module = "gitflow.git.reset", fn = "list_commits" },
+	{ name = "revert", module = "gitflow.git.revert", fn = "list_commits" },
+	{ name = "conflict", module = "gitflow.git.conflict", fn = "list" },
+	{ name = "worktree", module = "gitflow.git.worktree", fn = "list" },
+	{
+		name = "blame",
+		module = "gitflow.git.blame",
+		fn = "run",
+		prepare = function(mod)
+			mod.state.filepath = project_root .. "/README.md"
+		end,
+	},
+}
+
+---@param P table
+---@return string
+local function buffer_text(P)
+	local bufnr = P.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return ""
+	end
+	return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+end
+
+for _, case in ipairs(STALE_GUARD_PANELS) do
+	test(("%s: a superseded callback never paints"):format(case.name), function()
+		local modname = "gitflow.panels." .. case.name
 		local mod = require(modname)
 		local P = panel_object(modname)
+		local git_mod = require(case.module)
 
-		mod.open(cfg, {})
-		local stale = P:next_request()
-		P:next_request()
-		assert_true(
-			not P:is_active(stale),
-			"a request superseded by a newer one must not be active"
-		)
+		local held = {}
+		local real_lister = git_mod[case.fn]
+		local real_notify = utils.notify
+		local notified = {}
+		git_mod[case.fn] = function(...)
+			local args = { ... }
+			held[#held + 1] = args[select("#", ...)]
+		end
+		utils.notify = function(message)
+			notified[#notified + 1] = tostring(message)
+		end
+
+		---Run one refresh chain to its (stubbed) lister and return the
+		---callback it held. Awaited one at a time so the order of `held` is
+		---the order the refreshes were issued.
+		---@return function
+		local function refresh_and_hold()
+			local before_count = #held
+			mod.refresh()
+			assert_true(
+				vim.wait(5000, function()
+					return #held > before_count
+				end, 10),
+				("%s never reached %s.%s"):format(case.name, case.module, case.fn)
+			)
+			return held[#held]
+		end
+
+		local ok, err = pcall(function()
+			if case.prepare then
+				case.prepare(mod)
+			end
+			mod.open(cfg, {})
+			assert_true(
+				vim.wait(5000, function()
+					return #held >= 1
+				end, 10),
+				("%s never reached %s.%s on open"):format(
+					case.name, case.module, case.fn
+				)
+			)
+
+			local stale_cb = refresh_and_hold()
+			local live_cb = refresh_and_hold()
+
+			local stale_marker = ("STALE-%s-marker"):format(case.name)
+			local live_marker = ("LIVE-%s-marker"):format(case.name)
+			local before = buffer_text(P)
+
+			stale_cb(stale_marker)
+			assert_equals(
+				buffer_text(P), before,
+				("%s repainted from a superseded callback"):format(case.name)
+			)
+			assert_true(
+				not table.concat(notified, "\n"):find(stale_marker, 1, true),
+				("%s reported a superseded failure to the user"):format(case.name)
+			)
+
+			live_cb(live_marker)
+			assert_true(
+				buffer_text(P):find(live_marker, 1, true) ~= nil,
+				("%s never paints the live failure — the stale assertion above"
+					.. " proves nothing"):format(case.name)
+			)
+			assert_true(
+				not buffer_text(P):find(stale_marker, 1, true),
+				("%s leaked the superseded failure into the buffer"):format(
+					case.name
+				)
+			)
+		end)
+
+		git_mod[case.fn] = real_lister
+		utils.notify = real_notify
 		mod.close()
-	end)
-
-	test(("%s: a request outliving the panel is dropped"):format(name), function()
-		local mod = require(modname)
-		local P = panel_object(modname)
-
-		mod.open(cfg, {})
-		local in_flight = P:next_request()
-		mod.close()
-		assert_true(
-			not P:is_active(in_flight),
-			"close must invalidate in-flight requests"
-		)
+		assert_true(ok, tostring(err))
 	end)
 end
 
