@@ -284,6 +284,10 @@ function M.builder()
 	---the changed range, none at all when nothing moved) and highlight spans are
 	---re-applied only on lines whose text or spans differ. This is what keeps a
 	---refresh from flickering and from resetting the cursor.
+	---
+	---Two contracts the caller owns: `buffer_target` and `bufnr` must name the
+	---same buffer, and `ns` must belong to this builder alone — the snapshot
+	---assumes nothing else clears or writes that namespace.
 	---@param buffer_target string|integer  buffer name or bufnr for ui.buffer.update
 	---@param bufnr integer  resolved bufnr to apply highlights on
 	---@param ns integer  highlight namespace
@@ -294,10 +298,10 @@ function M.builder()
 			return
 		end
 
+		-- No snapshot means nothing is known about what is on screen (first
+		-- render into this buffer), so repaint every span rather than assume.
 		local per_buffer = snapshots_for(bufnr)
 		local previous = per_buffer[ns]
-		-- No snapshot (first render, or another writer touched this namespace):
-		-- repaint every span rather than assume what is already on screen.
 		local full_repaint = previous == nil
 
 		local prefix, suffix, old_count = buffer.set_lines_diffed(bufnr, self.lines, ns)

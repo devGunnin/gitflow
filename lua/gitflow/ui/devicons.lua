@@ -95,7 +95,8 @@ local function adapt_to_background(key)
 	if vim.o.background == "light" then
 		scale = lum > 0.55 and (0.45 / lum) or nil
 	else
-		scale = lum < 0.30 and (0.40 / math.max(lum, 0.05)) or nil
+		-- Capped: an almost-black brand color scaled freely loses its hue.
+		scale = lum < 0.30 and math.min(3.0, 0.40 / math.max(lum, 0.05)) or nil
 	end
 	if not scale then
 		return key
