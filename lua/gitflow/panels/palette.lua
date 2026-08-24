@@ -569,29 +569,40 @@ local function refresh_query()
 	render()
 end
 
+-- The palette is two stacked floats (prompt above list) that must read as
+-- one block, so their combined geometry comes from window.float_geometry
+-- in two passes: first to size the list against cfg.ui.float.height (as
+-- before), then to centre the whole prompt+gap+list block, chrome-aware,
+-- inside window.float_area(). A too-small terminal returns nil plus the
+-- reason from float_geometry, same contract as open_float.
 ---@param cfg GitflowConfig
----@return integer, integer, integer, integer, integer
+---@return integer|nil width, integer|nil prompt_height, integer|nil list_height, integer|nil row, integer|nil col, string|nil err
 local function compute_layout(cfg)
-	local columns = vim.o.columns
-	local editor_lines = vim.o.lines - vim.o.cmdheight
-
-	local width = math.max(50, math.floor(columns * cfg.ui.float.width))
+	local area = ui.window.float_area()
 	local prompt_height = 3
-	local list_height = math.max(
-		10, math.floor(editor_lines * cfg.ui.float.height)
-	)
-	local combined_height = prompt_height + 1 + list_height
+	local gap = 1
 
-	if combined_height > editor_lines - 2 then
-		list_height = math.max(8, editor_lines - prompt_height - 3)
-		combined_height = prompt_height + 1 + list_height
+	local list_geometry, list_err = ui.window.float_geometry({
+		width = cfg.ui.float.width,
+		height = cfg.ui.float.height,
+		border = cfg.ui.float.border,
+	}, area)
+	if not list_geometry then
+		return nil, nil, nil, nil, nil, list_err
 	end
 
-	local row = math.max(
-		0, math.floor((editor_lines - combined_height) / 2)
-	)
-	local col = math.max(0, math.floor((columns - width) / 2))
-	return width, prompt_height, list_height, row, col
+	local block_geometry, block_err = ui.window.float_geometry({
+		width = list_geometry.width,
+		height = prompt_height + gap + list_geometry.height,
+		border = cfg.ui.float.border,
+	}, area)
+	if not block_geometry then
+		return nil, nil, nil, nil, nil, block_err
+	end
+
+	local list_height = math.max(1, block_geometry.height - prompt_height - gap)
+	return block_geometry.width, prompt_height, list_height,
+		block_geometry.row, block_geometry.col
 end
 
 local function setup_prompt_autocmd()
@@ -756,24 +767,25 @@ end
 ---@param cfg GitflowConfig
 ---@return integer|nil winid, integer|nil bufnr
 local function open_backdrop(cfg)
-	local columns = vim.o.columns
-	local editor_lines = vim.o.lines
 	local backdrop_bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_set_option_value(
 		"bufhidden", "wipe", { buf = backdrop_bufnr }
 	)
-	local ok, winid = pcall(vim.api.nvim_open_win, backdrop_bufnr, false, {
-		relative = "editor",
-		width = columns,
-		height = editor_lines,
+	-- Full-editor dimensions are absolute cells (> 1), so open_float's own
+	-- float_geometry pass clamps them chrome-aware instead of re-deriving
+	-- raw vim.o.columns/lines by hand.
+	local winid = ui.window.open_float({
+		bufnr = backdrop_bufnr,
+		width = vim.o.columns,
+		height = vim.o.lines,
 		row = 0,
 		col = 0,
-		style = "minimal",
-		focusable = false,
-		zindex = 40,
 		border = "none",
+		zindex = 40,
+		focusable = false,
+		enter = false,
 	})
-	if not ok then
+	if not winid then
 		pcall(
 			vim.api.nvim_buf_delete, backdrop_bufnr,
 			{ force = true }
@@ -820,8 +832,17 @@ function M.open(cfg, entries, on_select)
 		"GitflowPaletteRender"
 	)
 
-	local width, prompt_height, list_height, row, col =
+	local width, prompt_height, list_height, row, col, layout_err =
 		compute_layout(cfg)
+	if not width then
+		M.close()
+		utils.notify(
+			layout_err
+				or "Gitflow: terminal too small to open the command palette",
+			vim.log.levels.WARN
+		)
+		return
+	end
 
 	-- Backdrop overlay for visual focus
 	local backdrop_winid, backdrop_bufnr = open_backdrop(cfg)

@@ -18,6 +18,8 @@
 ---@field title_pos? "left"|"center"|"right"
 ---@field footer? string|string[]
 ---@field footer_pos? "left"|"center"|"right"
+---@field zindex? integer  stacking order; omit to take nvim_open_win's default
+---@field focusable? boolean  default true
 ---@field enter? boolean
 ---@field on_close? fun(winid: integer)
 
@@ -330,6 +332,12 @@ function M.open_float(opts)
 	if opts.footer and vim.fn.has("nvim-0.10") == 1 then
 		win_opts.footer = opts.footer
 		win_opts.footer_pos = opts.footer_pos or "center"
+	end
+	if opts.zindex then
+		win_opts.zindex = opts.zindex
+	end
+	if opts.focusable == false then
+		win_opts.focusable = false
 	end
 	local winid = vim.api.nvim_open_win(
 		opts.bufnr, opts.enter ~= false, win_opts
