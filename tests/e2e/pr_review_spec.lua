@@ -108,7 +108,7 @@ end
 --- *rehydration* seed the cache and call review_panel.open directly instead.
 ---@param pr_number integer
 local function open_review(pr_number)
-	cache.clear(pr_number)
+	cache.clear(pr_number, cache.repo_slug())
 	review_panel.open(cfg, pr_number)
 end
 
@@ -1764,9 +1764,6 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #367: suggested code changes ───────────────────────────────────
 
 	["starting a suggestion prefills the anchored diff line"] = function()
-		-- A draft left on disk by an earlier failed run rehydrates on open and
-		-- shifts the drafts under test; start from a known-empty cache.
-		cache.clear(42, cache.repo_slug())
 		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
@@ -1816,7 +1813,6 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["a multi-line suggestion spans the selected range"] = function()
-		cache.clear(42, cache.repo_slug())
 		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
