@@ -101,13 +101,24 @@ local function cleanup_panels()
 	T.cleanup_panels()
 end
 
+--- Open PR review mode with that PR's on-disk draft cache pre-cleared, so a
+--- prior test's crash-before-cleanup (or in-flight draft) can never leak
+--- into this one — a real failure once poisoned every run after it until
+--- the cache file was removed by hand. Tests that exercise cache
+--- *rehydration* seed the cache and call review_panel.open directly instead.
+---@param pr_number integer
+local function open_review(pr_number)
+	cache.clear(pr_number)
+	review_panel.open(cfg, pr_number)
+end
+
 T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 	-- ── Layout: tabpage + file-list + diff pane ────────────────────────
 
 	["open creates a new tabpage with file list and diff pane"] = function()
 		local initial_tabs = #vim.api.nvim_list_tabpages()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		T.assert_true(review_panel.is_open(),
@@ -133,7 +144,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file list buffer lists the PR's changed files"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		T.wait_until(function()
@@ -155,7 +166,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file list has the expected keybindings"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		local bufnr = review_panel.state.file_list_bufnr
@@ -170,7 +181,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── File tree: folders, folding, leaf rendering ────────────────────
 
 	["file list renders changed files as a collapsible folder tree"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -198,7 +209,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["collapse_all hides leaves and expand_all restores them"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -236,7 +247,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["state.files is populated and is keyed by path"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -257,7 +268,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── File diff parsing: inline annotation contract ──────────────────
 
 	["state.file_diffs parses hunks from the PR diff"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return next(review_panel.state.file_diffs) ~= nil
@@ -290,7 +301,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Open file from list applies annotations ────────────────────────
 
 	["open_file shows file in the diff pane with inline annotations"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -344,7 +355,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["opening a diff file via :edit (e.g. Telescope) shows annotations"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -376,7 +387,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["opening a non-diff file via :edit leaves it untouched"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -403,7 +414,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Thread discussion popup ────────────────────────────────────────
 
 	["<CR> on a comment line opens the full discussion popup"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -448,7 +459,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["<CR> on a line with no comment opens no popup"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -473,7 +484,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Comment workflow + persistence ─────────────────────────────────
 
 	["inline_comment queues a draft and persists to cache"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -570,7 +581,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Approve / request-changes wiring ───────────────────────────────
 
 	["review_approve calls gh pr review --approve with no pending"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		with_temp_gh_log(function(log_path)
@@ -609,7 +620,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["approve with a pending comment batches via reviews API"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -679,7 +690,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	--    resolved" error) ────────────────────────────────────────────────
 
 	["inline_comment on a non-diff line is rejected, not queued"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -732,7 +743,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["submitting an out-of-diff comment is blocked, not sent to GitHub"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -784,7 +795,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Drafts section in the file-list pane ───────────────────────────
 
 	["file-list pane lists drafts and flags off-diff ones"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -816,7 +827,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["delete_off_diff_drafts removes only out-of-scope drafts"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -850,7 +861,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["inline_comment anchors to the diff-window file, not stale active_path"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -894,7 +905,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["request changes submits with --request-changes flag"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		with_temp_gh_log(function(log_path)
@@ -928,7 +939,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Close cleans up tabpage and clears state ───────────────────────
 
 	["close removes the tabpage and resets state"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		local tab = review_panel.state.tabpage
@@ -950,7 +961,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["close_with_guard prompts when pending comments exist"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		review_panel.state.pending_comments = {
@@ -987,7 +998,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["close_with_guard does NOT close on cancel"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		review_panel.state.pending_comments = {
@@ -1018,7 +1029,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Toggle command path ────────────────────────────────────────────
 
 	["toggle on an open review closes it"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.assert_true(review_panel.is_open(),
 			"review should be open before toggle")
@@ -1035,7 +1046,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #359: next/prev file keybinds in the diff pane ─────────────────
 
 	["diff pane has ]f/[f next/prev file keybinds"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1052,7 +1063,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["next_file and prev_file walk the file list and wrap"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 1
@@ -1085,7 +1096,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #357: toggle the diff overlay on/off ───────────────────────────
 
 	["toggle_diff_view hides and restores diff annotations"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1121,7 +1132,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file list names the active view layer while the diff is hidden"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1158,7 +1169,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		vim.api.nvim_set_option_value("winbar", "USER BAR",
 			{ win = outside_win })
 
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1191,7 +1202,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["closing the file list window directly ends review mode"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1268,7 +1279,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			end
 
 			-- PR 42's metadata and files land, its comments are still in flight.
-			review_panel.open(cfg, 42)
+			open_review(42)
 			run_next()
 			run_next()
 			local stale_comments = table.remove(deferred, 1)
@@ -1276,7 +1287,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 				"PR 42's comment request should be in flight")
 
 			-- The user switches to PR 99 before PR 42 finishes loading.
-			review_panel.open(cfg, 99)
+			open_review(99)
 			while #deferred > 0 do
 				run_next()
 			end
@@ -1298,7 +1309,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["retrying a failed submit does not repost file comments"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1367,7 +1378,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 					}, { code = 0, signal = 0, stdout = "", stderr = "", cmd = {} })
 				end },
 		}, function()
-			review_panel.open(cfg, 42)
+			open_review(42)
 			T.drain_jobs(5000)
 			T.wait_until(function()
 				return #review_panel.state.comment_threads > 0
@@ -1383,7 +1394,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["toggle_thread folds the replies out under the first comment"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1445,7 +1456,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #382: jump to next comment + overview of all comments ──────────
 
 	["diff pane has ]C/[C and the comments overview keybind"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1465,7 +1476,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["comments_overview lists every comment and jumps to the chosen one"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1516,7 +1527,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #358: edit a draft comment ─────────────────────────────────────
 
 	["edit_draft updates the body and persists to cache"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1557,7 +1568,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #361: file-level comments (incl. deleted files) ────────────────
 
 	["file_comment queues a file-level draft with no line"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1586,7 +1597,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["edit_draft_under_cursor edits a file comment from the file row"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1636,7 +1647,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file-level comment posts via comments API with subject_type=file"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1697,7 +1708,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #355: comment on a deleted (LEFT-side) line ────────────────────
 
 	["comment on a deleted line anchors to old_line (LEFT side)"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1756,7 +1767,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		-- A draft left on disk by an earlier failed run rehydrates on open and
 		-- shifts the drafts under test; start from a known-empty cache.
 		cache.clear(42, cache.repo_slug())
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1806,7 +1817,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 	["a multi-line suggestion spans the selected range"] = function()
 		cache.clear(42, cache.repo_slug())
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1981,7 +1992,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #363: scope review to a commit range via a local git diff ───────
 
 	["apply_commit_scope builds files from a local git diff"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
