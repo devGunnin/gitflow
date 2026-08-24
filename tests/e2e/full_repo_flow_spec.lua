@@ -504,7 +504,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		open_review(42)
 		T.drain_jobs(3000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_true(
 			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
 			"review file list buffer should exist"
@@ -522,7 +522,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		open_review(42)
 		T.drain_jobs(3000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_true(bufnr ~= nil,
 			"review file list buffer should exist")
 		-- File list bindings exposed for navigation + review actions
@@ -720,7 +720,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		-- 4. Open review panel
 		open_review(42)
 		T.drain_jobs(3000)
-		local review_buf = review_panel.state.file_list_bufnr
+		local review_buf = review_panel.state.bufnr
 		T.assert_true(
 			review_buf ~= nil,
 			"review file list buffer should exist in flow"

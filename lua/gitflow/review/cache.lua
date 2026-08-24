@@ -41,9 +41,10 @@ local function slugify(value)
 	return (tostring(value or "")):gsub("[^%w%-_%.]", "_")
 end
 
--- Memoized repo slug. Resolving it costs two blocking subprocesses, and it is
--- read on every comment load and save; it can only change when the working
--- directory moves to another repo, so cwd is the cache key.
+-- Memoized repo slug. Resolving it costs a subprocess (a network round-trip
+-- when `gh` answers), and it is read on every comment load and save; it can
+-- only change when the working directory moves to another repo, so cwd is the
+-- cache key.
 local slug_cache = { cwd = nil, slug = nil }
 
 --- Drop the memoized slug. Only needed when the repo's gh remote changes
@@ -52,38 +53,57 @@ function M.invalidate_repo_slug()
 	slug_cache = { cwd = nil, slug = nil }
 end
 
+---@param value string|nil
+---@return string|nil  the first non-empty output line, slugified
+local function first_line_slug(value)
+	local first = vim.trim(tostring(value or ""):gsub("\n.*", ""))
+	if first == "" then
+		return nil
+	end
+	return slugify(first)
+end
+
+---@param cwd string
+---@param slug string
+---@return string
+local function memoize(cwd, slug)
+	assert(type(slug) == "string" and slug ~= "", "repo slug must be non-empty")
+	slug_cache = { cwd = cwd, slug = slug }
+	return slug
+end
+
+local GH_SLUG_ARGS = { "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner" }
+local GIT_SLUG_ARGS = { "rev-parse", "--show-toplevel" }
+
+---@param exe string
+---@param args string[]
+---@return string|nil
+local function slug_from(exe, args)
+	local cmd = { exe }
+	for _, arg in ipairs(args) do
+		cmd[#cmd + 1] = arg
+	end
+	local out = vim.fn.systemlist(cmd)
+	if vim.v.shell_error ~= 0 or not out then
+		return nil
+	end
+	return first_line_slug(out[1])
+end
+
 ---@return string
 local function compute_repo_slug()
-	local function via_git()
-		local out = vim.fn.systemlist({
-			"git", "rev-parse", "--show-toplevel",
-		})
-		if vim.v.shell_error == 0 and out and out[1] then
-			return slugify(vim.trim(out[1]))
-		end
-		return nil
-	end
-
-	local function via_gh()
-		local out = vim.fn.systemlist({
-			"gh", "repo", "view", "--json", "nameWithOwner", "-q",
-			".nameWithOwner",
-		})
-		if vim.v.shell_error == 0 and out and out[1] then
-			local trimmed = vim.trim(out[1])
-			if trimmed ~= "" then
-				return slugify(trimmed)
-			end
-		end
-		return nil
-	end
-
-	return via_gh() or via_git() or "unknown"
+	return slug_from("gh", GH_SLUG_ARGS)
+		or slug_from("git", GIT_SLUG_ARGS)
+		or "unknown"
 end
 
 --- Stable slug for the current repository. Prefers the gh nameWithOwner so
 --- multiple checkouts of the same repo share a draft; falls back to the
 --- toplevel path. Memoized per cwd.
+---
+--- Blocking. Kept for the paths that need the answer before they can write
+--- (`path_for` with no slug handed in); anything that can wait should call
+--- `resolve_repo_slug`, which never freezes the editor.
 ---@return string
 function M.repo_slug()
 	local cwd = vim.fn.getcwd()
@@ -91,10 +111,39 @@ function M.repo_slug()
 	if slug_cache.slug and slug_cache.cwd == cwd then
 		return slug_cache.slug
 	end
-	local slug = compute_repo_slug()
-	assert(type(slug) == "string" and slug ~= "", "repo slug must be non-empty")
-	slug_cache = { cwd = cwd, slug = slug }
-	return slug
+	return memoize(cwd, compute_repo_slug())
+end
+
+--- Resolve the slug without blocking the editor.
+---
+--- `gh repo view` is a network round-trip, so opening review mode must not
+--- wait on it. The fallback order is the same as `repo_slug` and both share
+--- one memo, so a draft written through the blocking path and one written
+--- after this lands can never disagree about where the cache file is — which
+--- would silently split a reviewer's drafts across two files.
+---@param cb fun(slug: string)
+function M.resolve_repo_slug(cb)
+	local cwd = vim.fn.getcwd()
+	assert(type(cwd) == "string", "getcwd must return a string")
+	if slug_cache.slug and slug_cache.cwd == cwd then
+		cb(slug_cache.slug)
+		return
+	end
+
+	local git = require("gitflow.git")
+	local gh = require("gitflow.gh")
+	gh.run(GH_SLUG_ARGS, {}, function(gh_result)
+		local slug = gh_result.code == 0 and first_line_slug(gh_result.stdout) or nil
+		if slug then
+			cb(memoize(cwd, slug))
+			return
+		end
+		git.git(GIT_SLUG_ARGS, {}, function(git_result)
+			local fallback = git_result.code == 0
+				and first_line_slug(git_result.stdout) or nil
+			cb(memoize(cwd, fallback or "unknown"))
+		end)
+	end)
 end
 
 ---@param pr_number integer|string

@@ -129,13 +129,13 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			vim.api.nvim_tabpage_is_valid(review_panel.state.tabpage),
 			"a new tabpage should be created")
 		T.assert_true(
-			vim.api.nvim_win_is_valid(review_panel.state.file_list_winid),
+			vim.api.nvim_win_is_valid(review_panel.state.winid),
 			"file list window should exist")
 		T.assert_true(
 			vim.api.nvim_win_is_valid(review_panel.state.diff_winid),
 			"diff window should exist")
 		T.assert_true(
-			vim.api.nvim_buf_is_valid(review_panel.state.file_list_bufnr),
+			vim.api.nvim_buf_is_valid(review_panel.state.bufnr),
 			"file list buffer should exist")
 		T.assert_true(#vim.api.nvim_list_tabpages() > initial_tabs,
 			"opening review mode should add a tabpage")
@@ -151,7 +151,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		local lines = T.buf_lines(bufnr)
 		local combined = table.concat(lines, "\n")
 
@@ -169,7 +169,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		open_review(42)
 		T.drain_jobs(5000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_keymaps(bufnr, {
 			"<CR>", "o", "S", "r", "q", "]f", "[f",
 			"<Tab>", "za", "zM", "zR",
@@ -187,7 +187,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		local combined = table.concat(T.buf_lines(bufnr), "\n")
 
 		-- A directory row is shown (compacted) with a fold arrow + trailing /.
@@ -201,8 +201,8 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_contains(combined, "highlights.lua",
 			"leaf file basename should be shown")
 		T.assert_true(
-			review_panel.state._dir_line_map ~= nil
-				and next(review_panel.state._dir_line_map) ~= nil,
+			review_panel.state.dir_line_map ~= nil
+				and next(review_panel.state.dir_line_map) ~= nil,
 			"a directory line map should be populated for folding")
 
 		cleanup_panels()
@@ -215,7 +215,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 
 		-- Inject a draft so the collapsed folder should advertise it. Anchor
 		-- it to config.lua so the Drafts section (which lists the draft's
@@ -812,15 +812,15 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		review_panel.open_file("lua/gitflow/highlights.lua")
 		T.drain_jobs(1000)
 
-		local lines = T.buf_lines(review_panel.state.file_list_bufnr)
+		local lines = T.buf_lines(review_panel.state.bufnr)
 		local combined = table.concat(lines, "\n")
 		T.assert_contains(combined, "Drafts (2)",
 			"file-list should show a Drafts section with the count")
 		T.assert_contains(combined, "✗1 off-diff",
 			"header should report the off-diff draft count")
 		T.assert_true(
-			review_panel.state._draft_line_map ~= nil
-				and next(review_panel.state._draft_line_map) ~= nil,
+			review_panel.state.draft_line_map ~= nil
+				and next(review_panel.state.draft_line_map) ~= nil,
 			"a draft line map should be populated")
 
 		cleanup_panels()
@@ -1143,7 +1143,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		local function file_list_text()
 			return table.concat(
-				T.buf_lines(review_panel.state.file_list_bufnr), "\n")
+				T.buf_lines(review_panel.state.bufnr), "\n")
 		end
 
 		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
@@ -1216,7 +1216,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		-- Abnormal exit: the user closes a review window by hand (:q) instead
 		-- of pressing q in the file list.
-		pcall(vim.api.nvim_win_close, review_panel.state.file_list_winid, true)
+		pcall(vim.api.nvim_win_close, review_panel.state.winid, true)
 		T.wait_until(function()
 			return not review_panel.is_open()
 		end, "review mode should end when its layout is dismantled")
@@ -1469,7 +1469,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		local overview = (vim.g.mapleader or "\\") .. "c"
 		T.assert_keymaps(review_panel.state.active_bufnr,
 			{ "]C", "[C", overview })
-		T.assert_keymaps(review_panel.state.file_list_bufnr,
+		T.assert_keymaps(review_panel.state.bufnr,
 			{ "]C", "[C", overview })
 
 		cleanup_panels()
@@ -1615,16 +1615,16 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		-- Put the cursor on the config.lua *file* row (not the Drafts row).
 		local file_row
-		for line, idx in pairs(review_panel.state._file_line_map or {}) do
+		for line, idx in pairs(review_panel.state.file_line_map or {}) do
 			if review_panel.state.files[idx]
 				and review_panel.state.files[idx].path == "lua/gitflow/config.lua" then
 				file_row = line
 			end
 		end
 		T.assert_true(file_row ~= nil, "config.lua file row should be mapped")
-		vim.api.nvim_set_current_win(review_panel.state.file_list_winid)
+		vim.api.nvim_set_current_win(review_panel.state.winid)
 		vim.api.nvim_win_set_cursor(
-			review_panel.state.file_list_winid, { file_row, 0 })
+			review_panel.state.winid, { file_row, 0 })
 
 		with_temporary_patches({
 			{ table = input, key = "prompt",
