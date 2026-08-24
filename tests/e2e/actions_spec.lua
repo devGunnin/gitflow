@@ -158,6 +158,21 @@ local function stub_run(title)
 	}
 end
 
+---@param bufnr integer
+---@param keys string[]
+local function assert_no_keymaps(bufnr, keys)
+	local mapped = {}
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+		mapped[map.lhs] = true
+	end
+	for _, lhs in ipairs(keys) do
+		T.assert_false(
+			mapped[lhs] == true,
+			("'%s' should not be mapped in this view"):format(lhs)
+		)
+	end
+end
+
 ---@return string  the actions panel's rendered contents
 local function rendered_panel_text()
 	local bufnr = actions_panel.state.bufnr
@@ -622,7 +637,7 @@ T.run_suite("E2E: GitHub Actions Panel", {
 
 	-- ── Buffer-local keymaps ────────────────────────────────────────────
 
-	["panel sets expected buffer-local keymaps"] = function()
+	["panel sets the list view's buffer-local keymaps"] = function()
 		actions_panel.open(cfg)
 		T.drain_jobs(3000)
 
@@ -632,9 +647,48 @@ T.run_suite("E2E: GitHub Actions Panel", {
 			"panel should have a buffer"
 		)
 
-		T.assert_keymaps(bufnr, { "<CR>", "o", "<BS>", "r", "q" })
+		T.assert_keymaps(bufnr, {
+			"<CR>", "o", "r", "q", "l", "f", "b", "L", "W", "R", "F", "C",
+		})
+		-- Detail/log-only actions must not be mapped over the list.
+		assert_no_keymaps(bufnr, { "J", "w", "]e" })
 
 		T.cleanup_panels()
+	end,
+
+	["each view maps only its own keys, leaving motions to vim"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		focus_run_by_title("CI: push to main")
+		actions_panel.open_detail_under_cursor()
+		T.drain_jobs(4000)
+
+		local bufnr = actions_panel.state.bufnr
+		T.assert_keymaps(bufnr, { "<BS>", "J", "w", "l", "R", "F", "C" })
+		assert_no_keymaps(bufnr, { "f", "b", "L", "W", "]e" })
+
+		actions_panel.view_log_under_cursor()
+		T.drain_jobs(4000)
+		T.assert_equals(actions_panel.state.view, "log", "should be in the log view")
+
+		T.assert_keymaps(bufnr, { "<BS>", "]e", "r", "q" })
+		-- The log view is a text buffer: these are motions, not panel keys.
+		assert_no_keymaps(bufnr, { "l", "w", "b", "E", "L", "F", "J", "C", "W", "f" })
+
+		local winid = actions_panel.state.winid
+		local content_line = T.buf_find_line(bufnr, "PASS test_one")
+		T.assert_true(content_line ~= nil, "log view should show run output")
+		vim.api.nvim_set_current_win(winid)
+		vim.api.nvim_win_set_cursor(winid, { content_line, 0 })
+		T.feedkeys("l")
+		T.assert_equals(
+			vim.api.nvim_win_get_cursor(winid)[2], 1,
+			"l must still move the cursor right in the log view"
+		)
+
+		actions_panel.close()
 	end,
 
 	-- ── Rendered buffer contains run data ───────────────────────────────
@@ -984,6 +1038,48 @@ T.run_suite("E2E: GitHub Actions Panel", {
 			"link",
 			"OSC-8 hyperlink wrappers should be stripped"
 		)
+		T.assert_equals(
+			gh_actions.strip_ansi("\27[?25lworking\27[?25h"),
+			"working",
+			"private-mode CSI (cursor hide/show) should be stripped"
+		)
+		T.assert_equals(
+			gh_actions.strip_ansi("\27[>4;2m tail"),
+			" tail",
+			"'>'-parameter CSI should be stripped"
+		)
+		T.assert_equals(
+			gh_actions.strip_ansi(
+				"\27]8;;https://example.test\27\\link\27]8;;\27\\"
+			),
+			"link",
+			"an ST-terminated OSC-8 hyperlink should be stripped"
+		)
+		T.assert_equals(
+			gh_actions.strip_ansi("\27]0;title\7rest"),
+			"rest",
+			"a non-OSC-8 OSC (title set) should be stripped, BEL included"
+		)
+	end,
+
+	["clean_log_message drops gh's BOM and ISO timestamp"] = function()
+		T.assert_equals(
+			gh_actions.clean_log_message(
+				"\239\187\1912026-08-24T04:49:49.1743133Z Current runner version"
+			),
+			"Current runner version",
+			"the first line's BOM and the timestamp column should both go"
+		)
+		T.assert_equals(
+			gh_actions.clean_log_message("2026-08-24T04:49:49Z plain"),
+			"plain",
+			"a fractionless timestamp should be stripped too"
+		)
+		T.assert_equals(
+			gh_actions.clean_log_message("2026 was a good year"),
+			"2026 was a good year",
+			"a message that merely starts with digits must survive"
+		)
 	end,
 
 	["find_first_error_line prefers a ##[error] annotation"] = function()
@@ -1036,6 +1132,16 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		T.assert_true(
 			joined:find("Expected indentation to use tabs", 1, true) ~= nil,
 			"log should contain the annotated error line"
+		)
+		for _, line in ipairs(lines_result) do
+			T.assert_true(
+				line:match("^%d%d%d%d%-%d%d%-%d%dT") == nil,
+				"real gh prefixes every message with an ISO timestamp; it must be stripped"
+			)
+		end
+		T.assert_true(
+			joined:find("\239\187\191", 1, true) == nil,
+			"gh's leading BOM must not reach the buffer"
 		)
 	end,
 
@@ -1134,7 +1240,7 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		actions_panel.close()
 	end,
 
-	["E jumps the cursor to the first error line in the log view"] = function()
+	["]e jumps the cursor to the first error line in the log view"] = function()
 		actions_panel.close()
 		actions_panel.open(cfg)
 		T.drain_jobs(3000)
@@ -1143,15 +1249,16 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		actions_panel.view_log_under_cursor()
 		T.drain_jobs(4000)
 
-		actions_panel.jump_to_first_error()
 		local winid = actions_panel.state.winid
+		vim.api.nvim_set_current_win(winid)
+		T.feedkeys("]e")
 		local line = vim.api.nvim_win_get_cursor(winid)[1]
 		local text = vim.api.nvim_buf_get_lines(
 			actions_panel.state.bufnr, line - 1, line, false
 		)[1]
 		T.assert_contains(
 			text, "Expected indentation to use tabs",
-			"E should land the cursor on the first error line"
+			"]e should land the cursor on the first error line"
 		)
 
 		actions_panel.back()
@@ -1390,6 +1497,318 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		end)
 	end,
 
+	["watch stops when the window is closed by anything but q"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		local poll_calls = 0
+		with_temporary_patches({
+			{ table = cfg, key = "actions", value = { watch_interval = 15 } },
+			{
+				table = gh_actions,
+				key = "view",
+				value = function(run_id, _, cb)
+					poll_calls = poll_calls + 1
+					cb(nil, {
+						id = run_id, name = "CI", branch = "main",
+						status = "in_progress", conclusion = "",
+						event = "push", created_at = "", updated_at = "",
+						url = "", display_title = "CI: push to main", jobs = {},
+					})
+				end,
+			},
+		}, function()
+			actions_panel.open_detail_under_cursor()
+			T.drain_jobs(3000)
+			actions_panel.toggle_watch()
+			T.wait_until(function()
+				return poll_calls >= 2
+			end, "watch should be polling before the window is closed", 2000)
+
+			-- An ordinary window close (:q / :close / <C-w>c all land here),
+			-- not the panel's own q.
+			vim.api.nvim_win_close(actions_panel.state.winid, true)
+			local calls_at_close = poll_calls
+			vim.wait(300, function() return false end, 20)
+
+			T.assert_equals(
+				poll_calls, calls_at_close,
+				"a plain window close must stop the poller, not leak it forever"
+			)
+			T.assert_false(
+				actions_panel.state.watch.active,
+				"watch must not claim to be live once its window is gone"
+			)
+			T.assert_false(
+				actions_panel.is_open(),
+				"a panel with no window is not open"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["watching then pressing l keeps the watch and delivers the log"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		local poll_calls, polls_delivered = 0, 0
+		local function park_log(_, _, cb)
+			-- Left genuinely in flight: the watch tick must not strand it.
+			vim.defer_fn(function()
+				cb(nil, { "step output", "##[error]boom" })
+			end, 250)
+		end
+
+		with_temporary_patches({
+			{ table = cfg, key = "actions", value = { watch_interval = 120 } },
+			{
+				table = gh_actions,
+				key = "view",
+				-- Asynchronous on purpose: a synchronous stub makes every
+				-- poll the newest request and hides the collision entirely.
+				value = function(run_id, _, cb)
+					poll_calls = poll_calls + 1
+					vim.defer_fn(function()
+						polls_delivered = polls_delivered + 1
+						cb(nil, {
+							id = run_id, name = "CI", branch = "main",
+							status = "in_progress", conclusion = "",
+							event = "push", created_at = "", updated_at = "",
+							url = "", display_title = "CI: push to main",
+							jobs = {},
+						})
+					end, 20)
+				end,
+			},
+			{ table = gh_actions, key = "log", value = park_log },
+			{
+				table = gh_actions,
+				key = "job_log",
+				value = function(_, _, _, cb)
+					park_log(nil, nil, cb)
+				end,
+			},
+		}, function()
+			actions_panel.open_detail_under_cursor()
+			T.wait_until(function()
+				return actions_panel.state.detail_run ~= nil
+					and actions_panel.state.detail_run.status == "in_progress"
+			end, "detail view should load the in-progress run", 3000)
+
+			-- Counted from here: the detail open used the same stub.
+			poll_calls, polls_delivered = 0, 0
+			actions_panel.toggle_watch()
+			-- Press between ticks, with the next one already scheduled: that
+			-- is the window in which a shared counter strands the log fetch.
+			T.wait_until(function()
+				return polls_delivered >= 1
+			end, "watch should complete its first poll", 2000)
+
+			vim.api.nvim_set_current_win(actions_panel.state.winid)
+			T.feedkeys("l")
+			T.assert_equals(
+				actions_panel.state.view, "log",
+				"l should switch to the log view"
+			)
+			local polls_at_press = poll_calls
+
+			T.wait_until(function()
+				return actions_panel.state.log ~= nil
+					and actions_panel.state.log.lines ~= nil
+			end, "the in-flight log fetch must not be stranded by a watch tick", 3000)
+			T.assert_true(
+				rendered_panel_text():find("Loading log", 1, true) == nil,
+				"the log view must not sit on 'Loading log…' after delivery"
+			)
+
+			T.wait_until(function()
+				return poll_calls > polls_at_press + 1
+			end, "the watch must survive a view change, not die silently", 3000)
+			T.assert_true(
+				actions_panel.state.watch.active,
+				"watch should still be active after the view change"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["watch stops itself after repeated poll failures"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		local failing = false
+		local failed_polls = 0
+		with_temporary_patches({
+			{ table = cfg, key = "actions", value = { watch_interval = 15 } },
+			{
+				table = gh_actions,
+				key = "view",
+				value = function(run_id, _, cb)
+					if failing then
+						failed_polls = failed_polls + 1
+						cb("gh run view failed: network unreachable", nil)
+						return
+					end
+					cb(nil, {
+						id = run_id, name = "CI", branch = "main",
+						status = "in_progress", conclusion = "",
+						event = "push", created_at = "", updated_at = "",
+						url = "", display_title = "CI: push to main", jobs = {},
+					})
+				end,
+			},
+		}, function()
+			actions_panel.open_detail_under_cursor()
+			T.drain_jobs(3000)
+
+			failing = true
+			actions_panel.toggle_watch()
+			T.wait_until(function()
+				return not actions_panel.state.watch.active
+			end, "a persistently failing watch must give up", 2000)
+
+			T.assert_equals(
+				failed_polls, 3,
+				"the watch should stop after three consecutive failures"
+			)
+			local calls_at_stop = failed_polls
+			vim.wait(150, function() return false end, 20)
+			T.assert_equals(
+				failed_polls, calls_at_stop,
+				"a stopped watch must not keep erroring once per interval"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["a failed run-list fetch renders an error, not a stuck loading pane"] = function()
+		actions_panel.close()
+		with_temporary_patches({
+			{ table = git_branch, key = "current", value = sync_branch },
+			{
+				table = gh_actions,
+				key = "list",
+				value = function(_, _, cb)
+					cb("gh run list failed: bad credentials", nil)
+				end,
+			},
+		}, function()
+			actions_panel.open(cfg)
+			T.drain_jobs(2000)
+
+			local rendered = rendered_panel_text()
+			T.assert_contains(
+				rendered, "Failed to load workflow runs",
+				"a failed list fetch should render an error state"
+			)
+			T.assert_contains(
+				rendered, "bad credentials",
+				"the error state should carry gh's reason"
+			)
+			T.assert_true(
+				rendered:find("Loading workflow runs", 1, true) == nil,
+				"a failed fetch must not leave the loading pane behind"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["a huge log renders its tail under a stated cap"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		local huge = {}
+		for index = 1, 20050 do
+			huge[index] = ("log line %d"):format(index)
+		end
+
+		with_temporary_patches({
+			{
+				table = gh_actions,
+				key = "log",
+				value = function(_, _, cb)
+					cb(nil, huge)
+				end,
+			},
+		}, function()
+			actions_panel.view_log_under_cursor()
+			T.drain_jobs(4000)
+
+			T.assert_equals(
+				#actions_panel.state.log.lines, 20000,
+				"the log render should be capped"
+			)
+			T.assert_equals(
+				actions_panel.state.log.omitted, 50,
+				"the panel should count what it dropped"
+			)
+			local rendered = rendered_panel_text()
+			T.assert_contains(
+				rendered, "50 earlier lines omitted",
+				"the buffer should say the log was capped"
+			)
+			T.assert_contains(
+				rendered, "log line 20050",
+				"the tail is what a CI failure lives in, so keep it"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["the instant paint is scoped to the cached filter set"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		with_temporary_patches({
+			{ table = git_branch, key = "current", value = sync_branch },
+			{
+				table = gh_actions,
+				key = "list",
+				value = function(_, _, cb)
+					cb(nil, { stub_run("Deploy: filtered run") })
+				end,
+			},
+		}, function()
+			actions_panel.state.filters.workflow = "Deploy"
+			actions_panel.refresh()
+			T.drain_jobs(2000)
+			T.assert_contains(
+				rendered_panel_text(), "Deploy: filtered run",
+				"the filtered list should render (and fill the cache)"
+			)
+		end)
+
+		actions_panel.close()
+
+		with_temporary_patches({
+			{ table = git_branch, key = "current", value = sync_branch },
+			-- Never resolves: whatever paints now came from the cache.
+			{ table = gh_actions, key = "list", value = function(_, _, _) end },
+		}, function()
+			actions_panel.open(cfg)
+			T.assert_true(
+				rendered_panel_text():find("Deploy: filtered run", 1, true) == nil,
+				"a cache filled under a filter must not paint the unfiltered view"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
 	-- ── Filters, branch scope, pagination (panel) ───────────────────────
 
 	["the filter menu sets a filter and refetches with it"] = function()
@@ -1530,9 +1949,11 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		vim.api.nvim_set_current_win(actions_panel.state.winid)
 		vim.api.nvim_win_set_cursor(actions_panel.state.winid, { target_line, 0 })
 
+		-- Pressed, not called: <CR> is what the hint bar, the footer and
+		-- KEYBINDINGS.md advertise here, and it was wired to nothing.
 		with_temp_gh_log(function(log_path)
 			with_confirm_answer(false, function()
-				actions_panel.dispatch_under_cursor()
+				T.feedkeys("<CR>")
 				T.drain_jobs(2000)
 			end)
 			T.assert_true(
@@ -1543,7 +1964,7 @@ T.run_suite("E2E: GitHub Actions Panel", {
 
 		with_temp_gh_log(function(log_path)
 			with_confirm_answer(true, function()
-				actions_panel.dispatch_under_cursor()
+				T.feedkeys("<CR>")
 				T.drain_jobs(2000)
 			end)
 			T.assert_true(
