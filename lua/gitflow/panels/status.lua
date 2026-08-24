@@ -423,7 +423,10 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		{ "  ", nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
 		{ current_branch ~= "" and current_branch or "(detached)", "GitflowSectionTitle" },
-		{ upstream_name and ("   \u{2192} " .. upstream_name) or "", "GitflowMeta" },
+		{
+			upstream_name and ("   " .. ui_render.glyphs.arrow .. " " .. upstream_name) or "",
+			"GitflowMeta",
+		},
 		{
 			total_changes == 0 and "     working tree clean"
 				or ("     %d change%s"):format(total_changes, total_changes == 1 and "" or "s"),

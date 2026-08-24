@@ -410,7 +410,7 @@ local function render_list(prs)
 				{ "     ", nil },
 				{ icons.get("ui", "ref") .. " ", "GitflowMeta" },
 				{ maybe_text(pr.headRefName), "GitflowChip" },
-				{ " \u{2192} ", "GitflowMeta" },
+				{ " " .. ui_render.glyphs.arrow .. " ", "GitflowMeta" },
 				{ maybe_text(pr.baseRefName), "GitflowChip" },
 				{ "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" },
 				{ pr.author and maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
@@ -485,7 +485,7 @@ local function render_view(pr, review_comments)
 	})
 	meta_row(B, "Refs:", {
 		{ maybe_text(pr.headRefName), "GitflowChip" },
-		{ " \u{2192} ", "GitflowMeta" },
+		{ " " .. ui_render.glyphs.arrow .. " ", "GitflowMeta" },
 		{ maybe_text(pr.baseRefName), "GitflowChip" },
 	})
 	meta_row(B, "Labels:", label_chunks(pr))
@@ -635,7 +635,7 @@ function M.refresh()
 	end
 
 	next_view_request_id()
-	render_loading("Loading pull requests...")
+	render_loading("Loading pull requests…")
 	gh_prs.list(M.state.filters, {}, function(err, prs)
 		if err then
 			render_loading("Failed to load pull requests")
@@ -658,7 +658,7 @@ function M.open_view(number, cfg)
 	ensure_window(M.state.cfg)
 
 	local request_id = next_view_request_id()
-	render_loading(("Loading PR #%s..."):format(tostring(number)))
+	render_loading(("Loading PR #%s…"):format(tostring(number)))
 	gh_prs.view(number, {}, function(err, pr)
 		if not is_active_view_request(request_id) then
 			return

@@ -189,8 +189,9 @@ end
 ---@return string
 local function format_duration_range(started_at, completed_at)
 	if started_at ~= "" and completed_at ~= "" then
-		return ("  (%s → %s)"):format(
+		return ("  (%s %s %s)"):format(
 			started_at:sub(12, 19) or "",
+			ui_render.glyphs.arrow,
 			completed_at:sub(12, 19) or ""
 		)
 	end
