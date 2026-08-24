@@ -143,7 +143,8 @@ local KEYMAPS = {
 		end },
 	{ key = "q", desc = "save&close", essential = true,
 		run = function() M.close() end },
-	{ key = "c?", desc = "help", run = function() M.open_help() end },
+	-- The affordance that reveals every other key: never elided.
+	{ key = "c?", desc = "help", always = true, run = function() M.open_help() end },
 }
 
 panel.register_surface({
@@ -656,9 +657,9 @@ end
 local function set_keymaps(bufnr)
 	panel.warn_overrides("conflict_resolver", M.state.cfg)
 	for _, entry in ipairs(keymaps()) do
-		for _, key in ipairs(entry.bind == false and {} or panel.bound_keys(entry)) do
-			vim.keymap.set("n", key, function()
-				entry.run(key)
+		for _, binding in ipairs(panel.bindings(entry)) do
+			vim.keymap.set("n", binding.key, function()
+				entry.run(binding.run_key)
 			end, { buffer = bufnr, silent = true, nowait = true })
 		end
 	end

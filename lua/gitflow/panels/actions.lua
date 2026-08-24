@@ -194,7 +194,8 @@ local KEYMAPS = {
 		run = function() M.refresh() end },
 	{ key = "q", desc = "close", essential = true, views = ALL_VIEWS,
 		run = function() M.close() end },
-	{ key = "?", desc = "help", views = ALL_VIEWS,
+	-- The affordance that reveals every other key: never elided.
+	{ key = "?", desc = "help", always = true, views = ALL_VIEWS,
 		run = function() M.open_help() end },
 }
 
@@ -233,20 +234,61 @@ local function hints_for(view)
 	local out = {}
 	for _, entry in ipairs(keymaps()) do
 		if entry.desc and in_view(entry, view) then
-			out[#out + 1] = { entry.key, entry.desc }
+			out[#out + 1] = {
+				entry.key, entry.desc,
+				essential = entry.essential,
+				destructive = entry.destructive,
+				always = entry.always,
+			}
 		end
 	end
 	return out
 end
 
+---This panel owns its own window, so it measures its own chrome. Nil width
+---means "not that layout" — the base then leaves the list unelided, which is
+---right for the surface that is not on screen.
+---@return integer|nil
+local function float_footer_width()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return nil
+	end
+	local ok, win_cfg = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(win_cfg) ~= "table"
+		or not win_cfg.relative or win_cfg.relative == "" then
+		return nil
+	end
+	return math.max(1, vim.api.nvim_win_get_width(winid) - 2)
+end
+
+---@return integer|nil
+local function split_width()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return nil
+	end
+	local ok, win_cfg = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(win_cfg) ~= "table" then
+		return nil
+	end
+	if win_cfg.relative and win_cfg.relative ~= "" then
+		return nil
+	end
+	return math.max(1, vim.api.nvim_win_get_width(winid))
+end
+
+---The hint bar's pairs for a view, elided to the split's width.
+---@param view string
+---@return table[]
+local function hint_bar_for(view)
+	return panel.fitted_hint_bar(hints_for(view), split_width())
+end
+
 ---@param view string
 ---@return string
 local function footer_for(view)
-	local parts = {}
-	for _, hint in ipairs(hints_for(view)) do
-		parts[#parts + 1] = hint[1] .. " " .. hint[2]
-	end
-	return " " .. table.concat(parts, " " .. ui_render.glyphs.bullet .. " ") .. " "
+	return panel.fitted_footer(hints_for(view), float_footer_width())
 end
 
 ---The `?` overlay: every view's keys, so the panel documents all of itself
@@ -378,9 +420,9 @@ local function apply_view_keymaps()
 	end
 	for _, entry in ipairs(resolved) do
 		if in_view(entry, M.state.view) then
-			for _, key in ipairs(panel.bound_keys(entry)) do
-				vim.keymap.set("n", key, function()
-					entry.run(key)
+			for _, binding in ipairs(panel.bindings(entry)) do
+				vim.keymap.set("n", binding.key, function()
+					entry.run(binding.run_key)
 				end, { buffer = bufnr, silent = true, nowait = true })
 			end
 		end
@@ -437,6 +479,9 @@ local function ensure_window(cfg)
 			footer_pos = cfg.ui.float.footer_pos,
 			on_close = on_window_closed,
 		})
+		-- The footer above was built with no window to measure. Re-fit it now
+		-- that there is one, or a narrow float clips its last hint (`? help`).
+		update_float_footer()
 	else
 		M.state.winid = ui.window.open_split({
 			name = "actions",
@@ -596,7 +641,7 @@ local function render_list(runs, current_branch, cache_scope_key)
 		B:blank()
 	end
 
-	components.split_hint_bar(B, render_opts, hints_for("list"))
+	components.split_hint_bar(B, render_opts, hint_bar_for("list"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	list_cache.key = cache_scope_key or list_cache_key()
@@ -719,7 +764,7 @@ local function render_detail(run)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, hints_for("detail"))
+	components.split_hint_bar(B, render_opts, hint_bar_for("detail"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.detail_line_entries = job_line_entries
@@ -773,7 +818,7 @@ local function render_log()
 		M.state.log.content_start = content_start
 	end
 
-	components.split_hint_bar(B, render_opts, hints_for("log"))
+	components.split_hint_bar(B, render_opts, hint_bar_for("log"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
@@ -813,7 +858,7 @@ local function render_workflows(workflows)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, hints_for("workflows"))
+	components.split_hint_bar(B, render_opts, hint_bar_for("workflows"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.workflows = workflows
@@ -961,7 +1006,7 @@ local function fetch_workflows()
 		if err then
 			render_error(
 				"Gitflow Actions — Workflows",
-				"Failed to load workflows", err, hints_for("workflows")
+				"Failed to load workflows", err, hint_bar_for("workflows")
 			)
 			return
 		end
@@ -1052,7 +1097,7 @@ function M.refresh()
 				utils.notify(err, vim.log.levels.ERROR)
 				render_error(
 					"Gitflow Actions",
-					"Failed to load run detail", err, hints_for("detail")
+					"Failed to load run detail", err, hint_bar_for("detail")
 				)
 				return
 			end
@@ -1106,7 +1151,7 @@ function M.refresh()
 					utils.notify(err, vim.log.levels.ERROR)
 					render_error(
 						"Gitflow Actions",
-						"Failed to load workflow runs", err, hints_for("list")
+						"Failed to load workflow runs", err, hint_bar_for("list")
 					)
 					return
 				end
@@ -1142,7 +1187,7 @@ function M.open_detail_under_cursor()
 			utils.notify(err, vim.log.levels.ERROR)
 			render_error(
 				"Gitflow Actions",
-				"Failed to load run detail", err, hints_for("detail")
+				"Failed to load run detail", err, hint_bar_for("detail")
 			)
 			return
 		end

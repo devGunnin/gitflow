@@ -134,7 +134,9 @@ local ENTRIES = {
 	-- ── session ────────────────────────────────────────────────────────
 	{ surface = "list", group = "session", key = "r", desc = "refresh",
 		run = function() mod("load").refresh() end },
+	-- The affordance that reveals every other key: never elided.
 	{ surface = "both", group = "session", key = "?", desc = "help",
+		always = true,
 		run = function() M.open_help() end },
 	{ surface = "list", group = "session", key = "q", desc = "close",
 		essential = true,
@@ -172,6 +174,7 @@ function M.for_surface(surface)
 				views = entry.group and { entry.group } or nil,
 				essential = entry.essential,
 				destructive = entry.destructive,
+				always = entry.always,
 			}
 		end
 	end
