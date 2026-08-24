@@ -23,6 +23,14 @@ local function assert_equals(actual, expected, msg)
 	end
 	passed = passed + 1
 end
+local function assert_errors(fn, msg)
+	total = total + 1
+	local ok = pcall(fn)
+	if ok then
+		error(msg, 2)
+	end
+	passed = passed + 1
+end
 
 local ui_render = require("gitflow.ui.render")
 
@@ -223,6 +231,17 @@ do
 		"the fresh buffer should hold the rendered lines"
 	)
 	vim.api.nvim_buf_delete(reused, { force = true })
+end
+
+-- ── a builder is single-use: a second flush must hard-error ──────────
+do
+	local bufnr = fresh_buffer()
+	local B = build(BASE)
+	B:render(bufnr, bufnr, ns)
+	assert_errors(function()
+		B:render(bufnr, bufnr, ns)
+	end, "flushing the same builder twice should error")
+	vim.api.nvim_buf_delete(bufnr, { force = true })
 end
 
 vim.api.nvim_buf_set_lines = original_set_lines

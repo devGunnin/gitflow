@@ -241,7 +241,7 @@ end
 ---Create a new line builder.
 ---@return GitflowRenderBuilder
 function M.builder()
-	local B = { lines = {}, spans = {} }
+	local B = { lines = {}, spans = {}, flushed = false }
 
 	---Append a line built from chunks.
 	---@param chunks table[]  each item is a string or { text, hl } / { [1]=text, [2]=hl }
@@ -315,6 +315,10 @@ function M.builder()
 	---@param bufnr integer  resolved bufnr to apply highlights on
 	---@param ns integer  highlight namespace
 	function B:render(buffer_target, bufnr, ns)
+		if self.flushed then
+			error("builder is single-use: already flushed")
+		end
+		self.flushed = true
 		local buffer = require("gitflow.ui.buffer")
 		if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 			buffer.update(buffer_target, self.lines)
