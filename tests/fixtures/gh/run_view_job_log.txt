@@ -1,0 +1,3 @@
+lint	Checkout	Cloning into 'repo'...
+lint	Lint check	[31m##[error]Expected indentation to use tabs, found spaces[0m
+lint	Lint check	Error: style violation on lua/gitflow/panels/actions.lua:42

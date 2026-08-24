@@ -1,0 +1,6 @@
+test	Checkout	Cloning into 'repo'...
+test	Run tests	[32mPASS[0m test_one
+test	Run tests	[32mPASS[0m test_two
+lint	Checkout	Cloning into 'repo'...
+lint	Lint check	[31m##[error]Expected indentation to use tabs, found spaces[0m
+lint	Lint check	Error: style violation on lua/gitflow/panels/actions.lua:42
