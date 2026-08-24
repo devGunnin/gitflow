@@ -507,12 +507,16 @@ Cross-panel inconsistencies ~
        under cursor (stash panel) / edit assignees (issue list, PR list).
     R: reset to entry under cursor (reflog panel, destructive, confirms
        first, default choice Cancel) / refresh (branch list, conflict
-       list) / reply to comment thread (review view).
-    "Back to list": b (issue list, PR list) or <BS> (actions panel).
+       list) / reply to comment thread (review view) / rerun a workflow
+       run (actions panel, destructive, confirms first, default choice
+       Cancel).
+    "Back to list": b (issue list, PR list) or <BS> (actions panel, now a
+       general "back one level": log view -> its parent, workflow list ->
+       run list, run detail -> run list).
     No panel uses <Esc> for this.
 
-    Both destructive cases above default their confirmation prompt to
-    Cancel.
+    All three destructive cases above default their confirmation prompt
+    to Cancel.
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*

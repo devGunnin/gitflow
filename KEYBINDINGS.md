@@ -512,13 +512,27 @@ Interactive rebase editor:
 
 ## Actions Panel
 
-Buffer-local bindings active in the actions panel (`:Gitflow actions`).
+Buffer-local bindings active in the actions panel (`:Gitflow actions`). Keys
+apply to the run under cursor in the list, or the open run in detail view;
+`J`/job-scoped `l` require the cursor on a job line in detail view.
 
 | Key | Action |
 | --- | --- |
-| `<CR>` | View run detail |
+| `<CR>` | View run detail (list) |
+| `l` | View log — full run log, or the job under cursor's log in detail view |
+| `f` | Filter by workflow, status, event, or actor (list) |
+| `b` | Toggle branch scope: current branch / all branches (list) |
+| `L` | Load more runs past the current page (list) |
+| `W` | Open the workflow list |
+| `R` | Rerun the run (confirms first) |
+| `F` | Rerun failed jobs only (confirms first) |
+| `J` | Rerun the job under cursor (detail, confirms first) |
+| `C` | Cancel the run (confirms first) |
+| `w` | Toggle live watch — polls until the run finishes (detail) |
+| `E` | Jump to the first error line (log view) |
+| `<CR>` | Dispatch the workflow under cursor (workflow list, confirms first) |
 | `o` | Open in browser |
-| `<BS>` | Back to list |
+| `<BS>` | Back (log → its parent view, workflow list/detail → list) |
 | `r` | Refresh |
 | `q` | Close |
 
