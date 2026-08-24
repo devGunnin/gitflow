@@ -117,6 +117,12 @@ case "$subcmd" in
       close)
         echo "pr close ok"
         ;;
+      reopen)
+        echo "pr reopen ok"
+        ;;
+      ready)
+        echo "pr ready ok"
+        ;;
       edit)
         echo "pr edit ok"
         ;;
@@ -220,6 +226,16 @@ case "$subcmd" in
         ;;
       *pulls/*/comments/*/replies)
         echo '{"id": 6001, "body": "reply ok"}'
+        ;;
+      *milestones*)
+        if [ -f "$FIXTURE_DIR/milestones.json" ]; then
+          cat "$FIXTURE_DIR/milestones.json"
+        else
+          echo '[]'
+        fi
+        ;;
+      *issues/comments/*)
+        echo '{"id": 7001, "body": "issue comment ok"}'
         ;;
       *)
         echo '[]'
