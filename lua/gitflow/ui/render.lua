@@ -228,6 +228,8 @@ local function set_span(bufnr, ns, line_no, text, span)
 	if col_end == nil or col_end < 0 then
 		col_end = #text
 	end
+	-- pcall guards only the async-close race (bufnr deleted since the caller's
+	-- validity check) -- bad hl_group/col never error here (verified), so nothing real is hidden.
 	pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, line_no - 1, span[1], {
 		end_row = line_no - 1,
 		end_col = col_end,
@@ -410,6 +412,7 @@ function M.highlight(bufnr, ns, group, line, col_start, col_end)
 		local text = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
 		resolved_end = text and #text or 0
 	end
+	-- Same guard as set_span: only the post-check async-close race can error here.
 	pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, line, col_start, {
 		end_row = line,
 		end_col = resolved_end,
