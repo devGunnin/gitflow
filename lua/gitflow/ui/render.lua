@@ -114,7 +114,7 @@ end
 ---Resolve content width for a panel buffer/window. A positive
 ---`ui.separator_width` is a fixed width -- honored even with a window present,
 ---since "fixed" (the option's own doc) would otherwise only ever apply when
----there is no window to measure.
+---there is no window to measure -- but never wider than the window itself.
 ---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
 ---@return integer
 function M.content_width(opts)
@@ -125,19 +125,20 @@ function M.content_width(opts)
 		return math.max(min_width, resolve_fallback(tonumber(options.fallback)))
 	end
 
-	local fixed = configured_width()
-	if fixed then
-		return math.max(min_width, fixed)
-	end
-
 	local width = vim.api.nvim_win_get_width(winid)
 	local ok, info = pcall(vim.fn.getwininfo, winid)
 	if ok and type(info) == "table" and info[1] then
 		local textoff = tonumber(info[1].textoff) or 0
 		width = width - textoff
 	end
+	width = math.floor(width)
 
-	return math.max(min_width, math.floor(width))
+	local fixed = configured_width()
+	if fixed then
+		return math.max(min_width, math.min(fixed, width))
+	end
+
+	return math.max(min_width, width)
 end
 
 ---Build a separator line of the given width.

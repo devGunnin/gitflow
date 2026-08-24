@@ -276,10 +276,10 @@ local function validate_ui(config)
 
 	if config.ui.separator_width ~= nil then
 		local width = config.ui.separator_width
-		if type(width) ~= "number" or width < 0 then
+		if type(width) ~= "number" or width < 0 or width ~= math.floor(width) then
 			error(
 				"gitflow config error: ui.separator_width must be 0 (adaptive) "
-					.. "or a positive number",
+					.. "or a positive integer",
 				3
 			)
 		end

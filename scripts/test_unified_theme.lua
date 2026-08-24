@@ -88,7 +88,52 @@ assert_equals(
 vim.api.nvim_win_close(win_id, true)
 vim.api.nvim_buf_delete(win_buf, { force = true })
 
+-- A fixed ui.separator_width wider than the window is clamped to it -- it
+-- must never blow past what the window can actually show.
+cfg.current.ui.separator_width = 200
+local narrow_buf = vim.api.nvim_create_buf(false, true)
+vim.cmd("vsplit")
+local narrow_win = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(narrow_win, narrow_buf)
+vim.api.nvim_win_set_width(narrow_win, 40)
+local cw_clamped = ui_render.content_width({ winid = narrow_win })
+assert_true(
+	cw_clamped <= 40,
+	"a fixed ui.separator_width wider than the window should clamp to the window width"
+)
+vim.api.nvim_win_close(narrow_win, true)
+vim.api.nvim_buf_delete(narrow_buf, { force = true })
+
 cfg.current.ui.separator_width = saved
+
+-- ui.separator_width validation rejects non-integers, accepts 0 and positive
+-- integers.
+local function with_separator_width(value, fn)
+	local before = cfg.current.ui.separator_width
+	cfg.current.ui.separator_width = value
+	local ok, err = pcall(fn)
+	cfg.current.ui.separator_width = before
+	return ok, err
+end
+
+assert_true(
+	select(1, with_separator_width(0.5, function()
+		cfg.validate(cfg.current)
+	end)) == false,
+	"ui.separator_width must reject a non-integer value like 0.5"
+)
+assert_true(
+	select(1, with_separator_width(45, function()
+		cfg.validate(cfg.current)
+	end)),
+	"ui.separator_width must accept a positive integer"
+)
+assert_true(
+	select(1, with_separator_width(0, function()
+		cfg.validate(cfg.current)
+	end)),
+	"ui.separator_width must accept 0 (adaptive)"
+)
 
 -- ── 1b. components.header — the one way to draw a panel header ───
 

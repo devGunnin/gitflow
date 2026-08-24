@@ -120,7 +120,8 @@ ui ~
 
     Option              Type        Default     Description ~
     default_layout      string      "split"     "split" or "float"
-    separator_width     number      0           Rule width; 0 = adapt to window
+    separator_width     number      0           Panel content width, clamped to
+                                                 the window; 0 = adapt to window
     split.orientation   string      "vertical"  "vertical" or "horizontal"
     split.size          number      50          Column/row count
     float.width         number      0.8         Fraction or absolute columns
