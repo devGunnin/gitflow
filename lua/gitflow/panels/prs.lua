@@ -32,6 +32,9 @@ local M = {}
 -- (filters.limit) but only one page is ever painted, so a large result set
 -- never renders 100+ markdown cards into the buffer at once.
 local PAGE_SIZE = 30
+-- Create form's label picker: high enough to be the whole list on any sane
+-- repo, and the fill is reported rather than silently truncating.
+local LABEL_PICK_LIMIT = 1000
 
 ---@type GitflowPrPanelState
 M.state = {
@@ -112,8 +115,8 @@ local P = panel.new({
 		{ key = "x", desc = "close PR", destructive = true, run = function()
 			M.close_pr_under_cursor()
 		end },
-		-- Not n/p: n is vim's search-next in a buffer users search with `/`.
-		-- Tiered below the core verbs so a narrow bar elides pages, not merge.
+		-- Not n/p: n is search-next in a buffer users `/` through; shadows
+		-- CTRL-N/P motion instead, j/k still move. Tiered below the core verbs.
 		{ key = "<C-n>", desc = "next page", views = { "list" }, run = function()
 			M.next_page()
 		end },
@@ -546,6 +549,13 @@ function M.refresh()
 		if not P:is_active(request_id) then
 			return
 		end
+		-- Scope moved under the fetch: these rows describe somewhere we
+		-- left, so drop them and re-issue under the scope live now.
+		if requested_key ~= cache_key() then
+			M.state.cache, M.state.cache_key = nil, nil
+			M.refresh()
+			return
+		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			-- Drop the cache and paint the failure even when rows are on
@@ -974,7 +984,7 @@ function M.create_interactive()
 		end)
 	end
 
-	gh_labels.list({ limit = 1000 }, {}, function(err, labels)
+	gh_labels.list({ limit = LABEL_PICK_LIMIT }, {}, function(err, labels)
 		if err then
 			utils.notify(
 				("Failed to load labels: %s"):format(err),
@@ -982,6 +992,12 @@ function M.create_interactive()
 			)
 		end
 		loaded.labels = type(labels) == "table" and labels or {}
+		if #loaded.labels >= LABEL_PICK_LIMIT then
+			utils.notify(
+				("Offering the first %d labels only"):format(LABEL_PICK_LIMIT),
+				vim.log.levels.WARN
+			)
+		end
 		try_open()
 	end)
 

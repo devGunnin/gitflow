@@ -397,6 +397,72 @@ for _, case in ipairs(CASES) do
 	end)
 end
 
+-- ── a scope change while a fetch is in flight never paints its rows ──
+-- The key was stamped from the scope the fetch was ISSUED under, but the
+-- success path painted the cache directly: `:cd` during a load put repo A's
+-- rows on screen, actionable, while `gh` already resolved repo B.
+
+for _, case in ipairs(CASES) do
+	test(("%s: rows landing after a cd are discarded and refetched"):format(
+		case.name
+	), function()
+		local modname = "gitflow.panels." .. case.name
+		local mod = require(modname)
+		local gh_mod = require(case.module)
+		local real_list = gh_mod.list
+		local original_cwd = vim.fn.getcwd()
+		local repo_a, repo_b = vim.fn.tempname(), vim.fn.tempname()
+		vim.fn.mkdir(repo_a, "p")
+		vim.fn.mkdir(repo_b, "p")
+
+		mod.close()
+		mod.state.cache = nil
+
+		local calls, held_cb = 0, nil
+		local ok, err = pcall(function()
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+			gh_mod.list = function(...)
+				calls = calls + 1
+				held_cb = select(select("#", ...), ...)
+			end
+			case.open(mod)
+			assert_true(
+				held_cb ~= nil,
+				("%s should have issued a fetch in repo A"):format(case.name)
+			)
+
+			-- Move while it is in flight, then let repo A's rows land.
+			local release = held_cb
+			held_cb = nil
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+			release(nil, { case.item(1, "REPO-A-ONLY") })
+
+			assert_true(
+				buffer_text(mod.state.bufnr):find("REPO-A-ONLY", 1, true) == nil,
+				("%s painted repo A's row after moving to repo B: %q")
+					:format(case.name, buffer_text(mod.state.bufnr))
+			)
+			assert_true(
+				next(mod.state.line_entries) == nil,
+				("%s left repo A's rows resolvable in repo B"):format(case.name)
+			)
+			assert_true(
+				calls == 2 and held_cb ~= nil,
+				("%s did not refetch under the new scope (%d fetches)")
+					:format(case.name, calls)
+			)
+		end)
+
+		gh_mod.list = real_list
+		vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+		mod.close()
+		mod.state.cache = nil
+		vim.fn.delete(repo_a, "rf")
+		vim.fn.delete(repo_b, "rf")
+		assert_true(ok, tostring(err))
+	end)
+end
+
 -- ── a failed refresh with rows already on screen still shows the failure ──
 -- The error render used to be gated on an empty cache, so a failed refresh
 -- with content painted nothing at all: no error state, no map invalidation,

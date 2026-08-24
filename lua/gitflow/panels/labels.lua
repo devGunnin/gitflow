@@ -65,8 +65,8 @@ local P = panel.new({
 		{ key = "d", desc = "delete", destructive = true, run = function()
 			M.delete_under_cursor()
 		end },
-		-- Not n/p: n is vim's search-next in a buffer users search with `/`.
-		-- Tiered below the core verbs so a narrow bar elides pages, not delete.
+		-- Not n/p: n is search-next in a buffer users `/` through; shadows
+		-- CTRL-N/P motion instead, j/k still move. `d` drops first (destructive).
 		{ key = "<C-n>", desc = "next page", run = function()
 			M.next_page()
 		end },
@@ -219,6 +219,13 @@ function M.refresh()
 	end
 	gh_labels.list({ limit = FETCH_LIMIT }, {}, function(err, labels)
 		if not P:is_active(request_id) then
+			return
+		end
+		-- Scope moved under the fetch: these rows describe somewhere we
+		-- left, so drop them and re-issue under the scope live now.
+		if requested_key ~= cache_key() then
+			M.state.cache, M.state.cache_key = nil, nil
+			M.refresh()
 			return
 		end
 		if err then

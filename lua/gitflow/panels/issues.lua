@@ -34,6 +34,9 @@ local M = {}
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
+-- Create form's label picker: high enough to be the whole list on any sane
+-- repo, and the fill is reported rather than silently truncating.
+local LABEL_PICK_LIMIT = 1000
 
 ---@type GitflowIssuePanelState
 M.state = {
@@ -557,6 +560,13 @@ function M.refresh()
 	end
 	gh_issues.list(M.state.fetch, {}, function(err, issues)
 		if not P:is_active(request_id) then
+			return
+		end
+		-- Scope moved under the fetch: these rows describe somewhere we
+		-- left, so drop them and re-issue under the scope live now.
+		if requested_key ~= cache_key() then
+			M.state.cache, M.state.cache_key = nil, nil
+			M.refresh()
 			return
 		end
 		if err then
@@ -1165,7 +1175,7 @@ function M.create_interactive()
 		end)
 	end
 
-	gh_labels.list({ limit = 1000 }, {}, function(err, labels)
+	gh_labels.list({ limit = LABEL_PICK_LIMIT }, {}, function(err, labels)
 		if err then
 			utils.notify(
 				("Failed to load labels: %s"):format(err),
@@ -1173,6 +1183,12 @@ function M.create_interactive()
 			)
 		end
 		loaded.labels = type(labels) == "table" and labels or {}
+		if #loaded.labels >= LABEL_PICK_LIMIT then
+			utils.notify(
+				("Offering the first %d labels only"):format(LABEL_PICK_LIMIT),
+				vim.log.levels.WARN
+			)
+		end
 		try_open()
 	end)
 
