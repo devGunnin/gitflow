@@ -432,7 +432,10 @@ end
 
 ---@param runs GitflowActionRun[]
 ---@param current_branch string
-local function render_list(runs, current_branch)
+---@param cache_scope_key string|nil  scope the fetch was issued under, if
+---this paint came from an async response; defaults to the current scope for
+---a synchronous (already-scoped) paint like the cached instant paint.
+local function render_list(runs, current_branch, cache_scope_key)
 	update_float_footer()
 	local render_opts = {
 		bufnr = M.state.bufnr,
@@ -528,7 +531,7 @@ local function render_list(runs, current_branch)
 	components.split_hint_bar(B, render_opts, LIST_HINTS)
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
-	list_cache.key = list_cache_key()
+	list_cache.key = cache_scope_key or list_cache_key()
 	list_cache.runs = runs
 	list_cache.branch = current_branch
 
@@ -999,6 +1002,11 @@ function M.refresh()
 		return
 	end
 
+	-- Captured now, not when the response paints: a `:cd` (or filter
+	-- change) while this fetch is in flight must not stamp the cache under
+	-- the *new* scope for runs that were actually fetched under the old one.
+	local requested_scope_key = list_cache_key()
+
 	git_branch.current({}, function(_, branch)
 		if not is_active_request(request_id, "list") then
 			return
@@ -1032,7 +1040,7 @@ function M.refresh()
 					)
 					return
 				end
-				render_list(runs or {}, branch or "(unknown)")
+				render_list(runs or {}, branch or "(unknown)", requested_scope_key)
 			end
 		)
 	end)

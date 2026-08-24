@@ -1990,6 +1990,59 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		actions_panel.close()
 	end,
 
+	["a :cd during an in-flight list fetch does not stamp the cache under the new directory"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		local original_cwd = vim.fn.getcwd()
+		local other_dir = vim.fn.tempname()
+		vim.fn.mkdir(other_dir, "p")
+
+		local ok, err = xpcall(function()
+			with_temporary_patches({
+				{ table = git_branch, key = "current", value = sync_branch },
+				{
+					table = gh_actions,
+					key = "list",
+					value = function(_, _, cb)
+						-- The cwd changes while this fetch is still in
+						-- flight, before its response is delivered — the
+						-- key must reflect the scope the fetch was issued
+						-- under, not the scope at paint time.
+						vim.cmd.cd(other_dir)
+						cb(nil, { stub_run("Old dir: in-flight run") })
+					end,
+				},
+			}, function()
+				actions_panel.refresh()
+				T.drain_jobs(2000)
+			end)
+
+			actions_panel.close()
+
+			with_temporary_patches({
+				{ table = git_branch, key = "current", value = sync_branch },
+				-- Never resolves: whatever paints now came from the cache.
+				{ table = gh_actions, key = "list", value = function(_, _, _) end },
+			}, function()
+				actions_panel.open(cfg)
+				T.assert_true(
+					rendered_panel_text():find("Old dir: in-flight run", 1, true) == nil,
+					"the old directory's runs must not be cached under the new directory's key"
+				)
+			end)
+
+			actions_panel.close()
+		end, debug.traceback)
+
+		vim.cmd.cd(original_cwd)
+		pcall(vim.fn.delete, other_dir, "d")
+		if not ok then
+			error(err, 0)
+		end
+	end,
+
 	-- ── Filters, branch scope, pagination (panel) ───────────────────────
 
 	["the filter menu sets a filter and refetches with it"] = function()
