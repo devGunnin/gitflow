@@ -160,7 +160,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("rebase", {
 			filetype = "gitflowrebase",
-			lines = { "Loading branches..." },
+			lines = components.loading_lines("Loading branches…"),
 		})
 		M.state.bufnr = bufnr
 

@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local components = require("gitflow.ui.components")
 local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
@@ -872,7 +873,7 @@ function M.open(cfg, entries, on_select)
 	})
 	local list_bufnr = ui.buffer.create("palette_list", {
 		filetype = "gitflowpalette",
-		lines = { "Loading palette..." },
+		lines = components.loading_lines("Loading palette…"),
 	})
 
 	M.state.prompt_bufnr = prompt_bufnr

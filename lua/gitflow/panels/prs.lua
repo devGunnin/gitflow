@@ -63,7 +63,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("prs", {
 			filetype = "markdown",
-			lines = { "Loading pull requests..." },
+			lines = components.loading_lines("Loading pull requests…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -344,18 +344,9 @@ local function render_loading(message)
 	local B = ui_render.builder()
 	push_header(B, "Gitflow Pull Requests", render_opts)
 	B:blank()
-	B:push({
-		{ "  ", nil },
-		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
-		{ message, "GitflowMeta" },
-	})
+	components.loading(B, message)
 	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
 end
 
 ---@param prs table[]

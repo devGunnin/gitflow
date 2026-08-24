@@ -131,7 +131,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("diff", {
 			filetype = "gitflow-diff",
-			lines = { "Loading diff..." },
+			lines = components.loading_lines("Loading diff…"),
 		})
 		M.state.bufnr = bufnr
 	end

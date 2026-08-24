@@ -95,7 +95,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("notifications", {
 			filetype = "gitflownotifications",
-			lines = { "Loading notifications..." },
+			lines = components.loading_lines("Loading notifications…"),
 		})
 		M.state.bufnr = bufnr
 	end

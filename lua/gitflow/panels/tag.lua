@@ -51,7 +51,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("tag", {
 			filetype = "gitflowtag",
-			lines = { "Loading tags..." },
+			lines = components.loading_lines("Loading tags…"),
 		})
 		M.state.bufnr = bufnr
 	end

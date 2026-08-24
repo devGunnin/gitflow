@@ -39,7 +39,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("stash", {
 			filetype = "gitflowstash",
-			lines = { "Loading stash list..." },
+			lines = components.loading_lines("Loading stash list…"),
 		})
 		M.state.bufnr = bufnr
 	end

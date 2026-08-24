@@ -50,7 +50,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("reflog", {
 			filetype = "gitflowreflog",
-			lines = { "Loading reflog..." },
+			lines = components.loading_lines("Loading reflog…"),
 		})
 		M.state.bufnr = bufnr
 	end

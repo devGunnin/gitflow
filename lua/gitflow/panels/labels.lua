@@ -34,7 +34,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("labels", {
 			filetype = "markdown",
-			lines = { "Loading labels..." },
+			lines = components.loading_lines("Loading labels…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -109,7 +109,7 @@ local function render_loading(message)
 	components.header(B, "Gitflow Labels", render_opts)
 	components.summary(B, icons.get("ui", "tag"), "Labels", {})
 	B:blank()
-	components.empty(B, message)
+	components.loading(B, message)
 
 	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
 	M.state.line_entries = {}

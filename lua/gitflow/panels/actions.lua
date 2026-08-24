@@ -124,7 +124,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("actions", {
 			filetype = "gitflowactions",
-			lines = { "Loading workflow runs..." },
+			lines = components.loading_lines("Loading workflow runs…"),
 		})
 		M.state.bufnr = bufnr
 	end

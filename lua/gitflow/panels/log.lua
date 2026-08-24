@@ -43,7 +43,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("log", {
 			filetype = "gitflowlog",
-			lines = { "Loading git log..." },
+			lines = components.loading_lines("Loading git log…"),
 		})
 		M.state.bufnr = bufnr
 	end

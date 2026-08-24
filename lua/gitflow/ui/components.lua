@@ -196,7 +196,6 @@ end
 ---@return string[]
 function M.loading_lines(label)
 	return {
-		"",
 		ui_render.spacing.gutter
 			.. icons.get("ui", "loading") .. "  " .. (label or "Loading…"),
 	}

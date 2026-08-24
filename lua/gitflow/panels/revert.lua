@@ -52,7 +52,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("revert", {
 			filetype = "gitflowrevert",
-			lines = { "Loading commits..." },
+			lines = components.loading_lines("Loading commits…"),
 		})
 		M.state.bufnr = bufnr
 	end
