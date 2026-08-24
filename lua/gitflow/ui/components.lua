@@ -21,6 +21,7 @@ M.is_separator = ui_render.is_separator
 M.is_floating = ui_render.is_floating
 M.spacing = ui_render.spacing
 M.glyphs = ui_render.glyphs
+M.separators = ui_render.separators
 
 ---@param value any
 ---@return string
