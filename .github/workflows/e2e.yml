@@ -79,3 +79,38 @@ jobs:
             fi
           done
           exit $exit_code
+
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint (luacheck)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: "5.4"
+
+      - uses: leafo/gh-actions-luarocks@v6
+
+      - name: Install luacheck
+        run: luarocks install luacheck
+
+      - name: Run luacheck
+        run: |
+          luacheck lua/ scripts/ tests/
+          status=$?
+          # luacheck exit codes: 0 clean, 1 warnings only, 2+ real
+          # errors/fatal. This first lint pass carries pre-existing style
+          # warnings (unused locals, redefinition shadows in a few large
+          # stage scripts, long single-line JSON test fixtures) that are out
+          # of this task's scope to clean up across the whole tree; only
+          # real errors fail the build. See .luacheckrc.
+          if [ "$status" -ge 2 ]; then
+            exit "$status"
+          fi
+
+      # stylua is intentionally not run here: the repo's hand-formatting
+      # (multi-value table rows, manually wrapped boolean conditions) isn't
+      # reproducible by any stylua config — stylua's formatter always fully
+      # collapses or fully one-item-per-lines an expression, so a default
+      # run rewrites ~120 of ~150 files. No config option bridges that gap.
