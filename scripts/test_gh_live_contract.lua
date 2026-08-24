@@ -58,7 +58,7 @@ local gh_labels = require("gitflow.gh.labels")
 local done = false
 local call_err, call_data, call_result
 
-gh_labels.list(nil, function(err, data, result)
+gh_labels.list(nil, nil, function(err, data, result)
 	call_err, call_data, call_result = err, data, result
 	done = true
 end)

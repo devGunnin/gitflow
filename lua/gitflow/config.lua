@@ -59,6 +59,9 @@ local utils = require("gitflow.utils")
 ---@field delay integer
 ---@field date_format string
 
+---@class GitflowActionsConfig
+---@field watch_interval integer  poll interval (ms, min 1000) for the actions panel's live-watch
+
 ---@class GitflowConfig
 ---@field keybindings table<string, string>
 ---@field ui GitflowUiConfig
@@ -71,6 +74,7 @@ local utils = require("gitflow.utils")
 ---@field icons GitflowIconsConfig
 ---@field inline_blame GitflowInlineBlameConfig
 ---@field notifications table
+---@field actions GitflowActionsConfig
 
 local M = {}
 
@@ -177,6 +181,10 @@ function M.defaults()
 		},
 		notifications = {
 			max_entries = 200,
+		},
+		actions = {
+			-- How often the actions panel polls while watching a run (ms).
+			watch_interval = 10000,
 		},
 	}
 end
@@ -507,6 +515,25 @@ local function validate_notifications(config)
 	end
 end
 
+local MIN_WATCH_INTERVAL_MS = 1000
+
+---@param config GitflowConfig
+local function validate_actions(config)
+	if type(config.actions) ~= "table" then
+		error("gitflow config error: actions must be a table", 3)
+	end
+	-- Floor, not just "positive": the value is milliseconds, so the natural
+	-- typo `watch_interval = 10` (meaning seconds) would poll GitHub 100x/s.
+	if type(config.actions.watch_interval) ~= "number"
+		or config.actions.watch_interval < MIN_WATCH_INTERVAL_MS then
+		error(
+			("gitflow config error: actions.watch_interval must be at least %d (milliseconds)")
+				:format(MIN_WATCH_INTERVAL_MS),
+			3
+		)
+	end
+end
+
 ---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
@@ -520,6 +547,7 @@ function M.validate(config)
 	validate_icons(config)
 	validate_inline_blame(config)
 	validate_notifications(config)
+	validate_actions(config)
 end
 
 ---@param opts table|nil

@@ -490,37 +490,27 @@ function M.toggle_preview()
 	end
 
 	local preview_bufnr = ensure_preview_buffer()
-	local columns = vim.o.columns
-	local lines_h = vim.o.lines - vim.o.cmdheight
-	local width = math.floor(columns * 0.48)
-	local height = math.floor(lines_h * 0.72)
-	local col = math.floor(columns * 0.51)
-	local row = math.floor((lines_h - height) / 2)
+	-- A side panel next to the todo list, not centred: width/height are
+	-- fractions (chrome-aware via window.float_geometry), but col is an
+	-- explicit offset so the preview sits to the right rather than in the
+	-- middle of the screen.
+	local col = math.floor(vim.o.columns * 0.51)
 
-	local preview_winid = vim.api.nvim_open_win(preview_bufnr, false, {
-		relative = "editor",
-		style = "minimal",
-		width = width,
-		height = height,
-		row = row,
+	-- Declared before assignment: on_close's closure captures this local by
+	-- reference and only reads it once the window actually closes, by which
+	-- point open_float has returned and assigned it.
+	local preview_winid
+	preview_winid = ui.window.open_float({
+		bufnr = preview_bufnr,
+		width = 0.48,
+		height = 0.72,
 		col = col,
 		border = "rounded",
 		title = " git show ",
 		title_pos = "center",
 		zindex = 200,
-	})
-	vim.api.nvim_set_option_value(
-		"winhighlight",
-		"NormalFloat:GitflowNormal,FloatBorder:GitflowBorder"
-			.. ",FloatTitle:GitflowTitle",
-		{ win = preview_winid }
-	)
-	M.state.preview_winid = preview_winid
-
-	vim.api.nvim_create_autocmd("WinClosed", {
-		pattern = tostring(preview_winid),
-		once = true,
-		callback = function()
+		enter = false,
+		on_close = function()
 			if M.state.preview_winid == preview_winid then
 				M.state.preview_winid = nil
 			end
@@ -536,6 +526,18 @@ function M.toggle_preview()
 			M.state.preview_bufnr = nil
 		end,
 	})
+	if not preview_winid then
+		-- open_float already notified why; nothing left to preview into.
+		-- Undo ensure_preview_buffer's side effect so state doesn't carry a
+		-- live buffer with no window (a shape the rest of the module never
+		-- otherwise produces).
+		if M.state.preview_bufnr and vim.api.nvim_buf_is_valid(M.state.preview_bufnr) then
+			pcall(vim.api.nvim_buf_delete, M.state.preview_bufnr, { force = true })
+		end
+		M.state.preview_bufnr = nil
+		return
+	end
+	M.state.preview_winid = preview_winid
 
 	M.refresh_preview()
 end

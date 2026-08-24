@@ -128,6 +128,9 @@ require("gitflow").setup({
     delay       = 200,          -- debounce (ms) before blaming the cursor line
     date_format = "%Y-%m-%d",   -- os.date() format for the author date
   },
+  actions = {
+    watch_interval = 10000,     -- ms between polls while watching a run; min 1000
+  },
 })
 ```
 
@@ -165,6 +168,7 @@ require("gitflow").setup({
 | `inline_blame.auto` | `boolean` | `false` | Automatically show inline blame in every file buffer |
 | `inline_blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
 | `inline_blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
+| `actions.watch_interval` | `integer` | `10000` | Poll interval (ms) for the actions panel's live-watch (`w`); minimum `1000` |
 
 ### Configuration Validation
 

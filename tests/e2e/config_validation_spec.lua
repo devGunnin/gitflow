@@ -199,6 +199,19 @@ T.run_suite("config_validation_spec", {
 		)
 	end,
 
+	["a sub-second actions.watch_interval is rejected"] = function()
+		-- `10` reads as seconds but is milliseconds: 100 GitHub calls a second.
+		local err = setup_error({ actions = { watch_interval = 10 } })
+		T.assert_contains(err, "watch_interval", "error should name the option")
+		T.assert_contains(err, "1000", "error should state the floor")
+
+		local cfg = config.setup({ actions = { watch_interval = 1000 } })
+		T.assert_equals(
+			cfg.actions.watch_interval, 1000,
+			"the floor itself must stay accepted"
+		)
+	end,
+
 	["duplicate keybindings are rejected"] = function()
 		local err = setup_error({ keybindings = { commit = "gs" } })
 		T.assert_contains(err, "duplicate keybindings", "error should name the failure")

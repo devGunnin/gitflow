@@ -258,6 +258,8 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `x` | Close PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
+| `<C-n>` | Next page |
+| `<C-p>` | Previous page |
 | `r` | Refresh |
 | `q` | Close |
 
@@ -391,6 +393,8 @@ Buffer-local bindings active in the label panel (`:Gitflow label list`).
 | --- | --- |
 | `c` | Create new label |
 | `d` | Delete label under cursor |
+| `<C-n>` | Next page |
+| `<C-p>` | Previous page |
 | `r` | Refresh |
 | `q` | Close |
 
@@ -512,15 +516,36 @@ Interactive rebase editor:
 
 ## Actions Panel
 
-Buffer-local bindings active in the actions panel (`:Gitflow actions`).
+Buffer-local bindings active in the actions panel (`:Gitflow actions`). Keys
+apply to the run under cursor in the list, or the open run in detail view;
+`J`/job-scoped `l` require the cursor on a job line in detail view.
 
-| Key | Action |
-| --- | --- |
-| `<CR>` | View run detail |
-| `o` | Open in browser |
-| `<BS>` | Back to list |
-| `r` | Refresh |
-| `q` | Close |
+Bindings are per view — a key a view does not use is not mapped there, so
+plain vim motions keep working. The log view is a text buffer and maps only
+`<BS>`, `]e`, `r` and `q`.
+
+| Key | Action | Views |
+| --- | --- | --- |
+| `<CR>` | View run detail (list) / dispatch the workflow under cursor (workflow list, confirms first) | list, detail, workflow list |
+| `l` | View log — full run log, or the job under cursor's log in detail view | list, detail |
+| `f` | Filter by workflow, status, event, or actor | list |
+| `b` | Toggle branch scope: current branch / all branches | list |
+| `L` | Load more runs past the current page | list |
+| `W` | Open the workflow list | list |
+| `R` | Rerun the run (confirms first) | list, detail |
+| `F` | Rerun failed jobs only (confirms first) | list, detail |
+| `J` | Rerun the job under cursor (confirms first) | detail |
+| `C` | Cancel the run (confirms first) | list, detail |
+| `w` | Toggle live watch — polls until the run finishes | detail |
+| `]e` | Jump to the first error line | log |
+| `o` | Open in browser | list, detail |
+| `<BS>` | Back (log → its parent view, workflow list/detail → list) | detail, log, workflow list |
+| `r` | Refresh | all |
+| `q` | Close | all |
+
+A very large log is capped at the last 20 000 lines, with the number of
+omitted lines stated in the buffer, so a pathological log cannot block the
+editor while it paints.
 
 ## Notifications Panel
 
@@ -578,6 +603,12 @@ bug — but it can catch you out if you jump between panels on muscle memory:
   List, Conflict List — same as `r` there) / [reply to the comment thread on
   the current line](#pr-review-mode) (PR Review Mode editing pane and thread
   popup).
+- **`<C-n>` / `<C-p>`** — next / previous page (PR List, Label Panel) / move the
+  selection down / up (command palette, searchable pickers). Both mean "the
+  next one", on different things. In the PR and Label lists they also shadow
+  Neovim's own `CTRL-N` / `CTRL-P` cursor motions; `j` / `k` still move the
+  cursor there, and keeping `n` for `/` search-next matters more in a buffer
+  you search.
 - **"Back to list"** — `b` (Issue List, PR List) or `<BS>` (Actions Panel),
   depending on the panel. There is no panel where `<Esc>` performs this;
   `<Esc>` is used elsewhere for unrelated things (cancelling a log-panel range

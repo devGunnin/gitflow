@@ -175,6 +175,14 @@ inline_blame ~
     delay           number      200             Debounce (ms) before blaming
     date_format     string      "%Y-%m-%d"      os.date() format for the date
 
+                                                    *gitflow-config-actions*
+actions ~
+
+    Option              Type        Default     Description ~
+    watch_interval      number      10000       Poll interval (ms) for the
+                                                 actions panel's live-watch
+                                                 (`w`); minimum 1000
+
                                                   *gitflow-config-validation*
 validation ~
 
@@ -361,6 +369,8 @@ PR list ~
     x       Close PR
     o       Checkout PR branch
     v       Open review panel
+    <C-n>   Next page (list mode)
+    <C-p>   Previous page (list mode)
     r       Refresh
     b       Back to list (detail view)
     q       Close
@@ -451,6 +461,8 @@ Merge conflict resolver ~
 Label panel ~
     c       Create new label
     d       Delete label under cursor
+    <C-n>   Next page
+    <C-p>   Previous page
     r       Refresh
     q       Close
 
@@ -507,12 +519,16 @@ Cross-panel inconsistencies ~
        under cursor (stash panel) / edit assignees (issue list, PR list).
     R: reset to entry under cursor (reflog panel, destructive, confirms
        first, default choice Cancel) / refresh (branch list, conflict
-       list) / reply to comment thread (review view).
-    "Back to list": b (issue list, PR list) or <BS> (actions panel).
+       list) / reply to comment thread (review view) / rerun a workflow
+       run (actions panel, destructive, confirms first, default choice
+       Cancel).
+    "Back to list": b (issue list, PR list) or <BS> (actions panel, now a
+       general "back one level": log view -> its parent, workflow list ->
+       run list, run detail -> run list).
     No panel uses <Esc> for this.
 
-    Both destructive cases above default their confirmation prompt to
-    Cancel.
+    All three destructive cases above default their confirmation prompt
+    to Cancel.
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*

@@ -390,7 +390,7 @@ T.run_suite("E2E: Full Repository Flow", {
 				{
 					table = gh_labels,
 					key = "list",
-					value = function(_, cb)
+					value = function(_, _, cb)
 						cb(nil, {})
 					end,
 				},
