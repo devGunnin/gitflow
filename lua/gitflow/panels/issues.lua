@@ -218,6 +218,18 @@ local P = panel.new({
 	},
 })
 
+---The cwd the panel's own window sees. `:lcd`/`:tcd` give a window its own
+---directory, so a fetch must be judged against the panel's window rather than
+---whichever one happens to be current when the answer lands.
+---@return string
+local function panel_cwd()
+	local winid = P:render_opts().winid
+	if winid and vim.api.nvim_win_is_valid(winid) then
+		return vim.fn.getcwd(winid)
+	end
+	return vim.fn.getcwd()
+end
+
 ---@param issue table
 ---@return string
 local function issue_state(issue)
@@ -750,7 +762,7 @@ function M.open_view(number, cfg)
 		if not P:is_active(request_id) then
 			return
 		end
-		if requested_cwd ~= vim.fn.getcwd() then
+		if requested_cwd ~= panel_cwd() then
 			abandon_view(number)
 			return
 		end
@@ -961,6 +973,23 @@ function M.suggested_branch_name(issue)
 	return ("%s-%s"):format(number, slug)
 end
 
+---Guard an async continuation about to spawn `gh`: prompts and forms are
+---async, so the cwd can move between choosing the target and the spawn, and
+---`gh` resolves the repo from the live cwd. Compared against the live cwd,
+---not the panel's, because that is what the spawn will inherit.
+---@param scope string  cwd the target was resolved under
+---@return boolean
+local function scope_intact(scope)
+	if scope == vim.fn.getcwd() then
+		return true
+	end
+	utils.notify(
+		"Repository changed since this was selected — nothing was sent",
+		vim.log.levels.ERROR
+	)
+	return false
+end
+
 ---The issue a keypress acts on, resolved at press time — never a number
 ---cached from an older paint. Returns nil when nothing is selected, or when
 ---what is on screen belongs to a repo we have since left.
@@ -999,23 +1028,25 @@ local function perform_mutation(opts)
 		return
 	end
 
+	-- Before the prompt: never ask the operator to authorise something that
+	-- was never going to be sent.
+	if not scope_intact(opts.scope) then
+		return
+	end
+
 	-- The repo is named here rather than by each gate: `gh` resolves it from
-	-- the cwd, so which repo is about to be hit is part of every prompt.
+	-- the cwd, so which repo is about to be hit is part of every prompt. Named
+	-- from the target's scope — the live cwd would name the repo we moved to.
 	local confirmed = input.confirm(
-		("%s\nRepository: %s"):format(opts.confirm_message, gh.repo_label()),
+		("%s\nRepository: %s"):format(opts.confirm_message, gh.repo_label(opts.scope)),
 		{ choices = { "&Yes", "&No" }, default_choice = 2 }
 	)
 	if not confirmed then
 		return
 	end
 
-	-- Prompts can be async, so the cwd may have moved between choosing the
-	-- target and this spawn; gh would resolve the other repo.
-	if opts.scope ~= vim.fn.getcwd() then
-		utils.notify(
-			"Repository changed since this was selected — nothing was sent",
-			vim.log.levels.ERROR
-		)
+	-- The confirm itself can be async; re-check before the spawn.
+	if not scope_intact(opts.scope) then
 		return
 	end
 
@@ -1044,7 +1075,7 @@ end
 
 ---Create a branch for the selected issue, prefilled with a suggested name.
 function M.create_branch_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1057,6 +1088,10 @@ function M.create_branch_under_cursor()
 		local name = vim.trim(value or "")
 		if name == "" then
 			utils.notify("Branch name cannot be empty", vim.log.levels.WARN)
+			return
+		end
+
+		if not scope_intact(scope) then
 			return
 		end
 
@@ -1417,7 +1452,9 @@ function M.create_interactive()
 end
 
 ---@param number integer|string
-local function comment_on_issue(number)
+---@param number integer|string
+---@param scope string  cwd the issue was resolved under
+local function comment_on_issue(number, scope)
 	input.prompt({
 		multiline = true,
 		title = ("Comment on issue #%s"):format(tostring(number)),
@@ -1426,6 +1463,10 @@ local function comment_on_issue(number)
 		local normalized = vim.trim(body or "")
 		if normalized == "" then
 			utils.notify("Comment cannot be empty", vim.log.levels.WARN)
+			return
+		end
+
+		if not scope_intact(scope) then
 			return
 		end
 
@@ -1445,13 +1486,12 @@ local function comment_on_issue(number)
 end
 
 function M.comment_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
-	local number = issue.number
-	comment_on_issue(number)
+	comment_on_issue(issue.number, scope)
 end
 
 ---`vim.json.decode` turns a JSON `null` into the truthy `vim.NIL`; treat that
@@ -1469,7 +1509,8 @@ end
 ---Fetch the issue fresh (list cache carries no body) and open an edit form
 ---prefilled with its current title/body.
 ---@param number integer|string
-local function edit_issue(number)
+---@param scope string  cwd the issue was resolved under
+local function edit_issue(number, scope)
 	gh_issues.view(number, {}, function(err, issue)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
@@ -1497,6 +1538,12 @@ local function edit_issue(number)
 				},
 			},
 			on_submit = function(values)
+				-- The form is async and there is no undo: a `cd` while it was
+				-- open would write this issue's text into the other repo's #<n>.
+				if not scope_intact(scope) then
+					return
+				end
+
 				gh_issues.edit(number, {
 					title = values.title,
 					body = values.body,
@@ -1518,13 +1565,12 @@ local function edit_issue(number)
 end
 
 function M.edit_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
-	local number = issue.number
-	edit_issue(number)
+	edit_issue(issue.number, scope)
 end
 
 ---Close an issue, recording why. GitHub distinguishes "completed" from "not
@@ -1783,7 +1829,7 @@ local function parse_label_patch(value)
 end
 
 function M.edit_labels_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1799,6 +1845,10 @@ function M.edit_labels_under_cursor()
 		local add_labels, remove_labels = parse_label_patch(value)
 		if #add_labels == 0 and #remove_labels == 0 then
 			utils.notify("No label edits provided", vim.log.levels.WARN)
+			return
+		end
+
+		if not scope_intact(scope) then
 			return
 		end
 
@@ -1843,7 +1893,7 @@ local function parse_assignee_patch(value)
 end
 
 function M.edit_assignees_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1859,6 +1909,10 @@ function M.edit_assignees_under_cursor()
 		local add_assignees, remove_assignees = parse_assignee_patch(value)
 		if #add_assignees == 0 and #remove_assignees == 0 then
 			utils.notify("No assignee edits provided", vim.log.levels.WARN)
+			return
+		end
+
+		if not scope_intact(scope) then
 			return
 		end
 
