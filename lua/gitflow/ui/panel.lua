@@ -205,7 +205,8 @@ function Panel:footer(view, width)
 	end
 
 	-- Overflow: drop conveniences from the end, but never an essential key --
-	-- a destructive verb or the way out must stay advertised, not clip away.
+	-- a destructive verb or the way out stays advertised. A float too narrow
+	-- for the essentials alone overflows rather than hiding one of them.
 	local shown = #hints
 	for index = #hints, 1, -1 do
 		if shown <= 1 then
