@@ -487,9 +487,12 @@ end
 --- bind the file-list keys onto the buffer.
 ---@param bufnr integer
 ---@param winid integer
-function M.attach(bufnr, winid)
+---@param cfg GitflowConfig  the config the review opened with; without it the
+---                          pane binds defaults and ignores panel_keybindings
+function M.attach(bufnr, winid, cfg)
 	state.bufnr = bufnr
 	state.winid = winid
+	P.cfg = cfg
 	P:bind_keymaps(bufnr)
 end
 
