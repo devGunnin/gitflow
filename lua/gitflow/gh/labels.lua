@@ -72,6 +72,9 @@ end
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, labels: table[]|nil, result: GitflowGitResult)
 function M.list(params, opts, cb)
+	-- The signature gained `params` (#283); a caller left on the old shape
+	-- passes its callback as `opts` and would otherwise just never be called.
+	assert(type(cb) == "function", "gh_labels.list expects (params, opts, cb)")
 	local ok, message = gh.ensure_prerequisites()
 	if not ok then
 		cb(message, nil, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
@@ -82,9 +85,14 @@ function M.list(params, opts, cb)
 	local args = { "label", "list", "--json", LABEL_FIELDS }
 	-- `gh label list` defaults to 30; without an explicit limit a repo with
 	-- more labels silently loses the rest.
-	if options.limit and tonumber(options.limit) then
+	if options.limit ~= nil then
+		local limit = tonumber(options.limit)
+		assert(
+			limit and limit >= 1,
+			"gh_labels.list: limit must be a positive number"
+		)
 		args[#args + 1] = "--limit"
-		args[#args + 1] = tostring(options.limit)
+		args[#args + 1] = tostring(math.floor(limit))
 	end
 
 	gh.json(args, opts, function(err, data, result)
