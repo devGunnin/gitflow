@@ -1,0 +1,299 @@
+-- scripts/test_review_draft_cache.lua — the review's draft cache is user data.
+--
+-- A pending review comment lives only in memory and in this cache, so a bug
+-- here loses someone's unsent work. The load path in particular must never
+-- overwrite drafts the reviewer has in hand, and the two ways the cache path
+-- is resolved (blocking `repo_slug`, async `resolve_repo_slug`) must agree —
+-- if they could disagree, one review's drafts would silently split across two
+-- files and half of them would look lost.
+--
+-- Everything here is scoped to its own throwaway slug, so it can never touch
+-- a real repository's drafts.
+--
+-- Run: nvim --headless -u NONE -l scripts/test_review_draft_cache.lua
+
+local script_path = debug.getinfo(1, "S").source:sub(2)
+local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
+vim.opt.runtimepath:append(project_root)
+
+local passed, failed = 0, 0
+
+---@param name string
+---@param fn fun()
+local function test(name, fn)
+	local ok, err = pcall(fn)
+	if ok then
+		passed = passed + 1
+		print("  PASS: " .. name)
+	else
+		failed = failed + 1
+		print("  FAIL: " .. name .. " — " .. tostring(err))
+	end
+end
+
+local function assert_true(condition, message)
+	if not condition then
+		error(message, 2)
+	end
+end
+
+local function assert_equals(actual, expected, message)
+	if actual ~= expected then
+		error(("%s (expected=%s, actual=%s)"):format(
+			message, vim.inspect(expected), vim.inspect(actual)), 2)
+	end
+end
+
+local cache = require("gitflow.review.cache")
+local gh = require("gitflow.gh")
+local git = require("gitflow.git")
+
+local TEST_SLUG = "gitflow_selftest_draft_cache"
+local TEST_PR = 999901
+
+local function clean()
+	pcall(cache.clear, TEST_PR, TEST_SLUG)
+end
+
+clean()
+
+---@param comments table[]
+local function save(comments)
+	return cache.save(TEST_PR, { pr_number = TEST_PR, comments = comments }, TEST_SLUG)
+end
+
+test("a saved draft survives a round trip byte for byte", function()
+	local draft = {
+		id = 3,
+		path = "lua/a.lua",
+		body = "needs a guard here\n\nsecond paragraph",
+		hunk = "@@ -1,3 +1,4 @@",
+		new_line = 12,
+		start_new_line = 10,
+		created_at = "2026-08-24T00:00:00Z",
+	}
+	assert_true(save({ draft }), "save should report success")
+
+	local loaded = cache.load(TEST_PR, TEST_SLUG)
+	assert_equals(#loaded.comments, 1, "the draft comes back")
+	local back = loaded.comments[1]
+	for key, value in pairs(draft) do
+		assert_equals(back[key], value, ("draft field %q survived"):format(key))
+	end
+	assert_true(loaded.updated_at ~= "", "the save is stamped")
+	clean()
+end)
+
+test("loading a cache that was never written yields no drafts, not an error", function()
+	clean()
+	local loaded = cache.load(TEST_PR, TEST_SLUG)
+	assert_equals(#loaded.comments, 0, "an absent cache is empty")
+	assert_equals(loaded.pr_number, TEST_PR, "and still knows its PR")
+end)
+
+test("a corrupt cache file loses nothing else and reports empty", function()
+	local path = cache.path_for(TEST_PR, TEST_SLUG)
+	local file = assert(io.open(path, "w"))
+	file:write("{ this is not json")
+	file:close()
+
+	local loaded = cache.load(TEST_PR, TEST_SLUG)
+	assert_equals(#loaded.comments, 0, "unparseable content reads as no drafts")
+	clean()
+end)
+
+test("clear removes the file for that PR only", function()
+	save({ { id = 1, path = "a.lua", body = "one" } })
+	local other = 999902
+	cache.save(other, { pr_number = other, comments = { { id = 1, body = "two" } } },
+		TEST_SLUG)
+
+	cache.clear(TEST_PR, TEST_SLUG)
+	assert_equals(#cache.load(TEST_PR, TEST_SLUG).comments, 0,
+		"the cleared PR has no drafts")
+	assert_equals(#cache.load(other, TEST_SLUG).comments, 1,
+		"another PR's drafts are untouched")
+	pcall(cache.clear, other, TEST_SLUG)
+end)
+
+test("hydrating never overwrites drafts the reviewer has in hand", function()
+	-- The exact shape of the bug this guards: reopening or refreshing a PR
+	-- reads the cache, and an in-memory list that is newer must win.
+	save({ { id = 1, path = "a.lua", body = "from disk" } })
+
+	local rstate = require("gitflow.review.state")
+	local file_list = require("gitflow.review.file_list")
+	rstate.reset()
+	rstate.state.cfg = {}
+	rstate.state.pr_number = TEST_PR
+	rstate.state.repo_slug = TEST_SLUG
+	rstate.state.pending_comments = {
+		{ id = 9, path = "b.lua", body = "typed just now" },
+	}
+
+	-- `load.start` is the only path that hydrates on open; drive it with the
+	-- slug already known so nothing goes near the network.
+	local real_resolve = cache.resolve_repo_slug
+	local real_refresh = require("gitflow.review.load").refresh
+	local real_render = file_list.render
+	cache.resolve_repo_slug = function(cb)
+		cb(TEST_SLUG)
+	end
+	local load = require("gitflow.review.load")
+	load.refresh = function() end
+	file_list.render = function() end
+
+	local ok, err = pcall(load.start, TEST_PR)
+
+	cache.resolve_repo_slug = real_resolve
+	load.refresh = real_refresh
+	file_list.render = real_render
+	assert_true(ok, tostring(err))
+
+	assert_equals(#rstate.state.pending_comments, 1, "the in-memory list stands")
+	assert_equals(rstate.state.pending_comments[1].body, "typed just now",
+		"the cached draft must not clobber an unsaved one")
+	rstate.reset()
+	clean()
+end)
+
+test("hydrating restores drafts when there are none in memory", function()
+	save({
+		{ id = 1, path = "a.lua", body = "from disk" },
+		{ id = 2, path = "b.lua", body = "also from disk" },
+	})
+
+	local rstate = require("gitflow.review.state")
+	local file_list = require("gitflow.review.file_list")
+	local load = require("gitflow.review.load")
+	rstate.reset()
+	rstate.state.cfg = {}
+	rstate.state.pr_number = TEST_PR
+
+	local real_resolve = cache.resolve_repo_slug
+	local real_refresh, real_render = load.refresh, file_list.render
+	cache.resolve_repo_slug = function(cb)
+		cb(TEST_SLUG)
+	end
+	load.refresh = function() end
+	file_list.render = function() end
+
+	local ok, err = pcall(load.start, TEST_PR)
+
+	cache.resolve_repo_slug = real_resolve
+	load.refresh, file_list.render = real_refresh, real_render
+	assert_true(ok, tostring(err))
+
+	assert_equals(#rstate.state.pending_comments, 2, "both drafts come back")
+	rstate.reset()
+	clean()
+end)
+
+-- ── the two slug paths must agree ──────────────────────────────────────
+
+---Run `fn` with both the blocking and the async subprocess layers answering
+---the same fabricated results, so the two resolution paths can be compared.
+---@param gh_answer { code: integer, stdout: string }
+---@param git_answer { code: integer, stdout: string }
+---@return string blocking, string async
+local function both_slugs(gh_answer, git_answer)
+	local real_systemlist = vim.fn.systemlist
+	local real_gh_run, real_git_git = gh.run, git.git
+
+	vim.fn.systemlist = function(cmd)
+		local answer = cmd[1] == "gh" and gh_answer or git_answer
+		vim.v.errmsg = ""
+		-- vim.v.shell_error is read-only; run a real process with the matching
+		-- exit status so the caller's check sees what it would in the wild.
+		real_systemlist({ "sh", "-c", ("exit %d"):format(answer.code) })
+		return vim.split(answer.stdout, "\n", { plain = true })
+	end
+	gh.run = function(_, _, cb)
+		cb({ code = gh_answer.code, stdout = gh_answer.stdout, stderr = "" })
+	end
+	git.git = function(_, _, cb)
+		cb({ code = git_answer.code, stdout = git_answer.stdout, stderr = "" })
+	end
+
+	local ok, blocking, async = pcall(function()
+		cache.invalidate_repo_slug()
+		local sync = cache.repo_slug()
+		cache.invalidate_repo_slug()
+		local resolved
+		cache.resolve_repo_slug(function(slug)
+			resolved = slug
+		end)
+		return sync, resolved
+	end)
+
+	vim.fn.systemlist = real_systemlist
+	gh.run, git.git = real_gh_run, real_git_git
+	cache.invalidate_repo_slug()
+	if not ok then
+		error(blocking, 0)
+	end
+	return blocking, async
+end
+
+test("both slug paths agree when gh answers", function()
+	local blocking, async = both_slugs(
+		{ code = 0, stdout = "octo/gitflow\n" },
+		{ code = 0, stdout = "/home/someone/src/gitflow\n" }
+	)
+	assert_equals(blocking, "octo_gitflow", "gh's nameWithOwner is slugified")
+	assert_equals(async, blocking,
+		"the async path must resolve the same cache directory")
+end)
+
+test("both slug paths agree when gh fails and git answers", function()
+	local blocking, async = both_slugs(
+		{ code = 1, stdout = "" },
+		{ code = 0, stdout = "/home/someone/src/gitflow\n" }
+	)
+	assert_equals(blocking, "_home_someone_src_gitflow", "the toplevel is the fallback")
+	assert_equals(async, blocking, "and the async path falls back the same way")
+end)
+
+test("both slug paths agree when nothing answers", function()
+	local blocking, async = both_slugs({ code = 1, stdout = "" }, { code = 1, stdout = "" })
+	assert_equals(blocking, "unknown", "an unidentifiable repo has one name")
+	assert_equals(async, blocking, "and the async path uses it too")
+end)
+
+test("both slug paths agree when gh answers empty", function()
+	local blocking, async = both_slugs(
+		{ code = 0, stdout = "\n" },
+		{ code = 0, stdout = "/tmp/repo\n" }
+	)
+	assert_equals(blocking, "_tmp_repo", "a blank gh answer is not a slug")
+	assert_equals(async, blocking, "and the async path rejects it too")
+end)
+
+test("the resolved slug is memoized, not re-fetched per draft save", function()
+	local calls = 0
+	local real_gh_run = gh.run
+	gh.run = function(_, _, cb)
+		calls = calls + 1
+		cb({ code = 0, stdout = "octo/gitflow\n", stderr = "" })
+	end
+	cache.invalidate_repo_slug()
+
+	local first, second
+	cache.resolve_repo_slug(function(slug) first = slug end)
+	cache.resolve_repo_slug(function(slug) second = slug end)
+
+	gh.run = real_gh_run
+	cache.invalidate_repo_slug()
+
+	assert_equals(calls, 1, "the second call is answered from the memo")
+	assert_equals(first, second, "and gives the same slug")
+end)
+
+clean()
+pcall(vim.fn.delete, ("%s/gitflow/review/%s"):format(vim.fn.stdpath("data"), TEST_SLUG), "d")
+
+print(string.rep("\u{2500}", 50))
+print(("review draft cache: %d passed, %d failed"):format(passed, failed))
+if failed > 0 then
+	os.exit(1)
+end
