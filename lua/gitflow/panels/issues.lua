@@ -1380,7 +1380,8 @@ local function json_text(v)
 	if v == nil or v == vim.NIL then
 		return ""
 	end
-	return tostring(v)
+	local text = tostring(v)
+	return text:gsub("\r\n", "\n"):gsub("\r", "\n")
 end
 
 ---Fetch the issue fresh (list cache carries no body) and open an edit form
