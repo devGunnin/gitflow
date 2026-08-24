@@ -233,7 +233,7 @@ render_todo = function()
 			("%d commit%s"):format(count, count == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. branch_icon .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. branch_icon .. " ", "GitflowMetaKey" },
 		{ current_branch, "GitflowBranchCurrent" },
 	})
 
@@ -261,8 +261,10 @@ render_todo = function()
 			-- (item 6: squash/fixup chain indentation).
 			local is_chain = entry.action == "squash"
 				or entry.action == "fixup"
-			local lead = is_chain and "   " or " "
-			local lead2 = is_chain and "       " or "     "
+			local edge, gutter = components.spacing.edge, components.spacing.gutter
+			local lead = is_chain and (edge .. gutter) or edge
+			local lead2 = is_chain and (components.spacing.indent .. gutter .. edge)
+				or (components.spacing.indent .. edge)
 
 			-- Line 1: glyph badge + sha + subject (items 1 & 2).
 			local line1 = B:push({
@@ -271,7 +273,7 @@ render_todo = function()
 				{ ("%-6s"):format(entry.action) .. "  ", action_group },
 				{ commit_icon .. " ", "GitflowRebaseHash" },
 				{ entry.short_sha, "GitflowRebaseHash" },
-				{ "  " .. (entry.subject or ""), "GitflowCardTitle" },
+				{ components.spacing.gutter .. (entry.subject or ""), "GitflowCardTitle" },
 			})
 			line_entries[line1] = entry
 
@@ -297,7 +299,7 @@ render_todo = function()
 			{ focused_entry.author or "", "GitflowMeta" },
 			{ " " .. components.glyphs.bullet .. " ", "GitflowMetaKey" },
 			{ focused_entry.relative_time or "", "GitflowMeta" },
-			{ "   ", nil },
+			{ components.separators.field, nil },
 			{ focused_entry.subject or "", "GitflowCardTitle" },
 		})
 	else
@@ -336,7 +338,7 @@ render_normal = function()
 			("%d commit%s"):format(count, count == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. branch_icon .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. branch_icon .. " ", "GitflowMetaKey" },
 		{ current_branch, "GitflowBranchCurrent" },
 	})
 
@@ -357,7 +359,7 @@ render_normal = function()
 				{ components.spacing.edge, nil },
 				{ commit_icon .. " ", "GitflowRebaseHash" },
 				{ entry.short_sha, "GitflowRebaseHash" },
-				{ "  " .. (entry.subject or ""), "GitflowCardTitle" },
+				{ components.spacing.gutter .. (entry.subject or ""), "GitflowCardTitle" },
 			})
 			line_entries[line1] = entry
 
@@ -581,7 +583,7 @@ local function render_base_picker(branches)
 			}
 			if entry.is_current then
 				chunks[#chunks + 1] = {
-					"  (current)", "GitflowMeta",
+					components.spacing.gutter .. "(current)", "GitflowMeta",
 				}
 			end
 			local line_no = B:push(chunks)

@@ -134,7 +134,8 @@ local function render_commits(commits, source_branch, current_branch)
 			("%d commit%s"):format(#commits, #commits == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " onto ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " onto ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -160,7 +161,7 @@ local function render_commits(commits, source_branch, current_branch)
 				{ entry.short_sha, "GitflowCherryPickHash" },
 			}
 			if summary ~= "" then
-				chunks[#chunks + 1] = { "  " .. summary, "GitflowCardTitle" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. summary, "GitflowCardTitle" }
 			end
 			local line_no = B:push(chunks)
 			line_entries[line_no] = entry

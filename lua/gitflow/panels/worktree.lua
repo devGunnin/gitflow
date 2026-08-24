@@ -146,7 +146,8 @@ local function render(entries)
 			("%d worktree%s"):format(#entries, #entries == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_ref or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -187,19 +188,19 @@ local function render(entries)
 			}
 			if is_current then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  [current]", "GitflowWorktreeCurrent" }
+					{ components.spacing.gutter .. "[current]", "GitflowWorktreeCurrent" }
 			end
 			if entry.is_locked then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  [locked]", "GitflowWorktreeLocked" }
+					{ components.spacing.gutter .. "[locked]", "GitflowWorktreeLocked" }
 			end
 			if entry.is_prunable then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  [prunable]", "GitflowWorktreePrunable" }
+					{ components.spacing.gutter .. "[prunable]", "GitflowWorktreePrunable" }
 			end
 			if enrich and enrich.is_dirty then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  ~", "GitflowWorktreeDirty" }
+					{ components.spacing.gutter .. "~", "GitflowWorktreeDirty" }
 			end
 
 			local line1 = B:push(line1_chunks)
@@ -220,7 +221,7 @@ local function render(entries)
 						{ short_sha, "GitflowMeta" }
 				end
 				if enrich and enrich.subject and enrich.subject ~= "" then
-					local prefix = short_sha and "  " or ""
+					local prefix = short_sha and components.spacing.gutter or ""
 					line2_chunks[#line2_chunks + 1] =
 						{ prefix .. enrich.subject, "GitflowMeta" }
 				end

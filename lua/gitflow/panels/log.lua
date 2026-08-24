@@ -80,7 +80,8 @@ local function render(entries, current_branch)
 		{ components.spacing.gutter, nil },
 		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
 		{ ("%d commit%s"):format(#entries, #entries == 1 and "" or "s"), "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -100,7 +101,7 @@ local function render(entries, current_branch)
 				},
 				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
 				{ entry.short_sha, "GitflowLogHash" },
-				{ summary ~= "" and ("  " .. summary) or "", "GitflowCardTitle" },
+				{ summary ~= "" and (components.spacing.gutter .. summary) or "", "GitflowCardTitle" },
 			})
 			line_entries[line_no] = entry
 		end

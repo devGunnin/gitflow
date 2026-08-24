@@ -170,7 +170,7 @@ local function render_list(entries)
 		{ components.spacing.gutter, nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
 		{ current_name or "(detached)", "GitflowSectionTitle" },
-		{ ("     %d local"):format(#local_entries), "GitflowMeta" },
+		{ (components.separators.field .. "%d local"):format(#local_entries), "GitflowMeta" },
 		{ "  " .. components.glyphs.bullet .. "  ", "GitflowMeta" },
 		{ ("%d remote"):format(#remote_entries), "GitflowMeta" },
 	})

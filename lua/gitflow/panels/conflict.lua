@@ -135,7 +135,7 @@ local function render(files, operation)
 		{ icons.get("ui", "merge") .. "  ", "GitflowSectionIcon" },
 		{ op ~= "none" and (op .. " in progress") or "No active operation",
 			"GitflowSectionTitle" },
-		{ "     ", nil },
+		{ components.separators.field, nil },
 		{
 			resolved and (icons.get("git_state", "staged") .. " all resolved")
 				or ("%s %d unresolved"):format(

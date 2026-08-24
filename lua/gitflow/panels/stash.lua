@@ -68,7 +68,8 @@ local function render(entries, current_branch)
 		{ components.spacing.gutter, nil },
 		{ stash_icon .. "  ", "GitflowSectionIcon" },
 		{ ("%d stash entr%s"):format(#entries, #entries == 1 and "y" or "ies"), "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -86,7 +87,7 @@ local function render(entries, current_branch)
 				{ components.spacing.edge, nil },
 				{ stash_icon .. "  ", "GitflowSectionIcon" },
 				{ entry.ref, "GitflowStashRef" },
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 				{ components.maybe_text(entry.description), "GitflowCardTitle" },
 			})
 			line_entries[line_no] = entry

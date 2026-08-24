@@ -75,7 +75,8 @@ local function render(entries, merge_base_sha, current_branch)
 		{ components.spacing.gutter, nil },
 		{ icons.get("palette", "reset") .. "  ", "GitflowSectionIcon" },
 		{ "Reset", "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -115,7 +116,7 @@ local function render(entries, merge_base_sha, current_branch)
 				{ position_marker, "GitflowNumber" },
 				{ commit_icon .. "  ", "GitflowLogHash" },
 				{ entry.short_sha, "GitflowLogHash" },
-				{ summary ~= "" and ("  " .. summary) or "", "GitflowCardTitle" },
+				{ summary ~= "" and (components.spacing.gutter .. summary) or "", "GitflowCardTitle" },
 			})
 			line_entries[line_no] = entry
 

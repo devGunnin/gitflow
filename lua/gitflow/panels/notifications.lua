@@ -175,7 +175,7 @@ local function render(entries)
 				{ level_icon(entry.level) .. "  ", hl },
 				{ ts .. "  ", "GitflowRelTime" },
 				{ ("[%s]"):format(severity), hl },
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 				{ message_lines[1] or "", "GitflowCardTitle" },
 			}
 			if has_linked_context(entry.context) then

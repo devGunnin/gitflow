@@ -84,10 +84,13 @@ local function render(entries, current_branch)
 		{ components.spacing.gutter, nil },
 		{ icons.get("palette", "blame") .. "  ", "GitflowSectionIcon" },
 		{ short_path, "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 		{
-			("     %d line%s"):format(#entries, #entries == 1 and "" or "s"),
+			(components.separators.field .. "%d line%s"):format(
+				#entries, #entries == 1 and "" or "s"
+			),
 			"GitflowMeta",
 		},
 	})

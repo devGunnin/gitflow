@@ -81,7 +81,8 @@ local function render(entries, current_branch)
 			("%d entr%s"):format(#entries, #entries == 1 and "y" or "ies"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -120,9 +121,9 @@ local function render(entries, current_branch)
 				{ icon ~= "" and (icon .. "  ") or "", "GitflowSectionIcon" },
 				{ marker, "GitflowNumber" },
 				{ sha, "GitflowReflogHash" },
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 				{ selector, "GitflowMetaKey" },
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 			}
 			if action_text then
 				chunks[#chunks + 1] = { action_text, "GitflowReflogAction" }

@@ -70,7 +70,8 @@ local function render(entries, current_branch)
 			("%d tag%s"):format(#entries, #entries == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -91,13 +92,13 @@ local function render(entries, current_branch)
 				{ components.spacing.edge, nil },
 				{ tag_icon .. "  ", accent },
 				{ entry.name, accent },
-				{ "  " .. type_marker, "GitflowMeta" },
+				{ components.spacing.gutter .. type_marker, "GitflowMeta" },
 			}
 			if entry.subject and entry.subject ~= "" then
-				chunks[#chunks + 1] = { "  " .. entry.subject, "GitflowCardTitle" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. entry.subject, "GitflowCardTitle" }
 			end
 			if entry.sha and entry.sha ~= "" then
-				chunks[#chunks + 1] = { "   " .. entry.sha, "GitflowLogHash" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. " " .. entry.sha, "GitflowLogHash" }
 			end
 			local line_no = B:push(chunks)
 			line_entries[line_no] = entry
