@@ -617,6 +617,49 @@ test("the footer never drops below one entry", function()
 	)
 end)
 
+test("the split hint bar elides to fit its window", function()
+	local P = panel.new({
+		name = "test_panel_base_split_bar",
+		title = "Split bar",
+		keymaps = {
+			{ key = "a", desc = "a fairly long description", run = function() end },
+			{ key = "b", desc = "another long description", run = function() end },
+			{ key = "c", desc = "a third long description", run = function() end },
+			{ key = "q", desc = "close", essential = true, run = function() end },
+		},
+	})
+
+	assert_true(P:ensure_window(cfg), "the fixture panel should open in a split")
+	local ok, err = pcall(function()
+		local B = P:begin_render()
+		P:push_hints(B)
+		assert_true(P:paint(B), "the fixture panel should paint")
+
+		local width = P:split_width()
+		assert_equals(width, 40, "the fixture split should be 40 columns wide")
+
+		local bar
+		for _, line in ipairs(vim.api.nvim_buf_get_lines(P.state.bufnr, 0, -1, false)) do
+			if line:find("q close", 1, true) then
+				bar = line
+			end
+		end
+		assert_true(bar ~= nil, "the essential key must stay on the bar")
+		assert_true(
+			vim.fn.strdisplaywidth(bar) <= width,
+			("the hint bar overflows its split (%d > %d): %q"):format(
+				vim.fn.strdisplaywidth(bar), width, bar
+			)
+		)
+		assert_true(
+			bar:find(render.glyphs.ellipsis, 1, true) ~= nil,
+			"an elided hint bar says so instead of running off the window"
+		)
+	end)
+	P:close()
+	assert_true(ok, tostring(err))
+end)
+
 print(("=== Results: %d passed, %d failed ==="):format(passed, failed))
 if failed > 0 then
 	os.exit(1)

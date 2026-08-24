@@ -47,12 +47,10 @@ local P = panel.new({
 		{ key = "a", desc = "add", run = function()
 			M.add_worktree()
 		end },
-		{ key = "d", desc = "d/D remove", essential = true, run = function()
-			M.remove_under_cursor(false)
-		end },
-		{ key = "D", hint = false, run = function()
-			M.remove_under_cursor(true)
-		end },
+		{ key = "d/D", keys = { "d", "D" }, desc = "remove", essential = true,
+			run = function(key)
+				M.remove_under_cursor(key == "D")
+			end },
 		{ key = "m", desc = "move", run = function()
 			M.move_under_cursor()
 		end },

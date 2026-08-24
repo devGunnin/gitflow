@@ -165,6 +165,96 @@ function Panel:keymap_entries(view)
 	return entries
 end
 
+---Reduce `hints` to what fits `width`, dropping conveniences from the end.
+---Never drops an `essential` -- a destructive verb or the way out stays
+---advertised -- and never drops below one entry, so a surface too narrow for
+---the essentials alone overflows rather than hiding one of them.
+---@param hints table[]
+---@param width integer|nil  nil for unlimited
+---@param width_of fun(shown: table[], truncated: boolean): integer
+---@return table[] shown, boolean truncated
+local function fit_hints(hints, width, width_of)
+	if not width or width_of(hints, false) <= width then
+		return hints, false
+	end
+
+	local keep = {}
+	for index = 1, #hints do
+		keep[index] = true
+	end
+	local function shown()
+		local out = {}
+		for index, hint in ipairs(hints) do
+			if keep[index] then
+				out[#out + 1] = hint
+			end
+		end
+		return out
+	end
+
+	local count = #hints
+	for index = #hints, 1, -1 do
+		if count <= 1 then
+			break
+		end
+		if not hints[index].essential then
+			keep[index] = false
+			count = count - 1
+			local candidate = shown()
+			if width_of(candidate, true) <= width then
+				return candidate, true
+			end
+		end
+	end
+	return shown(), true
+end
+
+---The float footer's text for a hint list.
+---@param shown table[]
+---@param truncated boolean
+---@return string
+local function footer_text(shown, truncated)
+	local sep = " " .. ui_render.glyphs.bullet .. " "
+	local parts = {}
+	for _, hint in ipairs(shown) do
+		parts[#parts + 1] = hint[1] .. " " .. hint[2]
+	end
+	local text = " " .. table.concat(parts, sep)
+	if truncated then
+		text = text .. sep .. ui_render.glyphs.ellipsis
+	end
+	return text .. " "
+end
+
+---The split hint bar's `{ key, label }` pairs, ellipsis included. Mirrors
+---what `render.hint_chunks` lays out, so measuring the two agrees.
+---@param shown table[]
+---@param truncated boolean
+---@return table[]
+local function hint_bar_pairs(shown, truncated)
+	local out = {}
+	for _, hint in ipairs(shown) do
+		out[#out + 1] = hint
+	end
+	if truncated then
+		out[#out + 1] = { ui_render.glyphs.ellipsis }
+	end
+	return out
+end
+
+---@param shown table[]
+---@param truncated boolean
+---@return integer
+local function hint_bar_width(shown, truncated)
+	local parts = {}
+	for _, pair in ipairs(hint_bar_pairs(shown, truncated)) do
+		parts[#parts + 1] = pair[2] and (pair[1] .. " " .. pair[2]) or pair[1]
+	end
+	return vim.fn.strdisplaywidth(
+		ui_render.spacing.edge .. table.concat(parts, ui_render.separators.hint)
+	)
+end
+
 ---Build the float footer for a view. Entries that would overflow `width` are
 ---dropped and marked with an ellipsis rather than silently clipped by the
 ---window frame.
@@ -172,61 +262,19 @@ end
 ---@param width integer|nil  usable footer width, nil for unlimited
 ---@return string
 function Panel:footer(view, width)
-	local sep = " " .. ui_render.glyphs.bullet .. " "
 	local hints = self:hints(view)
 	if #hints == 0 then
 		return ""
 	end
-
-	---@param keep boolean[]  which hints are still shown
-	---@param truncated boolean
-	---@return string
-	local function build(keep, truncated)
-		local parts = {}
-		for index, hint in ipairs(hints) do
-			if keep[index] then
-				parts[#parts + 1] = hint[1] .. " " .. hint[2]
-			end
-		end
-		local text = " " .. table.concat(parts, sep)
-		if truncated then
-			text = text .. sep .. ui_render.glyphs.ellipsis
-		end
-		return text .. " "
-	end
-
-	local keep = {}
-	for index = 1, #hints do
-		keep[index] = true
-	end
-	local text = build(keep, false)
-	if not width or vim.fn.strdisplaywidth(text) <= width then
-		return text
-	end
-
-	-- Overflow: drop conveniences from the end, but never an essential key --
-	-- a destructive verb or the way out stays advertised. A float too narrow
-	-- for the essentials alone overflows rather than hiding one of them.
-	local shown = #hints
-	for index = #hints, 1, -1 do
-		if shown <= 1 then
-			break
-		end
-		if not hints[index].essential then
-			keep[index] = false
-			shown = shown - 1
-			text = build(keep, true)
-			if vim.fn.strdisplaywidth(text) <= width then
-				return text
-			end
-		end
-	end
-	return text
+	local shown, truncated = fit_hints(hints, width, function(candidate, cut)
+		return vim.fn.strdisplaywidth(footer_text(candidate, cut))
+	end)
+	return footer_text(shown, truncated)
 end
 
----Usable footer width for the panel's float, or nil when it isn't one.
----@return integer|nil
-function Panel:footer_width()
+---Whether the panel's window is a float. Nil when it has no live window.
+---@return boolean|nil
+function Panel:window_is_float()
 	local winid = self.state.winid
 	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return nil
@@ -235,10 +283,25 @@ function Panel:footer_width()
 	if not ok or type(win_cfg) ~= "table" then
 		return nil
 	end
-	if win_cfg.relative == nil or win_cfg.relative == "" then
+	return win_cfg.relative ~= nil and win_cfg.relative ~= ""
+end
+
+---Usable footer width for the panel's float, or nil when it isn't one.
+---@return integer|nil
+function Panel:footer_width()
+	if self:window_is_float() ~= true then
 		return nil
 	end
-	return math.max(1, vim.api.nvim_win_get_width(winid) - 2)
+	return math.max(1, vim.api.nvim_win_get_width(self.state.winid) - 2)
+end
+
+---Usable width of the panel's split, or nil when it isn't one.
+---@return integer|nil
+function Panel:split_width()
+	if self:window_is_float() ~= false then
+		return nil
+	end
+	return math.max(1, vim.api.nvim_win_get_width(self.state.winid))
 end
 
 ---Re-render the float footer after a view switch. No-op for splits (their
@@ -388,7 +451,12 @@ end
 ---@param view string|nil
 ---@param opts table|nil  { blank_before = boolean }
 function Panel:push_hints(B, view, opts)
-	components.split_hint_bar(B, self:render_opts(), self:hints(view), opts)
+	local shown, truncated = fit_hints(
+		self:hints(view), self:split_width(), hint_bar_width
+	)
+	components.split_hint_bar(
+		B, self:render_opts(), hint_bar_pairs(shown, truncated), opts
+	)
 end
 
 ---Paint a finished builder into the panel buffer.

@@ -64,23 +64,28 @@ local P = panel.new({
 		M.state.last = nil
 	end,
 	keymaps = {
-		{ key = "s", desc = "stage/unstage", run = function()
-			M.stage_under_cursor()
-		end },
-		{ key = "u", hint = false, run = function()
-			M.unstage_under_cursor()
-		end },
-		{ key = "s", mode = "x", hint = false, run = function()
-			M.stage_visual()
-		end },
-		{ key = "u", mode = "x", hint = false, run = function()
-			M.unstage_visual()
-		end },
-		{ key = "a", desc = "all", run = function()
-			M.stage_all()
-		end },
-		{ key = "A", hint = false, run = function()
-			M.unstage_all()
+		{ key = "s/u", keys = { "s", "u" }, desc = "stage/unstage",
+			run = function(key)
+				if key == "u" then
+					M.unstage_under_cursor()
+				else
+					M.stage_under_cursor()
+				end
+			end },
+		{ key = "V then s/u", keys = { "s", "u" }, mode = "x", desc = "batch",
+			run = function(key)
+				if key == "u" then
+					M.unstage_visual()
+				else
+					M.stage_visual()
+				end
+			end },
+		{ key = "a/A", keys = { "a", "A" }, desc = "all", run = function(key)
+			if key == "A" then
+				M.unstage_all()
+			else
+				M.stage_all()
+			end
 		end },
 		{ key = "<CR>", desc = "open", run = function()
 			M.open_file_under_cursor()
@@ -95,7 +100,7 @@ local P = panel.new({
 		{ key = "dd", desc = "diff", run = function()
 			M.open_diff_under_cursor()
 		end },
-		{ key = "cx", hint = false, run = function()
+		{ key = "cx", desc = "conflict", run = function()
 			M.open_conflict_under_cursor()
 		end },
 		{ key = "X", desc = "discard changes", essential = true, run = function()
