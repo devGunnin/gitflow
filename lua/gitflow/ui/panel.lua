@@ -17,8 +17,12 @@ local help = require("gitflow.ui.help")
 ---@class GitflowPanelKeymap
 ---@field key string  the key sequence, also the hint's key label
 ---@field keys string[]|nil  keys to bind when `key` is a range label ("1-9")
+---@field run_keys string[]|nil  parallel to `keys`: the key `run` receives for
+---                              each bound key. Set only by `resolve_keymaps`
+---                              when an override re-keys a multi-key entry.
 ---@field desc string  hint text; entries without one are bound but not hinted
----@field run fun(key: string)  the action; receives the key that fired it
+---@field run fun(key: string)  the action; receives the key it MEANS (the
+---                              default key), not necessarily the one pressed
 ---@field mode string|string[]|nil  default "n"
 ---@field views string[]|nil  views this key belongs to (nil = every view)
 ---@field nowait boolean|nil  default true
@@ -227,27 +231,43 @@ function M.resolve_keymaps(keymaps, cfg, name)
 	table.sort(problems)
 
 	local out = {}
+	local refusals = {}
 	for _, entry in ipairs(keymaps) do
 		local override = overrides[entry.key]
 		if override == nil then
 			out[#out + 1] = entry
 		elseif override ~= false then
+			local defaults = M.bound_keys(entry)
 			local copy = vim.tbl_extend("force", {}, entry)
 			copy.key = override
 			copy.keys = replacement_keys(override)
+			-- Dispatch follows the re-keying: the i-th replacement key means
+			-- what the i-th default key meant, so `run` still gets a key it
+			-- has an action for. A collapse keeps the leading meanings only.
+			copy.run_keys = {}
+			for index = 1, #copy.keys do
+				copy.run_keys[index] = defaults[index]
+			end
+			if #copy.keys > #defaults then
+				refusals[#refusals + 1] = ("'%s' names %d keys but %s binds %d"):format(
+					override, #copy.keys, entry.key, #defaults
+				)
+			end
 			out[#out + 1] = copy
 		end
 	end
 
-	local shadows = shadowed_keys(out)
-	if #shadows == 0 then
+	for _, shadow in ipairs(shadowed_keys(out)) do
+		refusals[#refusals + 1] = shadow
+	end
+	if #refusals == 0 then
 		return out, problems
 	end
-	table.sort(shadows)
-	for _, shadow in ipairs(shadows) do
-		problems[#problems + 1] = ("panel_keybindings.%s ignored: %s"):format(
-			name, shadow
-		)
+	table.sort(refusals)
+	for _, refusal in ipairs(refusals) do
+		problems[#problems + 1] = (
+			"panel_keybindings.%s ignored (the whole table for that panel): %s"
+		):format(name, refusal)
 	end
 	return keymaps, problems
 end
@@ -621,7 +641,17 @@ end
 ---@param width integer|nil  usable footer width, nil for unlimited
 ---@return string
 function Panel:footer(view, width)
-	local hints = self:hints(view)
+	return M.fitted_footer(self:hints(view), width)
+end
+
+---A float footer for a hint list, elided to `width` by the same rule every
+---panel uses. Exported for the surfaces that own their own float chrome:
+---without it they concatenate and let the window frame clip, which cuts the
+---last hint — `? help` — with nothing to say it happened.
+---@param hints table[]
+---@param width integer|nil  usable footer width, nil for unlimited
+---@return string
+function M.fitted_footer(hints, width)
 	if #hints == 0 then
 		return ""
 	end
@@ -629,6 +659,16 @@ function Panel:footer(view, width)
 		return vim.fn.strdisplaywidth(footer_text(candidate, cut))
 	end)
 	return footer_text(shown, truncated)
+end
+
+---A split hint bar's pairs for a hint list, ellipsis included, elided to
+---`width` by the same rule. Exported for the same reason as `fitted_footer`.
+---@param hints table[]
+---@param width integer|nil
+---@return table[]
+function M.fitted_hint_bar(hints, width)
+	local shown, truncated = fit_hints(hints, width, hint_bar_width)
+	return hint_bar_pairs(shown, truncated)
 end
 
 ---Whether the panel's window is a float. Nil when it has no live window.
@@ -686,13 +726,36 @@ function M.bound_keys(entry)
 	return entry.keys or { entry.key }
 end
 
+---Every key an entry binds, paired with the key its `run` must receive. The
+---two differ once `panel_keybindings` re-keys a multi-key entry: `run`
+---dispatches on what the key MEANS, not the letter it now sits on. Every
+---surface binds through this, so no binder can re-key one without the other.
+---@param entry GitflowPanelKeymap
+---@return { key: string, run_key: string }[]
+function M.bindings(entry)
+	if entry.bind == false then
+		return {}
+	end
+	local keys = M.bound_keys(entry)
+	local run_keys = entry.run_keys or keys
+	assert(
+		#run_keys == #keys,
+		("%s: run_keys must be parallel to keys"):format(entry.key)
+	)
+	local out = {}
+	for index, key in ipairs(keys) do
+		out[index] = { key = key, run_key = run_keys[index] }
+	end
+	return out
+end
+
 ---@param bufnr integer
 function Panel:bind_keymaps(bufnr)
 	M.warn_overrides(self.name, self.cfg)
 	for _, entry in ipairs(self:entries()) do
-		for _, key in ipairs(entry.bind == false and {} or M.bound_keys(entry)) do
-			vim.keymap.set(entry.mode or "n", key, function()
-				entry.run(key)
+		for _, binding in ipairs(M.bindings(entry)) do
+			vim.keymap.set(entry.mode or "n", binding.key, function()
+				entry.run(binding.run_key)
 			end, {
 				buffer = bufnr,
 				silent = true,
@@ -822,11 +885,9 @@ end
 ---@param view string|nil
 ---@param opts table|nil  { blank_before = boolean }
 function Panel:push_hints(B, view, opts)
-	local shown, truncated = fit_hints(
-		self:hints(view), self:split_width(), hint_bar_width
-	)
 	components.split_hint_bar(
-		B, self:render_opts(), hint_bar_pairs(shown, truncated), opts
+		B, self:render_opts(),
+		M.fitted_hint_bar(self:hints(view), self:split_width()), opts
 	)
 end
 

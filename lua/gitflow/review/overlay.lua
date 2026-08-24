@@ -125,9 +125,9 @@ local function bind_review_keys(bufnr)
 		bound_keymaps = panel.surface_keymaps("review_diff", cfg)
 	end
 	for _, entry in ipairs(bound_keymaps) do
-		for _, key in ipairs(panel.bound_keys(entry)) do
-			vim.keymap.set(entry.mode or "n", key, function()
-				entry.run(key)
+		for _, binding in ipairs(panel.bindings(entry)) do
+			vim.keymap.set(entry.mode or "n", binding.key, function()
+				entry.run(binding.run_key)
 			end, opts)
 		end
 	end

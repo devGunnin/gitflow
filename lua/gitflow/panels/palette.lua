@@ -695,20 +695,20 @@ local function apply_keymaps()
 
 	for _, entry in ipairs(panel.surface_keymaps("palette", cfg)) do
 		local bufnr = entry.views[1] == "prompt" and prompt_bufnr or list_bufnr
-		for _, key in ipairs(panel.bound_keys(entry)) do
-			vim.keymap.set(entry.mode or "n", key, function()
-				entry.run(key)
+		for _, binding in ipairs(panel.bindings(entry)) do
+			vim.keymap.set(entry.mode or "n", binding.key, function()
+				entry.run(binding.run_key)
 			end, { buffer = bufnr, silent = true, nowait = true })
 			if entry.insert then
 				-- Deferred for the digits: they fire on the keystroke that
 				-- would otherwise be inserted, and closing the palette from
 				-- inside an <expr> map is not safe.
 				local deferred = entry.insert == "schedule"
-				vim.keymap.set("i", key, function()
+				vim.keymap.set("i", binding.key, function()
 					if deferred then
-						vim.schedule(function() entry.run(key) end)
+						vim.schedule(function() entry.run(binding.run_key) end)
 					else
-						entry.run(key)
+						entry.run(binding.run_key)
 					end
 					return ""
 				end, {

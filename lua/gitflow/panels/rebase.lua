@@ -50,6 +50,12 @@ local ACTION_KEYS = {
 	s = "squash", f = "fixup", d = "drop",
 }
 
+---@type table<string, boolean>
+local VALID_ACTIONS = {}
+for _, action in pairs(ACTION_KEYS) do
+	VALID_ACTIONS[action] = true
+end
+
 local P = panel.new({
 	name = "rebase",
 	title = "Gitflow Rebase",
@@ -801,8 +807,10 @@ function M.cycle_action()
 end
 
 ---Set a specific action on the commit under the cursor.
----@param action string
+---@param action string  one of ACTION_KEYS' values
 function M.set_action(action)
+	-- A todo line the executor cannot read is worse than a refused keystroke.
+	assert(VALID_ACTIONS[action], ("unknown rebase action %q"):format(tostring(action)))
 	if M.state.stage ~= "todo" then
 		return
 	end

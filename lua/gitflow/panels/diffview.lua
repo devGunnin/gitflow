@@ -165,9 +165,9 @@ local function bind_diff_keys(bufnr)
 	local opts = { buffer = bufnr, silent = true, nowait = true }
 	for _, entry in ipairs(KEYMAPS) do
 		if not entry.list_only then
-			for _, key in ipairs(panel.bound_keys(entry)) do
-				vim.keymap.set("n", key, function()
-					entry.run(key)
+			for _, binding in ipairs(panel.bindings(entry)) do
+				vim.keymap.set("n", binding.key, function()
+					entry.run(binding.run_key)
 				end, opts)
 			end
 		end
