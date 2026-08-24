@@ -52,6 +52,21 @@ local function resolve_window_id(opts)
 	return nil
 end
 
+---Read the user's fixed rule width from config, if they set a positive one.
+---0 means "adaptive" (the config validator's own wording) and is not fixed.
+---@return integer|nil
+local function configured_width()
+	local ok, cfg = pcall(require, "gitflow.config")
+	if not ok or not cfg or not cfg.current or not cfg.current.ui then
+		return nil
+	end
+	local cw = tonumber(cfg.current.ui.separator_width)
+	if cw and cw >= 1 then
+		return math.floor(cw)
+	end
+	return nil
+end
+
 ---Resolve the static fallback width.
 ---Priority: opts.fallback → config ui.separator_width → vim.o.columns → 50.
 ---@param explicit_fallback number|nil  caller-provided fallback
@@ -60,12 +75,9 @@ local function resolve_fallback(explicit_fallback)
 	if explicit_fallback then
 		return math.floor(explicit_fallback)
 	end
-	local ok, cfg = pcall(require, "gitflow.config")
-	if ok and cfg and cfg.current and cfg.current.ui then
-		local cw = tonumber(cfg.current.ui.separator_width)
-		if cw and cw >= 1 then
-			return math.floor(cw)
-		end
+	local fixed = configured_width()
+	if fixed then
+		return fixed
 	end
 	local columns = vim.o.columns
 	if columns and columns > 0 then
@@ -99,7 +111,10 @@ function M.wants_inline_title(opts)
 	return not M.is_floating(opts)
 end
 
----Resolve content width for a panel buffer/window.
+---Resolve content width for a panel buffer/window. A positive
+---`ui.separator_width` is a fixed width -- honored even with a window present,
+---since "fixed" (the option's own doc) would otherwise only ever apply when
+---there is no window to measure.
 ---@param opts table|nil  { winid?, bufnr?, fallback?, min_width? }
 ---@return integer
 function M.content_width(opts)
@@ -108,6 +123,11 @@ function M.content_width(opts)
 	local winid = resolve_window_id(options)
 	if not winid then
 		return math.max(min_width, resolve_fallback(tonumber(options.fallback)))
+	end
+
+	local fixed = configured_width()
+	if fixed then
+		return math.max(min_width, fixed)
 	end
 
 	local width = vim.api.nvim_win_get_width(winid)

@@ -72,6 +72,22 @@ local cw_cfg = ui_render.content_width()
 assert_equals(cw_cfg, 60, "content_width() should use ui.separator_width when set")
 local sep_cfg = ui_render.separator()
 assert_equals(#sep_cfg, 60 * char_len, "separator() should use ui.separator_width when set")
+
+-- A fixed ui.separator_width is honored even with a real window present --
+-- "fixed" would otherwise only ever apply on the windowless fallback path.
+local win_buf = vim.api.nvim_create_buf(false, true)
+vim.cmd("vsplit")
+local win_id = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(win_id, win_buf)
+vim.api.nvim_win_set_width(win_id, 90)
+local cw_windowed_fixed = ui_render.content_width({ winid = win_id })
+assert_equals(
+	cw_windowed_fixed, 60,
+	"a fixed ui.separator_width should win over the window's actual width"
+)
+vim.api.nvim_win_close(win_id, true)
+vim.api.nvim_buf_delete(win_buf, { force = true })
+
 cfg.current.ui.separator_width = saved
 
 -- ── 1b. components.header — the one way to draw a panel header ───
