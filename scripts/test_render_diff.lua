@@ -201,7 +201,10 @@ do
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end
 
--- ── a recycled bufnr never inherits a dead buffer's snapshot ─────────
+-- ── a buffer created after another dies still gets a genuine full render ──
+-- Neovim never reuses a bufnr within a session, so this cannot force an
+-- actual snapshot-table collision; it instead pins that a brand-new buffer's
+-- first render is one real full write, never a diff against stale state.
 do
 	local bufnr = fresh_buffer()
 	build(BASE):render(bufnr, bufnr, ns)
@@ -211,7 +214,9 @@ do
 	local calls = counted(function()
 		build(BASE):render(reused, reused, ns)
 	end)
-	assert_true(#calls >= 1, "a fresh buffer must be written, not assumed already correct")
+	assert_equals(#calls, 1, "a fresh buffer's first render should be a single write")
+	assert_equals(calls[1].start, 0, "the full write should start at line 0")
+	assert_equals(calls[1].count, #BASE, "the full write should cover every line")
 	assert_equals(
 		vim.api.nvim_buf_get_lines(reused, 0, -1, false)[3],
 		"charlie",

@@ -497,12 +497,17 @@ assert_equals(
 
 -- Moving the selection must move the accent without rewriting the buffer.
 local before_tick = vim.api.nvim_buf_get_changedtick(hl_state.bufnr)
+local before_line = hl_state.active_line
 vim.api.nvim_win_call(hl_state.winid, function()
 	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("j", true, false, true), "x", false)
 end)
 assert_equals(
 	vim.api.nvim_buf_get_changedtick(hl_state.bufnr), before_tick,
 	"moving the picker selection should not rewrite the buffer"
+)
+assert_true(
+	hl_state.active_line ~= before_line,
+	"j should actually move the active line"
 )
 assert_equals(
 	active_accent_line(), hl_state.active_line,
