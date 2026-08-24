@@ -353,6 +353,7 @@ local function render_list(groups, total)
 		M.state.line_entries = line_entries
 		M.state.line_groups = line_groups
 	end
+	P:refresh_footer("list")
 
 	-- Place the cursor on the first card.
 	local first_line = nil
@@ -435,6 +436,7 @@ local function render_view(issue)
 	P:paint(B)
 	M.state.line_entries = {}
 	M.state.line_groups = {}
+	P:refresh_footer("view")
 	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
 		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { 1, 0 })
@@ -482,7 +484,7 @@ function M.open(cfg, filters)
 	M.state.cfg = cfg
 	set_query(filters or {})
 
-	if not P:ensure_window(cfg) then
+	if not P:ensure_window(cfg, { view = "list" }) then
 		return
 	end
 	-- Instant paint from what we already have (if any), then reconcile below.
@@ -541,7 +543,7 @@ function M.open_view(number, cfg)
 	if not M.state.cfg then
 		return
 	end
-	if not P:ensure_window(M.state.cfg) then
+	if not P:ensure_window(M.state.cfg, { view = "view" }) then
 		return
 	end
 

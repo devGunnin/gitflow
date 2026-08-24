@@ -370,7 +370,11 @@ test("issue view shows assignees", function()
 			return false
 		end
 		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		return find_line(lines, "Assignees: alice") ~= nil
+		-- components.meta_row pads the key column to a shared width (12);
+		-- issues/prs used to hand-roll two different widths (T3, #3.5).
+		local assignees_line = find_line(lines, "Assignees:")
+		return assignees_line ~= nil
+			and lines[assignees_line]:find("alice", 1, true) ~= nil
 	end, "issue view should show assignees")
 end)
 
@@ -578,6 +582,14 @@ end)
 -- The keybind hints live in the float window footer; the split layout has no
 -- in-buffer hint bar. These run last: they reopen the panels as floats, so
 -- they must not disturb the split-layout tests above.
+--
+-- issues/prs now carry many keymaps (17 and 12 in list view), so the base's
+-- hint-bar elision (T2, #435) legitimately drops less-essential hints like
+-- "A assign" on a narrow float. Widen the terminal so the full hint set has
+-- room, matching what these assertions actually mean to check: that "A" is
+-- registered as a hint at all, not the elision behavior itself.
+local original_columns = vim.o.columns
+vim.o.columns = 220
 
 test("issue panel float footer includes assign hint", function()
 	local float_cfg = vim.deepcopy(cfg)
@@ -618,6 +630,8 @@ test("pr panel float footer includes assign hint", function()
 		"pr float footer should include the assign hint"
 	)
 end)
+
+vim.o.columns = original_columns
 
 -- ── Cleanup ──
 

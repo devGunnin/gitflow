@@ -309,6 +309,7 @@ render_list = function(prs)
 	if P:paint(B) then
 		M.state.line_entries = line_entries
 	end
+	P:refresh_footer("list")
 
 	-- P:paint already turned cursorline on; just place it on the first card.
 	local first_line = nil
@@ -448,6 +449,7 @@ local function render_view(pr, review_comments)
 	M.state.active_pr_number = tonumber(pr.number)
 	P:paint(B)
 	M.state.line_entries = {}
+	P:refresh_footer("view")
 	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
 		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { 1, 0 })
@@ -476,7 +478,7 @@ function M.open(cfg, filters)
 	}, filters or {})
 	M.state.page = 1
 
-	if not P:ensure_window(cfg) then
+	if not P:ensure_window(cfg, { view = "list" }) then
 		return
 	end
 	-- Instant paint from what we already have (if any), then reconcile below.
@@ -525,7 +527,7 @@ function M.open_view(number, cfg)
 	if not M.state.cfg then
 		return
 	end
-	if not P:ensure_window(M.state.cfg) then
+	if not P:ensure_window(M.state.cfg, { view = "view" }) then
 		return
 	end
 
