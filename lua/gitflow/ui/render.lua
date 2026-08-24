@@ -300,7 +300,7 @@ function M.builder()
 		-- repaint every span rather than assume what is already on screen.
 		local full_repaint = previous == nil
 
-		local prefix, suffix, old_count = buffer.set_lines_diffed(bufnr, self.lines)
+		local prefix, suffix, old_count = buffer.set_lines_diffed(bufnr, self.lines, ns)
 
 		-- Middle (rewritten text): nvim_buf_set_lines dropped its extmarks.
 		local middle_from, middle_to = prefix + 1, #self.lines - suffix

@@ -1213,6 +1213,94 @@ test("delayed callback is ignored after panel close", function()
 	end
 end)
 
+test("moving the cursor repaints only the detail bar", function()
+	local rb_panel = require("gitflow.panels.rebase")
+	local git_branch = require("gitflow.git.branch")
+	local list_picker = require("gitflow.ui.list_picker")
+
+	local original_list = git_branch.list
+	local original_picker_open = list_picker.open
+	git_branch.list = function(_, cb)
+		cb(nil, { { name = "main", is_current = false, kind = "local" } })
+	end
+	list_picker.open = function() end
+
+	local set_lines_calls = {}
+	local original_set_lines = vim.api.nvim_buf_set_lines
+
+	local ok, err = pcall(function()
+		rb_panel.close()
+		rb_panel.open(cfg)
+		rb_panel.state.base_ref = "main"
+		rb_panel.state.stage = "normal"
+		rb_panel.state.entries = {
+			{ action = "pick", sha = "a1", short_sha = "a1",
+				subject = "first", author = "ann", relative_time = "1d ago" },
+			{ action = "pick", sha = "b2", short_sha = "b2",
+				subject = "second", author = "bob", relative_time = "2d ago" },
+			{ action = "pick", sha = "c3", short_sha = "c3",
+				subject = "third", author = "cat", relative_time = "3d ago" },
+		}
+		rb_panel.switch_to_interactive()
+
+		local bufnr = rb_panel.state.bufnr
+		local winid = rb_panel.state.winid
+		assert_true(bufnr ~= nil and winid ~= nil, "todo stage should have a window")
+		local before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+		-- A cursor move re-renders the panel to move the focus detail bar. With
+		-- the diffing render that must rewrite one line, not the whole buffer.
+		vim.api.nvim_buf_set_lines = function(buf, start, stop, strict, lines)
+			if buf == bufnr then
+				set_lines_calls[#set_lines_calls + 1] = { start = start, stop = stop }
+			end
+			return original_set_lines(buf, start, stop, strict, lines)
+		end
+		-- CursorMoved does not fire from a headless `-l` script (no main loop),
+		-- so move the cursor and run the panel's own autocmd directly.
+		vim.api.nvim_set_current_win(winid)
+		for _, line in ipairs({ 6, 7, 8 }) do
+			vim.api.nvim_win_set_cursor(winid, { line, 0 })
+			vim.api.nvim_exec_autocmds("CursorMoved", { buffer = bufnr })
+		end
+		assert_true(
+			rb_panel.state.focused_line == 8,
+			"the focus should have followed the cursor"
+		)
+		assert_true(#set_lines_calls > 0, "a focus move should re-render the panel")
+		vim.api.nvim_buf_set_lines = original_set_lines
+
+		local after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		assert_equals(#after, #before, "a focus move should not change the line count")
+
+		local changed = 0
+		for index, line in ipairs(after) do
+			if line ~= before[index] then
+				changed = changed + 1
+			end
+		end
+		assert_true(
+			changed <= 1,
+			("a focus move should change at most the detail bar, changed=%d"):format(changed)
+		)
+		for _, call in ipairs(set_lines_calls) do
+			assert_true(
+				call.stop - call.start <= 1,
+				("a focus move should rewrite one line, got %d..%d"):format(call.start, call.stop)
+			)
+		end
+	end)
+
+	vim.api.nvim_buf_set_lines = original_set_lines
+	git_branch.list = original_list
+	list_picker.open = original_picker_open
+	rb_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 -- ─── Cleanup ───
 
 vim.fn.chdir(original_cwd)

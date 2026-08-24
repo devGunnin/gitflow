@@ -312,4 +312,24 @@ assert_true(ok_log, "panels/log.lua should load with icons require")
 
 print("  [pass] all panels load with icons integration")
 
+-- Every registry entry needs a non-empty ASCII fallback: callers pad around the
+-- glyph, so an empty one keeps the padding and leaves the row ragged when
+-- icons.enable is false.
+icons.setup({ icons = { enable = false } })
+for category, entries in pairs(icons.entries()) do
+	for name, entry in pairs(entries) do
+		assert_true(
+			type(entry.ascii) == "string" and vim.trim(entry.ascii) ~= "",
+			("icon %s.%s should have a non-empty ASCII fallback"):format(category, name)
+		)
+		assert_true(
+			icons.get(category, name) == entry.ascii,
+			("icons.get should return the ASCII fallback for %s.%s"):format(category, name)
+		)
+	end
+end
+icons.setup({ icons = { enable = true } })
+
+print("  [pass] every icon has a non-empty ASCII fallback")
+
 print("Stage 8 icon tests passed")

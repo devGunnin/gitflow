@@ -59,15 +59,24 @@ end
 ---is already there. An unchanged re-render issues no nvim_buf_set_lines at all,
 ---which is what stops a panel refresh from flickering, dropping extmarks, or
 ---disturbing the cursor.
+---
+---`ns` names a highlight namespace owned by the caller: its marks in the
+---replaced range are cleared with the lines they belong to. Without that, marks
+---inside a deleted range collapse onto the deletion point instead of vanishing.
 ---@param bufnr integer
 ---@param lines string[]
+---@param ns integer|nil
 ---@return integer prefix, integer suffix, integer old_count
-function M.set_lines_diffed(bufnr, lines)
+function M.set_lines_diffed(bufnr, lines, ns)
 	local old = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local prefix, suffix = common_edges(old, lines)
 	local old_count = #old
 	if prefix == old_count and old_count == #lines then
 		return prefix, suffix, old_count
+	end
+
+	if ns and old_count - suffix > prefix then
+		vim.api.nvim_buf_clear_namespace(bufnr, ns, prefix, old_count - suffix)
 	end
 
 	local windows = {}
