@@ -516,7 +516,7 @@ T.run_suite("E2E: Keybinding Verification", {
 		T.drain_jobs(3000)
 
 		-- File list pane holds the navigation + review-submission keymaps.
-		local file_list_buf = review.state.file_list_bufnr
+		local file_list_buf = review.state.bufnr
 		T.assert_true(file_list_buf ~= nil,
 			"review file list buffer should exist")
 		T.assert_keymaps(file_list_buf, {

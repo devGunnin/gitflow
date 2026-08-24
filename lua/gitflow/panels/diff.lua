@@ -1,6 +1,14 @@
-local ui = require("gitflow.ui")
+--- The raw unified-diff panel: `git diff` rendered in place, with file and
+--- hunk markers to jump between.
+---
+--- On `ui/panel.lua`, so the buffer, the window, the keys, the hint chrome and
+--- the loading/error states are the base's — including the case the panel used
+--- to leak: a terminal too small for the float left the buffer behind with no
+--- window to close it from.
+
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
 local git_branch = require("gitflow.git.branch")
@@ -14,21 +22,50 @@ local git_branch = require("gitflow.git.branch")
 ---@field line_context table<integer, GitflowDiffLineContext>
 
 local M = {}
-local DIFF_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_diff_hl")
 local DIFF_LINENR_NS = vim.api.nvim_create_namespace("gitflow_diff_linenr")
-local DIFF_FLOAT_TITLE = "Gitflow Diff"
-local DIFF_FLOAT_FOOTER =
-	"]f/[f files  ]c/[c hunks  r refresh  q close"
 
 ---@type GitflowDiffPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	request = nil,
 	file_markers = {},
 	hunk_markers = {},
 	line_context = {},
 }
+
+local P = panel.new({
+	name = "diff",
+	title = "Gitflow Diff",
+	filetype = "gitflow-diff",
+	loading = "Loading diff…",
+	state = M.state,
+	-- All three index buffer lines. A state render collapses the buffer, so a
+	-- surviving marker would send ]f to a line that is no longer there.
+	entry_maps = { "file_markers", "hunk_markers", "line_context" },
+	keymaps = {
+		{ key = "]f/[f", keys = { "]f", "[f" }, desc = "files",
+			essential = true, run = function(key)
+				if key == "]f" then
+					M.next_file()
+				else
+					M.prev_file()
+				end
+			end },
+		{ key = "]c/[c", keys = { "]c", "[c" }, desc = "hunks",
+			run = function(key)
+				if key == "]c" then
+					M.next_hunk()
+				else
+					M.prev_hunk()
+				end
+			end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@param text string
 ---@return string[]
@@ -43,15 +80,11 @@ end
 ---@return string
 local function request_to_title(request)
 	if request.commit then
-		return ("Gitflow Diff (%s)"):format(
-			request.commit:sub(1, 8)
-		)
+		return ("Gitflow Diff (%s)"):format(request.commit:sub(1, 8))
 	end
 	if request.staged then
 		if request.path then
-			return ("Gitflow Diff --staged (%s)"):format(
-				request.path
-			)
+			return ("Gitflow Diff --staged (%s)"):format(request.path)
 		end
 		return "Gitflow Diff --staged"
 	end
@@ -65,46 +98,35 @@ end
 ---@param markers table[]
 ---@param direction 1|-1
 local function jump_to_marker(markers, direction)
-	if not M.state.winid
-		or not vim.api.nvim_win_is_valid(M.state.winid) then
+	if not P:has_window() then
 		return
 	end
 	if #markers == 0 then
-		utils.notify(
-			"No diff markers available", vim.log.levels.WARN
-		)
+		utils.notify("No diff markers available", vim.log.levels.WARN)
 		return
 	end
 
-	local cursor_line =
-		vim.api.nvim_win_get_cursor(M.state.winid)[1]
+	local winid = M.state.winid
+	local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
+	local function go(line)
+		vim.api.nvim_win_set_cursor(winid, { line, 0 })
+	end
+
 	if direction > 0 then
 		for _, marker in ipairs(markers) do
 			if marker.line > cursor_line then
-				vim.api.nvim_win_set_cursor(
-					M.state.winid, { marker.line, 0 }
-				)
-				return
+				return go(marker.line)
 			end
 		end
-		vim.api.nvim_win_set_cursor(
-			M.state.winid, { markers[1].line, 0 }
-		)
-		return
+		return go(markers[1].line)
 	end
 
 	for i = #markers, 1, -1 do
-		local marker = markers[i]
-		if marker.line < cursor_line then
-			vim.api.nvim_win_set_cursor(
-				M.state.winid, { marker.line, 0 }
-			)
-			return
+		if markers[i].line < cursor_line then
+			return go(markers[i].line)
 		end
 	end
-	vim.api.nvim_win_set_cursor(
-		M.state.winid, { markers[#markers].line, 0 }
-	)
+	go(markers[#markers].line)
 end
 
 function M.next_file()
@@ -121,91 +143,6 @@ end
 
 function M.prev_hunk()
 	jump_to_marker(M.state.hunk_markers, -1)
-end
-
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("diff", {
-			filetype = "gitflow-diff",
-			lines = components.loading_lines("Loading diff…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value(
-		"filetype", "gitflow-diff", { buf = bufnr }
-	)
-	vim.api.nvim_set_option_value(
-		"syntax", "diff", { buf = bufnr }
-	)
-	pcall(vim.treesitter.stop, bufnr)
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-
-	if M.state.winid
-		and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "diff",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = DIFF_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer
-				and DIFF_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "diff",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		if M.state.request then
-			M.open(cfg, M.state.request)
-		end
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "]f", function()
-		M.next_file()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "[f", function()
-		M.prev_file()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "]c", function()
-		M.next_hunk()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "[c", function()
-		M.prev_hunk()
-	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
 ---Classify one raw diff line into its highlight group.
@@ -240,21 +177,39 @@ local function diff_line_group(line)
 	return nil
 end
 
----@param _title string
+---Old/new line numbers as right-aligned virtual text. Its own namespace: the
+---builder diffs the panel namespace against a snapshot, so nothing else may
+---write there.
+---@param bufnr integer
+local function paint_line_numbers(bufnr)
+	vim.api.nvim_buf_clear_namespace(bufnr, DIFF_LINENR_NS, 0, -1)
+	for line_no, ctx in pairs(M.state.line_context) do
+		if ctx.old_line or ctx.new_line then
+			local label = ("%4s %4s"):format(
+				ctx.old_line and tostring(ctx.old_line) or " ",
+				ctx.new_line and tostring(ctx.new_line) or " "
+			)
+			pcall(
+				vim.api.nvim_buf_set_extmark,
+				bufnr, DIFF_LINENR_NS, line_no - 1, 0,
+				{
+					virt_text = { { label, "GitflowDiffLineNr" } },
+					virt_text_pos = "right_align",
+				}
+			)
+		end
+	end
+end
+
+---@param title string
 ---@param text string
 ---@param current_branch string
 local function render(title, text, current_branch)
 	local diff_lines = to_lines(text)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, title, render_opts)
+	local B = P:begin_render(title)
 
 	-- Build file summary section
-	local preview_files, preview_hunks =
-		git_diff.collect_markers(diff_lines, 1)
+	local preview_files, preview_hunks = git_diff.collect_markers(diff_lines, 1)
 	if #preview_files > 0 then
 		B:raw(
 			("Files: %d  Hunks: %d"):format(#preview_files, #preview_hunks),
@@ -266,87 +221,68 @@ local function render(title, text, current_branch)
 	for _, line in ipairs(diff_lines) do
 		B:raw(line, diff_line_group(line))
 	end
-	if current_branch then
-		B:raw(ui_render.separator(render_opts), "GitflowSeparator")
-		B:raw(("Current branch: %s"):format(current_branch), "GitflowFooter")
-	end
 
 	-- Collect markers relative to buffer positions
-	M.state.file_markers, M.state.hunk_markers,
-		M.state.line_context =
+	M.state.file_markers, M.state.hunk_markers, M.state.line_context =
 		git_diff.collect_markers(diff_lines, diff_start_idx)
 
-	local bufnr = M.state.bufnr
-	B:flush("diff", bufnr, DIFF_HIGHLIGHT_NS)
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	P:push_hints(B)
+	if current_branch then
+		B:raw(ui_render.separator(P:render_opts()), "GitflowSeparator")
+		components.branch_footer(B, current_branch)
 	end
 
-	-- Line numbers via right-aligned virtual text
-	vim.api.nvim_buf_clear_namespace(
-		bufnr, DIFF_LINENR_NS, 0, -1
-	)
-	for line_no, ctx in pairs(M.state.line_context) do
-		if ctx.old_line or ctx.new_line then
-			local old_str = ctx.old_line
-				and tostring(ctx.old_line) or " "
-			local new_str = ctx.new_line
-				and tostring(ctx.new_line) or " "
-			local label = ("%4s %4s"):format(
-				old_str, new_str
-			)
-			pcall(
-				vim.api.nvim_buf_set_extmark,
-				bufnr, DIFF_LINENR_NS, line_no - 1, 0,
-				{
-					virt_text = {
-						{ label, "GitflowDiffLineNr" },
-					},
-					virt_text_pos = "right_align",
-				}
-			)
-		end
+	local bufnr = P:bufnr()
+	if not P:paint(B) then
+		return
 	end
+	paint_line_numbers(bufnr)
 end
 
 ---@param cfg GitflowConfig
 ---@param request table
 function M.open(cfg, request)
+	M.state.cfg = cfg
 	M.state.request = vim.deepcopy(request)
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
+	-- The base sets the filetype; the diff syntax and the treesitter opt-out
+	-- (#251) are this panel's own.
+	local bufnr = P:bufnr()
+	vim.api.nvim_set_option_value("syntax", "diff", { buf = bufnr })
+	pcall(vim.treesitter.stop, bufnr)
 
+	local token = P:next_request()
 	git_branch.current({}, function(_, branch)
+		if not P:is_active(token) then
+			return
+		end
 		git_diff.get(request, function(err, output)
-			if err then
-				utils.notify(err, vim.log.levels.ERROR)
+			if not P:is_active(token) then
 				return
 			end
-
-			render(
-				request_to_title(request),
-				output or "",
-				branch or "(unknown)"
-			)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				P:render_error("Could not load the diff", { detail = err })
+				return
+			end
+			render(request_to_title(request), output or "", branch or "(unknown)")
 		end)
 	end)
 end
 
+--- Re-run the request the panel is currently showing.
+function M.refresh()
+	if M.state.request and M.state.cfg then
+		M.open(M.state.cfg, M.state.request)
+	end
+end
+
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("diff")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("diff")
-	end
-
-	M.state.winid = nil
-	M.state.bufnr = nil
+	P:close()
 	M.state.request = nil
+	M.state.cfg = nil
 	M.state.file_markers = {}
 	M.state.hunk_markers = {}
 	M.state.line_context = {}
