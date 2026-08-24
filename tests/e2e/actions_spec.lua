@@ -1350,6 +1350,67 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		actions_panel.close()
 	end,
 
+	["a stale job map on the error page does not resolve to a job for J"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+		actions_panel.open_detail_under_cursor()
+		T.drain_jobs(4000)
+
+		local bufnr = actions_panel.state.bufnr
+		local job_line = T.buf_find_line(bufnr, "test")
+		T.assert_true(job_line ~= nil, "detail view should list the test job")
+
+		-- A real `gh` error is multi-line stderr, which grows the error
+		-- page past where the job row used to be.
+		local error_lines = {}
+		for index = 1, 30 do
+			error_lines[index] = ("service unavailable, line %d"):format(index)
+		end
+		local multiline_error = table.concat(error_lines, "\n")
+
+		with_temporary_patches({
+			{
+				table = gh_actions,
+				key = "view",
+				value = function(_, _, cb)
+					cb(multiline_error, nil)
+				end,
+			},
+		}, function()
+			actions_panel.refresh()
+			T.drain_jobs(3000)
+		end)
+
+		local rendered = rendered_panel_text()
+		T.assert_contains(
+			rendered, "Failed to load run detail",
+			"the refresh failure should render the detail error state"
+		)
+
+		local line_count = vim.api.nvim_buf_line_count(bufnr)
+		T.assert_true(
+			line_count >= job_line,
+			"the error page should have grown past the old job row"
+		)
+		vim.api.nvim_set_current_win(actions_panel.state.winid)
+		vim.api.nvim_win_set_cursor(actions_panel.state.winid, { job_line, 0 })
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(true, function()
+				actions_panel.rerun_job_under_cursor()
+				T.drain_jobs(3000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "run rerun") == nil,
+				"J on a stale error page must not resolve to a job and call gh"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
 	["cancel sends the exact argv once confirmed"] = function()
 		actions_panel.close()
 		actions_panel.open(cfg)
@@ -1547,6 +1608,67 @@ T.run_suite("E2E: GitHub Actions Panel", {
 			)
 		end)
 
+		actions_panel.close()
+	end,
+
+	["watch stops when another buffer replaces the panel in its own window"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		local poll_calls = 0
+		with_temporary_patches({
+			{ table = cfg, key = "actions", value = { watch_interval = 15 } },
+			{
+				table = gh_actions,
+				key = "view",
+				value = function(run_id, _, cb)
+					poll_calls = poll_calls + 1
+					cb(nil, {
+						id = run_id, name = "CI", branch = "main",
+						status = "in_progress", conclusion = "",
+						event = "push", created_at = "", updated_at = "",
+						url = "", display_title = "CI: push to main", jobs = {},
+					})
+				end,
+			},
+		}, function()
+			actions_panel.open_detail_under_cursor()
+			T.drain_jobs(3000)
+			actions_panel.toggle_watch()
+			T.wait_until(function()
+				return poll_calls >= 2
+			end, "watch should be polling before the buffer is swapped", 2000)
+
+			-- :enew in the panel's own window replaces its buffer with no
+			-- WinClosed: the window (and its tracked winid) stays valid,
+			-- but the panel is nowhere on screen.
+			local winid = actions_panel.state.winid
+			vim.api.nvim_win_call(winid, function()
+				vim.cmd("enew")
+			end)
+
+			T.assert_false(
+				actions_panel.is_open(),
+				"the panel is not open once its window shows another buffer"
+			)
+
+			local calls_at_swap = poll_calls
+			vim.wait(300, function() return false end, 20)
+
+			T.assert_equals(
+				poll_calls, calls_at_swap,
+				"a buffer swap in the panel's own window must stop the poller"
+			)
+			T.assert_false(
+				actions_panel.state.watch.active,
+				"watch must not claim to be live once the panel is off screen"
+			)
+		end)
+
+		-- Put the panel's buffer back so close() tears the right thing down.
+		vim.api.nvim_win_set_buf(actions_panel.state.winid, actions_panel.state.bufnr)
 		actions_panel.close()
 	end,
 

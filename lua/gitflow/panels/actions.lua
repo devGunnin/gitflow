@@ -762,6 +762,7 @@ local function render_error(header, message, detail, hints)
 	components.split_hint_bar(B, render_opts, hints)
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
+	M.state.detail_line_entries = {}
 end
 
 ---Re-render whatever view is currently showing from state already in hand
@@ -1381,6 +1382,12 @@ local function poll_watch_once(run_id, generation)
 			if not watch.active or watch.generation ~= generation then
 				return
 			end
+			-- Panel buffer replaced in its own window fires no WinClosed;
+			-- catch that here instead of polling an invisible panel forever.
+			if not M.is_open() then
+				stop_watch()
+				return
+			end
 			poll_watch_once(run_id, generation)
 		end, watch_interval_ms())
 	end)
@@ -1496,13 +1503,16 @@ end
 
 ---Open means visible: the buffer survives a window close (bufhidden=hide),
 ---so a buffer-only check reported an invisible panel as open and every
----guard built on it kept running.
+---guard built on it kept running. The tracked winid is not enough either —
+---replacing the panel buffer in its own window (`:enew`, `:e`, a clone
+---split) fires no WinClosed, so key liveness to whether the buffer is
+---actually displayed, not to the window id.
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.winid ~= nil
-		and vim.api.nvim_win_is_valid(M.state.winid)
+	if M.state.bufnr == nil or not vim.api.nvim_buf_is_valid(M.state.bufnr) then
+		return false
+	end
+	return vim.fn.bufwinid(M.state.bufnr) ~= -1
 end
 
 return M
