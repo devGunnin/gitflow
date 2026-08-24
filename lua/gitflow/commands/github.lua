@@ -29,8 +29,11 @@ local PR_ACTIONS = {
 	"merge",
 	"checkout",
 	"close",
+	"reopen",
+	"ready",
 	"edit",
 }
+local CLOSE_REASONS = { completed = true, not_planned = true, ["not-planned"] = true }
 local LABEL_ACTIONS = { "list", "create", "delete" }
 
 -- Accepted `key=value` edit tokens per subcommand: { key, field, csv }.
@@ -38,17 +41,21 @@ local EDIT_TOKEN_SPECS = {
 	issue = {
 		{ "title", "title" },
 		{ "body", "body" },
+		{ "milestone", "milestone" },
 		{ "add", "add_labels", true },
 		{ "remove", "remove_labels", true },
 		{ "add_assignees", "add_assignees", true },
 		{ "remove_assignees", "remove_assignees", true },
 	},
 	pr = {
+		{ "title", "title" },
+		{ "body", "body" },
 		{ "add", "add_labels", true },
 		{ "remove", "remove_labels", true },
 		{ "add_assignees", "add_assignees", true },
 		{ "remove_assignees", "remove_assignees", true },
-		{ "reviewers", "reviewers", true },
+		{ "reviewers", "add_reviewers", true },
+		{ "remove_reviewers", "remove_reviewers", true },
 	},
 }
 
@@ -216,7 +223,11 @@ end
 ---@param arglead string
 ---@return string[]
 local function complete_issue(subaction, arglead)
-	if subaction == "view" or subaction == "comment" or subaction == "close" or subaction == "reopen" then
+	if subaction == "close" then
+		return shared.filter_candidates(arglead, { "completed", "not_planned" })
+	end
+
+	if subaction == "view" or subaction == "comment" or subaction == "reopen" then
 		return {}
 	end
 
@@ -241,6 +252,7 @@ local function complete_issue(subaction, arglead)
 		return shared.filter_candidates(arglead, {
 			"title=",
 			"body=",
+			"milestone=",
 			"add=",
 			"remove=",
 			"add_assignees=",
@@ -260,6 +272,7 @@ local function complete_pr(subaction, arglead)
 		or subaction == "comment"
 		or subaction == "checkout"
 		or subaction == "close"
+		or subaction == "reopen"
 		or subaction == "respond"
 	then
 		return {}
@@ -282,16 +295,25 @@ local function complete_pr(subaction, arglead)
 	end
 
 	if subaction == "merge" then
-		return shared.filter_candidates(arglead, { "merge", "squash", "rebase" })
+		return shared.filter_candidates(arglead, {
+			"merge", "squash", "rebase", "--delete-branch", "--auto",
+		})
+	end
+
+	if subaction == "ready" then
+		return shared.filter_candidates(arglead, { "--undo" })
 	end
 
 	if subaction == "edit" then
 		return shared.filter_candidates(arglead, {
+			"title=",
+			"body=",
 			"add=",
 			"remove=",
 			"add_assignees=",
 			"remove_assignees=",
 			"reviewers=",
+			"remove_reviewers=",
 		})
 	end
 
@@ -428,11 +450,20 @@ function M.register(ctx)
 			end
 
 			if action == "close" then
+				local usage =
+					"Usage: :Gitflow issue close <number> [completed|not_planned]"
 				local number = shared.first_positional_from(cmd.args, 3)
 				if not number then
-					return "Usage: :Gitflow issue close <number>"
+					return usage
 				end
-				gh_issues.close(number, {}, function(err)
+				local reason = shared.trimmed_or_nil(cmd.args[4])
+				if reason and not CLOSE_REASONS[reason] then
+					return usage
+				end
+				if reason then
+					reason = reason:gsub("%-", "_")
+				end
+				gh_issues.close(number, { reason = reason }, {}, function(err)
 					if err then
 						shared.show_error(err)
 						return
@@ -465,7 +496,7 @@ function M.register(ctx)
 
 			if action == "edit" then
 				local usage = "Usage: :Gitflow issue edit <number>"
-					.. " [title=...] [body=...]"
+					.. " [title=...] [body=...] [milestone=...]"
 					.. " [add=...] [remove=...]"
 					.. " [add_assignees=...] [remove_assignees=...]"
 				local number = shared.first_positional_from(cmd.args, 3)
@@ -508,7 +539,7 @@ function M.register(ctx)
 
 	ctx.register("pr", {
 		description = "GitHub PRs: list|view|review|submit-review|respond|create|comment|"
-			.. "merge|checkout|close|edit",
+			.. "merge|checkout|close|reopen|ready|edit",
 		category = "GitHub",
 		run = function(cmd)
 			local ready, prerequisite_error = gh.ensure_prerequisites()
@@ -692,27 +723,99 @@ function M.register(ctx)
 			end
 
 			if action == "merge" then
+				local usage = "Usage: :Gitflow pr merge <number>"
+					.. " [merge|squash|rebase] [--delete-branch] [--auto]"
 				local number = shared.first_positional_from(cmd.args, 3)
 				if not number then
-					return "Usage: :Gitflow pr merge <number> [merge|squash|rebase]"
+					return usage
 				end
 
-				local strategy = cmd.args[4] or "merge"
-				if strategy ~= "merge" and strategy ~= "squash" and strategy ~= "rebase" then
-					return "Usage: :Gitflow pr merge <number> [merge|squash|rebase]"
+				local settings = { strategy = "merge" }
+				for i = 4, #cmd.args do
+					local token = cmd.args[i]
+					if token == "merge" or token == "squash" or token == "rebase" then
+						settings.strategy = token
+					elseif token == "--delete-branch" then
+						settings.delete_branch = true
+					elseif token == "--auto" then
+						settings.auto = true
+					else
+						return usage
+					end
 				end
 
-				gh_prs.merge(number, strategy, {}, function(err)
+				-- --auto only ARMS the merge; saying "merged" would report
+				-- something that has not happened yet.
+				local what = settings.strategy
+				if settings.delete_branch then
+					what = what .. ", delete branch"
+				end
+				gh_prs.merge(number, settings, {}, function(err)
 					if err then
 						shared.show_error(err)
 						return
 					end
-					shared.show_info(("Merged PR #%s (%s)"):format(number, strategy))
+					shared.show_info(
+						settings.auto
+							and ("PR #%s queued to auto-merge once checks pass (%s)")
+								:format(number, what)
+							or ("Merged PR #%s (%s)"):format(number, what)
+					)
 					if pr_panel.is_open() then
 						pr_panel.refresh()
 					end
 				end)
-				return ("Merging PR #%s (%s)..."):format(number, strategy)
+				return settings.auto
+					and ("Queueing auto-merge for PR #%s (%s)..."):format(number, what)
+					or ("Merging PR #%s (%s)..."):format(number, what)
+			end
+
+			if action == "reopen" then
+				local number = shared.first_positional_from(cmd.args, 3)
+				if not number then
+					return "Usage: :Gitflow pr reopen <number>"
+				end
+
+				gh_prs.reopen(number, {}, function(err)
+					if err then
+						shared.show_error(err)
+						return
+					end
+					shared.show_info(("Reopened PR #%s"):format(number))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return ("Reopening PR #%s..."):format(number)
+			end
+
+			if action == "ready" then
+				local usage = "Usage: :Gitflow pr ready <number> [--undo]"
+				local number = shared.first_positional_from(cmd.args, 3)
+				if not number then
+					return usage
+				end
+				local flag = shared.trimmed_or_nil(cmd.args[4])
+				if flag ~= nil and flag ~= "--undo" then
+					return usage
+				end
+				local to_draft = flag == "--undo"
+
+				gh_prs.set_draft(number, to_draft, {}, function(err)
+					if err then
+						shared.show_error(err)
+						return
+					end
+					shared.show_info(to_draft
+						and ("PR #%s is now a draft"):format(number)
+						or ("PR #%s is ready for review"):format(number))
+					if pr_panel.is_open() then
+						pr_panel.refresh()
+					end
+				end)
+				return to_draft
+					and ("Converting PR #%s to a draft..."):format(number)
+					or ("Marking PR #%s ready..."):format(number)
 			end
 
 			if action == "checkout" then
@@ -752,9 +855,10 @@ function M.register(ctx)
 
 			if action == "edit" then
 				local usage = "Usage: :Gitflow pr edit <number>"
+					.. " [title=...] [body=...]"
 					.. " [add=...] [remove=...]"
 					.. " [add_assignees=...] [remove_assignees=...]"
-					.. " [reviewers=...]"
+					.. " [reviewers=...] [remove_reviewers=...]"
 				local number = shared.first_positional_from(cmd.args, 3)
 				if not number then
 					return usage

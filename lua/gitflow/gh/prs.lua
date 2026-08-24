@@ -33,6 +33,7 @@ local PR_LIST_FIELDS = table.concat({
 	"baseRefName",
 	"updatedAt",
 	"mergedAt",
+	"statusCheckRollup",
 }, ",")
 
 local PR_VIEW_FIELDS = table.concat({
@@ -56,6 +57,175 @@ local PR_VIEW_FIELDS = table.concat({
 	"createdAt",
 	"updatedAt",
 }, ",")
+
+-- ── status checks (#423) ────────────────────────────────────────────────
+-- `statusCheckRollup` mixes two shapes: GitHub Actions / app check runs
+-- (status + conclusion) and legacy commit statuses (a single state). Both are
+-- normalized here so panels never branch on `__typename`.
+
+---@class GitflowPrCheck
+---@field name string
+---@field state "success"|"failure"|"pending"|"skipped"|"cancelled"|"unknown"
+---@field description string  short raw label, e.g. "SUCCESS" or "in_progress"
+
+---@type table<string, string>
+local CHECK_STATES = {
+	SUCCESS = "success",
+	NEUTRAL = "skipped",
+	SKIPPED = "skipped",
+	CANCELLED = "cancelled",
+	STALE = "cancelled",
+	FAILURE = "failure",
+	TIMED_OUT = "failure",
+	ACTION_REQUIRED = "failure",
+	STARTUP_FAILURE = "failure",
+	ERROR = "failure",
+	PENDING = "pending",
+	EXPECTED = "pending",
+	QUEUED = "pending",
+	WAITING = "pending",
+	REQUESTED = "pending",
+	IN_PROGRESS = "pending",
+}
+
+---@param value any
+---@return string
+local function upper_text(value)
+	if value == nil or value == vim.NIL then
+		return ""
+	end
+	return (tostring(value):upper():gsub("%-", "_"))
+end
+
+---Flatten one `statusCheckRollup` payload into comparable check rows.
+---Accepts what `gh pr view --json statusCheckRollup` returns (a bare array)
+---and the shape `gh pr list` nests it in (`{ nodes = { … } }`).
+---@param rollup any
+---@return GitflowPrCheck[]
+function M.normalize_checks(rollup)
+	if type(rollup) ~= "table" then
+		return {}
+	end
+	local nodes = rollup
+	if type(rollup.nodes) == "table" then
+		nodes = rollup.nodes
+	end
+
+	local checks = {}
+	for _, node in ipairs(nodes) do
+		if type(node) == "table" then
+			-- A check run reports status + conclusion; a commit status only
+			-- ever carries `state`, and its name lives in `context`.
+			local raw = upper_text(node.conclusion)
+			if raw == "" then
+				raw = upper_text(node.status)
+			end
+			if raw == "" then
+				raw = upper_text(node.state)
+			end
+			local name = node.name
+			if name == nil or name == vim.NIL or tostring(name) == "" then
+				name = node.context
+			end
+			if name == nil or name == vim.NIL or tostring(name) == "" then
+				name = "check"
+			end
+			checks[#checks + 1] = {
+				name = tostring(name),
+				state = CHECK_STATES[raw] or "unknown",
+				description = raw ~= "" and raw:lower():gsub("_", " ") or "unknown",
+			}
+		end
+	end
+	return checks
+end
+
+---@class GitflowPrCheckSummary
+---@field total integer
+---@field success integer
+---@field failure integer
+---@field pending integer
+---@field skipped integer
+---@field cancelled integer
+---@field unknown integer
+---@field state "failure"|"cancelled"|"pending"|"unknown"|"success"|"skipped"|"none"
+
+---Worst-first: the verdict is the first of these present. `gh pr checks`
+---counts a cancelled run as failing, and an unrecognised conclusion is not
+---evidence of a pass, so both outrank success.
+local CHECK_VERDICTS = { "failure", "cancelled", "pending", "unknown", "success", "skipped" }
+
+---@type table<string, true>
+local CHECK_BUCKETS = {}
+for _, bucket in ipairs(CHECK_VERDICTS) do
+	CHECK_BUCKETS[bucket] = true
+end
+
+---Roll normalized checks up to one verdict, never greener than the worst
+---check. `none` means there are no checks; checks that exist but decide
+---nothing read as `skipped`.
+---@param checks GitflowPrCheck[]
+---@return GitflowPrCheckSummary
+function M.checks_summary(checks)
+	local summary = {
+		total = 0, success = 0, failure = 0, pending = 0,
+		skipped = 0, cancelled = 0, unknown = 0, state = "none",
+	}
+	for _, check in ipairs(checks or {}) do
+		summary.total = summary.total + 1
+		-- Count only into the buckets: an unmapped state must not write over
+		-- `total` or `state`, and it is not evidence of a pass.
+		local bucket = CHECK_BUCKETS[check.state] and check.state or "unknown"
+		summary[bucket] = summary[bucket] + 1
+	end
+	if summary.total == 0 then
+		return summary
+	end
+	for _, verdict in ipairs(CHECK_VERDICTS) do
+		if summary[verdict] > 0 then
+			summary.state = verdict
+			break
+		end
+	end
+	return summary
+end
+
+--- Issue numbers a PR closes, from the GitHub linking keywords in its body
+--- plus the `<number>-slug` branch convention gitflow's own "branch from
+--- issue" produces. Text-only by design: the authoritative link lives in
+--- GitHub's timeline, which needs GraphQL.
+---@param pr table
+---@return string[]
+function M.linked_issue_numbers(pr)
+	local seen, numbers = {}, {}
+	local function add(number)
+		if number and not seen[number] then
+			seen[number] = true
+			numbers[#numbers + 1] = number
+		end
+	end
+
+	local body = pr and pr.body
+	if type(body) == "string" then
+		for keyword, number in body:lower():gmatch("(%a+)%s+#(%d+)") do
+			if
+				keyword == "closes" or keyword == "close" or keyword == "closed"
+				or keyword == "fixes" or keyword == "fix" or keyword == "fixed"
+				or keyword == "resolves" or keyword == "resolve"
+				or keyword == "resolved"
+			then
+				add(number)
+			end
+		end
+	end
+
+	local head = pr and pr.headRefName
+	if type(head) == "string" then
+		add(head:match("^(%d+)%-"))
+	end
+
+	return numbers
+end
 
 ---@param value string|string[]|nil
 ---@return string|nil
@@ -282,6 +452,38 @@ function M.list(params, opts, cb)
 	end)
 end
 
+--- The narrow slice `linked_issue_numbers` needs: numbers, bodies and head
+--- branches, nothing else. Kept off `M.list` so the PR panel never pays for a
+--- hundred PR bodies it does not render.
+---@param params table|nil  { state, limit }
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, prs: table[]|nil, result: GitflowGitResult)
+function M.list_links(params, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local options = params or {}
+	local args = {
+		"pr", "list", "--json", "number,title,state,body,headRefName",
+		"--state", tostring(options.state or "open"),
+	}
+	if options.limit and tonumber(options.limit) then
+		args[#args + 1] = "--limit"
+		args[#args + 1] = tostring(options.limit)
+	end
+
+	gh.json(args, opts, function(err, data, result)
+		if err then
+			cb(err, nil, result)
+			return
+		end
+		cb(nil, data or {}, result)
+	end)
+end
+
 ---@param number integer|string
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, pr: table|nil, result: GitflowGitResult)
@@ -454,30 +656,109 @@ function M.comment(number, body, opts, cb)
 	end)
 end
 
+---@class GitflowPrMergeOptions
+---@field strategy "merge"|"squash"|"rebase"|nil  default "merge"
+---@field auto boolean|nil  queue for auto-merge instead of merging now
+---@field delete_branch boolean|nil  delete the head branch after merging
+
+---Merge a PR. `options` may be a plain strategy string for the common case.
 ---@param number integer|string
----@param strategy "merge"|"squash"|"rebase"|nil
+---@param options GitflowPrMergeOptions|string|nil
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
-function M.merge(number, strategy, opts, cb)
+function M.merge(number, options, opts, cb)
 	local ok, message = gh.ensure_prerequisites()
 	if not ok then
 		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
 		return
 	end
 
-	local merge_strategy = strategy or "merge"
-	local args = { "pr", "merge", normalize_number(number) }
-	if merge_strategy == "squash" then
-		args[#args + 1] = "--squash"
-	elseif merge_strategy == "rebase" then
-		args[#args + 1] = "--rebase"
-	else
-		args[#args + 1] = "--merge"
+	local settings = type(options) == "table" and options or { strategy = options }
+	local strategy = settings.strategy or "merge"
+	-- A typo must not silently become a different, irreversible merge.
+	if strategy ~= "merge" and strategy ~= "squash" and strategy ~= "rebase" then
+		error(("gitflow gh error: unknown merge strategy %q"):format(tostring(strategy)), 2)
+	end
+	local args = { "pr", "merge", normalize_number(number), "--" .. strategy }
+	if settings.auto then
+		args[#args + 1] = "--auto"
+	end
+	if settings.delete_branch then
+		args[#args + 1] = "--delete-branch"
 	end
 
 	gh.run(args, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "merge"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---Cancel a queued auto-merge. Mutually exclusive with every other `pr merge`
+---flag, so it is its own verb rather than another merge option.
+---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.disable_auto_merge(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run({
+		"pr", "merge", normalize_number(number), "--disable-auto",
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "merge --disable-auto"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@param number integer|string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.reopen(number, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run({ "pr", "reopen", normalize_number(number) }, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "reopen"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---Move a PR between draft and ready-for-review. Both directions are `gh pr
+---ready`; `--undo` is the one that turns a ready PR back into a draft.
+---@param number integer|string
+---@param draft boolean  true to make it a draft, false to mark it ready
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.set_draft(number, draft, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local args = { "pr", "ready", normalize_number(number) }
+	if draft then
+		args[#args + 1] = "--undo"
+	end
+
+	gh.run(args, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "ready"), result)
 			return
 		end
 		cb(nil, result)
@@ -536,6 +817,22 @@ function M.edit(number, input, opts, cb)
 	local options = input or {}
 	local args = { "pr", "edit", normalize_number(number) }
 	local changed = false
+	-- Anything the label-only `gh api` fallback below cannot re-apply. With a
+	-- non-label edit in the batch the fallback would report success while
+	-- silently dropping it, so it is refused instead.
+	local non_label_edits = false
+
+	if options.title and vim.trim(tostring(options.title)) ~= "" then
+		args[#args + 1] = "--title"
+		args[#args + 1] = tostring(options.title)
+		changed, non_label_edits = true, true
+	end
+
+	if options.body ~= nil then
+		args[#args + 1] = "--body"
+		args[#args + 1] = tostring(options.body)
+		changed, non_label_edits = true, true
+	end
 
 	local add_labels = to_csv(options.add_labels)
 	if add_labels then
@@ -555,21 +852,28 @@ function M.edit(number, input, opts, cb)
 	if add_assignees then
 		args[#args + 1] = "--add-assignee"
 		args[#args + 1] = add_assignees
-		changed = true
+		changed, non_label_edits = true, true
 	end
 
 	local remove_assignees = to_csv(options.remove_assignees)
 	if remove_assignees then
 		args[#args + 1] = "--remove-assignee"
 		args[#args + 1] = remove_assignees
-		changed = true
+		changed, non_label_edits = true, true
 	end
 
-	local reviewers = to_csv(options.reviewers)
+	local reviewers = to_csv(options.add_reviewers or options.reviewers)
 	if reviewers then
 		args[#args + 1] = "--add-reviewer"
 		args[#args + 1] = reviewers
-		changed = true
+		changed, non_label_edits = true, true
+	end
+
+	local remove_reviewers = to_csv(options.remove_reviewers)
+	if remove_reviewers then
+		args[#args + 1] = "--remove-reviewer"
+		args[#args + 1] = remove_reviewers
+		changed, non_label_edits = true, true
 	end
 
 	local add_label_list = csv_to_list(add_labels)
@@ -589,7 +893,7 @@ function M.edit(number, input, opts, cb)
 	gh.run(args, opts, function(result)
 		if result.code ~= 0 then
 			local has_label_edits = #add_label_list > 0 or #remove_label_list > 0
-			if has_label_edits and not reviewers and is_project_cards_deprecation_error(result) then
+			if has_label_edits and not non_label_edits and is_project_cards_deprecation_error(result) then
 				edit_labels_via_api(number, add_label_list, remove_label_list, opts, cb)
 				return
 			end

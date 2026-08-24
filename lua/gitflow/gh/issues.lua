@@ -225,17 +225,37 @@ function M.comment(number, body, opts, cb)
 	end)
 end
 
+---GitHub's only two close reasons. Anything else is a caller bug, not user
+---input, so it raises rather than being sent for the API to reject.
+---@type table<string, boolean>
+local CLOSE_REASONS = { completed = true, not_planned = true }
+
 ---@param number integer|string
+---@param options { reason: "completed"|"not_planned"|nil }|nil
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
-function M.close(number, opts, cb)
+function M.close(number, options, opts, cb)
 	local ok, message = gh.ensure_prerequisites()
 	if not ok then
 		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
 		return
 	end
 
-	gh.run({ "issue", "close", normalize_number(number) }, opts, function(result)
+	local settings = options or {}
+	local args = { "issue", "close", normalize_number(number) }
+	if settings.reason ~= nil then
+		local reason = vim.trim(tostring(settings.reason)):lower():gsub("%-", "_")
+		if not CLOSE_REASONS[reason] then
+			error(
+				"gitflow gh issue error: close reason must be completed|not_planned",
+				2
+			)
+		end
+		args[#args + 1] = "--reason"
+		args[#args + 1] = reason
+	end
+
+	gh.run(args, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "close"), result)
 			return
@@ -318,6 +338,15 @@ function M.edit(number, input, opts, cb)
 		changed = true
 	end
 
+	if options.remove_milestone then
+		args[#args + 1] = "--remove-milestone"
+		changed = true
+	elseif options.milestone and vim.trim(tostring(options.milestone)) ~= "" then
+		args[#args + 1] = "--milestone"
+		args[#args + 1] = tostring(options.milestone)
+		changed = true
+	end
+
 	if not changed then
 		cb(nil, {
 			code = 0,
@@ -332,6 +361,113 @@ function M.edit(number, input, opts, cb)
 	gh.run(args, opts, function(result)
 		if result.code ~= 0 then
 			cb(error_from_result(result, "edit"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+-- ── milestones ──────────────────────────────────────────────────────────
+
+--- Repository milestones, open and closed. `gh` has no `milestone` command,
+--- so this is the REST endpoint `gh issue edit --milestone` selects by title.
+---@param params { state: "open"|"closed"|"all"|nil }|nil
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, milestones: table[]|nil, result: GitflowGitResult)
+function M.list_milestones(params, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, nil, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local state = (params or {}).state or "all"
+	gh.json({
+		"api", "repos/{owner}/{repo}/milestones", "--paginate",
+		"-f", ("state=%s"):format(state),
+	}, opts, function(err, data, result)
+		if err then
+			cb(err, nil, result)
+			return
+		end
+		cb(nil, data or {}, result)
+	end)
+end
+
+-- ── issue comments ──────────────────────────────────────────────────────
+
+--- The REST comment id `gh issue view --json comments` does not give us: its
+--- `id` is a GraphQL node id, but the comment `url` ends in the numeric one
+--- (`…#issuecomment-1234`). Returns nil when the payload carries neither, so
+--- a caller refuses rather than guessing which comment to edit or delete.
+---@param comment table
+---@return integer|nil
+function M.comment_rest_id(comment)
+	if type(comment) ~= "table" then
+		return nil
+	end
+	local url = comment.url
+	if type(url) ~= "string" then
+		return nil
+	end
+	return tonumber(url:match("#issuecomment%-(%d+)$"))
+end
+
+---@param comment_id integer
+---@return string
+local function comment_endpoint(comment_id)
+	local id = tonumber(comment_id)
+	if not id then
+		error("gitflow gh issue error: a numeric comment id is required", 3)
+	end
+	return ("repos/{owner}/{repo}/issues/comments/%d"):format(math.floor(id))
+end
+
+---@param comment_id integer
+---@param body string
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.edit_comment(comment_id, body, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	local normalized = vim.trim(tostring(body or ""))
+	if normalized == "" then
+		error("gitflow gh issue error: edit_comment requires a body", 2)
+	end
+
+	gh.run({
+		"api", comment_endpoint(comment_id), "--method", "PATCH",
+		-- Raw (-f), never a typed field: a body starting with "@" would
+		-- otherwise be read as a filename to upload.
+		"-f", ("body=%s"):format(normalized),
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "edit_comment"), result)
+			return
+		end
+		cb(nil, result)
+	end)
+end
+
+---@param comment_id integer
+---@param opts GitflowGitRunOpts|nil
+---@param cb fun(err: string|nil, result: GitflowGitResult)
+function M.delete_comment(comment_id, opts, cb)
+	local ok, message = gh.ensure_prerequisites()
+	if not ok then
+		cb(message, { code = 1, signal = 0, stdout = "", stderr = message or "", cmd = { "gh" } })
+		return
+	end
+
+	gh.run({
+		"api", comment_endpoint(comment_id), "--method", "DELETE",
+	}, opts, function(result)
+		if result.code ~= 0 then
+			cb(error_from_result(result, "delete_comment"), result)
 			return
 		end
 		cb(nil, result)

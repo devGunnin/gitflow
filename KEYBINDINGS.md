@@ -222,10 +222,13 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `c` | Create new issue |
 | `C` | Comment on issue |
 | `E` | Edit issue title/body |
-| `x` | Close issue (confirms first) |
+| `x` | Close issue (asks Completed / Not planned, then confirms) |
+| `R` | Reopen issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
+| `T` | Set or clear the milestone (picked from the repo's milestones) |
 | `f` | Open filter menu (state / labels / assignee / milestone) |
+| `Q` | Search issues (GitHub search syntax; empty clears it) |
 | `F` | Clear all filters |
 | `s` | Cycle sort key (updated → number → title → milestone) |
 | `S` | Toggle sort direction |
@@ -247,16 +250,26 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `c` | Create new issue |
 | `C` | Comment on issue |
 | `E` | Edit issue title/body |
-| `x` | Close issue (confirms first) |
+| `e` | Edit the comment under the cursor |
+| `d` | Delete the comment under the cursor (confirms first) |
+| `x` | Close issue (asks Completed / Not planned, then confirms) |
+| `R` | Reopen issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
+| `T` | Set or clear the milestone |
 | `r` | Refresh |
 | `?` | Key help for this panel |
 | `q` | Close |
 
-The list-only keys `f`/`F`/`s`/`S`/`G`/`<Tab>`/`o`/`O`/`D`/`B` act on the panel's shared filter/sort/group/view
-the panel's shared filter/sort/group/view state and are bound in the list view
-only; go back (`b`) to reach them.
+The list-only keys `Q`/`f`/`F`/`s`/`S`/`G`/`<Tab>`/`o`/`O`/`D`/`B` act on the
+panel's shared filter/sort/group/view state and are bound in the list view
+only; go back (`b`) to reach them. `e`/`d` need a comment under the cursor, so
+they are bound in the detail view only.
+
+An issue card shows a pull-request cue when an open PR *looks like* it closes
+it — inferred from the PR text, either a `Closes #<n>` keyword in the body or
+the `<n>-slug` branch name `B` generates. It is a cue, not GitHub's own link,
+so a keyword in prose or a code fence can produce one.
 
 ## PR List
 
@@ -271,10 +284,16 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `<CR>` | View PR under cursor |
 | `c` | Create new PR |
 | `C` | Comment on PR |
+| `E` | Edit PR title/body |
 | `L` | Edit labels |
 | `A` | Edit assignees |
-| `m` | Merge PR (confirms first) |
+| `R` | Add / remove reviewers (`+user,-user`) |
+| `m` | Merge PR (asks for the strategy, then confirms) |
+| `D` | Merge PR **and delete its branch** (confirms, irreversible) |
+| `M` | Enable or cancel auto-merge (confirms, merges unattended once armed) |
+| `t` | Toggle draft / ready for review |
 | `x` | Close PR (confirms first) |
+| `O` | Reopen PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
 | `<C-n>` | Next page |
@@ -289,15 +308,35 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | --- | --- |
 | `b` | Back to list |
 | `C` | Comment on PR |
+| `E` | Edit PR title/body |
 | `L` | Edit labels |
 | `A` | Edit assignees |
-| `m` | Merge PR (confirms first) |
+| `R` | Add / remove reviewers (`+user,-user`) |
+| `m` | Merge PR (asks for the strategy, then confirms) |
+| `D` | Merge PR **and delete its branch** (confirms, irreversible) |
+| `M` | Enable or cancel auto-merge (confirms) |
+| `t` | Toggle draft / ready for review |
 | `x` | Close PR (confirms first) |
+| `O` | Reopen PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
 | `r` | Refresh |
 | `?` | Key help for this panel |
 | `q` | Close |
+
+Both views show the PR's CI checks: the list card carries a per-state count
+followed by the verdict (`checks ✓3 ✗1 ●2 failure`) and the detail view names
+every check with its state plus the same verdict, coloured by it. A cancelled
+check has its own glyph (`⊗`) and failure colouring — `gh` counts it as
+failing — so it never reads like a benign skip (`⊘`). The verdict never reads greener than the worst check — a
+cancelled or unrecognised check outranks a pass, and checks that decide
+nothing read `skipped`, not `none`.
+
+`m`, `D` and `M` each end in a confirmation naming exactly what will happen —
+which PR, which strategy, which branch (if any) gets deleted, and which
+repository it will act on (`gh` resolves that from the working directory,
+which can move under an open panel). Declining sends nothing to GitHub, and a
+second press while one is in flight is refused rather than queued.
 
 ## PR Review Mode
 
@@ -673,9 +712,10 @@ it is in, so gitflow constrains itself:
   list drops `X abort` around 62 usable columns, and `? help` is how you get
   it back.
 - **No key is destructive in one panel and benign in another.** The destructive
-  verbs live on `d` `D` `x` `X` `H`, plus the two prefixed ones — `cD` in the
-  merge resolver and `<leader>x` in the review diff pane — and none of those is
-  a harmless action anywhere. `scripts/test_keymap_contract.lua` fails the
+  verbs live on `d` `D` `x` `X` `H` `M`, plus the two prefixed ones — `cD` in
+  the merge resolver and `<leader>x` in the review diff pane — and none of
+  those is a harmless action anywhere. That is why the issue milestone is `T`
+  and the PR draft toggle is `t`: `M` and `d` are spoken for. `scripts/test_keymap_contract.lua` fails the
   build if that stops being true, over every key, not just this list.
 - **Every destructive verb confirms**, and declining does nothing at all — no
   partial write, no refresh, no side effect. Rebase's `d drop` is the one
@@ -694,7 +734,7 @@ views. None of them can lose anything.
 
 `H` in the reflog and reset panels, and `M` on the PR panel, shadow vim's
 window motions in a scrollable list — a rule the actions panel keeps strictly.
-They are here because the destructive alphabet (`d` `D` `x` `X` `H`) has to
+They are here because the destructive alphabet (`d` `D` `x` `X` `H` `M`) has to
 stay small enough to recognise, and because both are confirm-gated with the
 prompt defaulting to Cancel. Nothing on a motion key can lose work to one
 keystroke. Branch rename moved off `M` for the same reason.
