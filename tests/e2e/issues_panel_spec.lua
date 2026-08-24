@@ -750,12 +750,91 @@ T.run_suite("issues_panel_spec", {
 
 	["view keymaps are bound on the panel buffer"] = function()
 		local bufnr = open_and_wait()
-		for _, lhs in ipairs({ "v", "V", "D" }) do
+		for _, lhs in ipairs({ "o", "O", "D" }) do
 			T.assert_true(
 				buf_map(bufnr, lhs) ~= nil,
 				("%s should be mapped on the issues buffer"):format(lhs)
 			)
 		end
+	end,
+
+	-- ── #428 rebind V away from visual-line, restore comment/edit ───────
+
+	["v and V are left unmapped so visual-line select/yank works"] = function()
+		local bufnr = open_and_wait()
+		T.assert_true(
+			buf_map(bufnr, "v") == nil,
+			"v must stay unmapped so charwise visual mode works"
+		)
+		T.assert_true(
+			buf_map(bufnr, "V") == nil,
+			"V must stay unmapped so visual-line mode works"
+		)
+	end,
+
+	["C prompts for a comment and posts it via gh"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		T.assert_true(buf_map(bufnr, "C") ~= nil, "C should be mapped")
+
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		T.assert_true(card ~= nil, "the card should render")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		-- C opens the multiline composer synchronously (no gh round-trip first).
+		issues_panel.comment_under_cursor()
+		local composer_buf = vim.api.nvim_get_current_buf()
+		T.assert_equals(
+			vim.bo[composer_buf].filetype, "gitflow-form",
+			"C should open the comment composer"
+		)
+
+		-- Composer layout: title/blank/body, matching tests/e2e/composer_spec.lua.
+		vim.api.nvim_buf_set_lines(composer_buf, 2, 3, false, { "Looks good to me" })
+		vim.api.nvim_win_set_cursor(0, { 3, 0 })
+		T.feedkeys("<CR>")
+		T.drain_jobs()
+
+		T.assert_true(
+			gh_call_count("issue comment 1") == 1,
+			"gh issue comment should be called for issue 1: " .. vim.inspect(gh_calls())
+		)
+	end,
+
+	["E fetches the issue and edits its title/body via gh"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		T.assert_true(buf_map(bufnr, "E") ~= nil, "E should be mapped")
+
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		T.assert_true(card ~= nil, "the card should render")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		-- E fetches the full issue (list cache has no body) before opening the
+		-- edit form, so the form only appears once that gh call settles.
+		issues_panel.edit_under_cursor()
+		T.drain_jobs()
+
+		local edit_buf = vim.api.nvim_get_current_buf()
+		T.assert_equals(
+			vim.bo[edit_buf].filetype, "gitflow-form",
+			"E should open the edit form"
+		)
+		T.assert_true(
+			gh_call_count("issue view 1") == 1,
+			"E should fetch the issue before prefilling the form: " .. vim.inspect(gh_calls())
+		)
+
+		-- Submit unchanged: the form pre-fills title/body from the fetched issue.
+		T.feedkeys("<CR>")
+		T.drain_jobs()
+
+		T.assert_true(
+			gh_call_count("issue edit 1") == 1,
+			"gh issue edit should be called for issue 1: " .. vim.inspect(gh_calls())
+		)
 	end,
 
 	-- ── #381 branch from an issue ──────────────────────────────────────
