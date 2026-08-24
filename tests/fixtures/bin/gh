@@ -246,13 +246,75 @@ case "$subcmd" in
               echo ""
             fi
             ;;
+          *" --job "*" --log "*)
+            if [ -f "$FIXTURE_DIR/run_view_job_log.txt" ]; then
+              cat "$FIXTURE_DIR/run_view_job_log.txt"
+            else
+              echo ""
+            fi
+            ;;
+          *" --log "*)
+            if [ -f "$FIXTURE_DIR/run_view_log.txt" ]; then
+              cat "$FIXTURE_DIR/run_view_log.txt"
+            else
+              echo ""
+            fi
+            ;;
           *)
             cat "$FIXTURE_DIR/run_view.json"
             ;;
         esac
         ;;
+      rerun)
+        if [ "$fail_cmd" = "run_rerun" ]; then
+          echo "gh run rerun failed" >&2
+          exit 1
+        fi
+        case " $* " in
+          *" --failed "*)
+            echo "Requested rerun of failed jobs"
+            ;;
+          *" --job "*)
+            echo "Requested rerun of job"
+            ;;
+          *)
+            echo "Requested rerun"
+            ;;
+        esac
+        ;;
+      cancel)
+        if [ "$fail_cmd" = "run_cancel" ]; then
+          echo "gh run cancel failed" >&2
+          exit 1
+        fi
+        echo "Requested cancellation"
+        ;;
       *)
         echo "gh stub: unknown run subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ── workflow ──────────────────────────────────────────────────────────
+  workflow)
+    if [ "$fail_cmd" = "workflow" ]; then
+      echo "gh workflow failed" >&2
+      exit 1
+    fi
+    case "$sub2" in
+      list)
+        cat "$FIXTURE_DIR/workflow_list.json"
+        ;;
+      run)
+        if [ "$fail_cmd" = "workflow_run" ]; then
+          echo "gh workflow run failed" >&2
+          exit 1
+        fi
+        echo "Created workflow_dispatch event"
+        ;;
+      *)
+        echo "gh stub: unknown workflow subcommand '$sub2'" >&2
         exit 1
         ;;
     esac
