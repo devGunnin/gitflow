@@ -649,9 +649,12 @@ T.run_suite("E2E: GitHub Actions Panel", {
 
 		T.assert_keymaps(bufnr, {
 			"<CR>", "o", "r", "q", "l", "f", "b", "L", "W", "R", "F", "C",
+			-- J has no job to target in the list view; mapped to a no-op
+			-- rather than left to raise vim's E21 (Join on a RO buffer).
+			"J",
 		})
 		-- Detail/log-only actions must not be mapped over the list.
-		assert_no_keymaps(bufnr, { "J", "w", "]e" })
+		assert_no_keymaps(bufnr, { "w", "]e" })
 
 		T.cleanup_panels()
 	end,
@@ -673,9 +676,14 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		T.drain_jobs(4000)
 		T.assert_equals(actions_panel.state.view, "log", "should be in the log view")
 
-		T.assert_keymaps(bufnr, { "<BS>", "]e", "r", "q" })
+		T.assert_keymaps(bufnr, {
+			"<BS>", "]e", "r", "q",
+			-- R/C/J are not motions: mapped to a no-op rather than left to
+			-- raise vim's E21 (Replace/Change/Join on a RO buffer).
+			"R", "C", "J",
+		})
 		-- The log view is a text buffer: these are motions, not panel keys.
-		assert_no_keymaps(bufnr, { "l", "w", "b", "E", "L", "F", "J", "C", "W", "f" })
+		assert_no_keymaps(bufnr, { "l", "w", "b", "E", "L", "F", "W", "f" })
 
 		local winid = actions_panel.state.winid
 		local content_line = T.buf_find_line(bufnr, "PASS test_one")
@@ -687,6 +695,30 @@ T.run_suite("E2E: GitHub Actions Panel", {
 			vim.api.nvim_win_get_cursor(winid)[2], 1,
 			"l must still move the cursor right in the log view"
 		)
+
+		actions_panel.close()
+	end,
+
+	["the workflows view maps only its own keys, leaving the rest to vim"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		actions_panel.open_workflows()
+		T.drain_jobs(4000)
+		T.assert_equals(
+			actions_panel.state.view, "workflows", "should be in the workflows view"
+		)
+
+		local bufnr = actions_panel.state.bufnr
+		T.assert_keymaps(bufnr, {
+			"<CR>", "<BS>", "r", "q",
+			-- R/C/J/o are not motions: mapped to a no-op rather than left
+			-- to raise vim's E21 (Replace/Change/Join/open-line on a RO
+			-- buffer) — this view has no run or job to target them at.
+			"R", "C", "J", "o",
+		})
+		assert_no_keymaps(bufnr, { "l", "w", "b", "L", "W", "F", "f", "]e" })
 
 		actions_panel.close()
 	end,

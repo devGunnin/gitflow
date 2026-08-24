@@ -263,15 +263,21 @@ end
 local ALL_VIEWS = { list = true, detail = true, log = true, workflows = true }
 local LIST_DETAIL = { list = true, detail = true }
 
--- Buffer-local maps, declared per view. A key a view does not use is left
--- UNMAPPED there, so vim's own motion keeps working — the log view is a
--- plain text buffer where l/w/b/L must move the cursor, and a panel action
--- there would only warn that it does not apply.
+local function noop() end
+
+-- Buffer-local maps, declared per view. A *motion* key a view does not use
+-- is left UNMAPPED there, so vim's own motion keeps working — the log view
+-- is a plain text buffer where l/w/b/L must move the cursor, and a panel
+-- action there would only warn that it does not apply. R/C/J/o are not
+-- motions: unmapped, they reach vim's Replace/Change/Join/open-line and
+-- raise E21 against the nomodifiable buffer, so every view maps them to a
+-- no-op instead.
 local KEYMAPS = {
 	{ key = "<CR>", views = LIST_DETAIL, run = function() M.open_detail_under_cursor() end },
 	{ key = "<CR>", views = { workflows = true }, run = function() M.dispatch_under_cursor() end },
 	{ key = "<BS>", views = { detail = true, log = true, workflows = true }, run = function() M.back() end },
 	{ key = "o", views = LIST_DETAIL, run = function() M.open_in_browser() end },
+	{ key = "o", views = { log = true, workflows = true }, run = noop },
 	{ key = "r", views = ALL_VIEWS, run = function() M.refresh() end },
 	{ key = "q", views = ALL_VIEWS, run = function() M.close() end },
 	{ key = "l", views = LIST_DETAIL, run = function() M.view_log_under_cursor() end },
@@ -280,9 +286,12 @@ local KEYMAPS = {
 	{ key = "L", views = { list = true }, run = function() M.load_more() end },
 	{ key = "W", views = { list = true }, run = function() M.open_workflows() end },
 	{ key = "R", views = LIST_DETAIL, run = function() M.rerun_under_cursor() end },
+	{ key = "R", views = { log = true, workflows = true }, run = noop },
 	{ key = "F", views = LIST_DETAIL, run = function() M.rerun_failed_under_cursor() end },
 	{ key = "J", views = { detail = true }, run = function() M.rerun_job_under_cursor() end },
+	{ key = "J", views = { list = true, log = true, workflows = true }, run = noop },
 	{ key = "C", views = LIST_DETAIL, run = function() M.cancel_under_cursor() end },
+	{ key = "C", views = { log = true, workflows = true }, run = noop },
 	{ key = "w", views = { detail = true }, run = function() M.toggle_watch() end },
 	-- Not `E`: the log view must not shadow a motion.
 	{ key = "]e", views = { log = true }, run = function() M.jump_to_first_error() end },
