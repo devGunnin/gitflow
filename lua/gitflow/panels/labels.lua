@@ -120,6 +120,30 @@ local function render_loading(message)
 	end
 end
 
+---@param message string
+local function render_error(message)
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Labels", render_opts)
+	components.summary(B, icons.get("ui", "tag"), "Labels", {})
+	B:blank()
+	components.error_state(B, "Failed to load labels", {
+		detail = message,
+		hint = "Press r to retry · q to close",
+	})
+
+	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
+	M.state.line_entries = {}
+
+	local bufnr = M.state.bufnr
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+		components.cursorline(M.state.winid, true)
+	end
+end
+
 ---@param labels table[]
 local function render_list(labels)
 	local render_opts = {
@@ -224,7 +248,7 @@ function M.refresh()
 	render_loading("Loading labels…")
 	gh_labels.list({}, function(err, labels)
 		if err then
-			render_loading("Failed to load labels")
+			render_error(err)
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
