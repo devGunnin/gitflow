@@ -34,13 +34,17 @@ end
 ---| '"missing"'    gh is not on PATH
 ---| '"auth"'       not logged in, or the token was rejected
 ---| '"network"'    gh could not reach the GitHub host
+---| '"rate_limit"' throttled — primary (HTTP 403) or secondary/abuse (HTTP 429)
 ---| '"permission"' authenticated, but the token lacks rights (HTTP 403)
 ---| '"not_found"'  absent, or invisible to this account (HTTP 404)
 ---| '"unknown"'    no signal we can classify — report raw output only
 
 --- Classify a failed `gh` invocation from its combined output.
 --- Every pattern here was observed from a real gh (2.95.0); none are guessed.
---- Network is tested first: a connection failure otherwise reads as auth.
+--- Order matters twice: network is tested first (a connection failure
+--- otherwise reads as auth), and rate limiting before permission — GitHub
+--- answers a spent primary quota with HTTP 403, which is otherwise "your
+--- token lacks rights" and sends the user off to `gh auth refresh`.
 ---@param output string
 ---@return GitflowGhFailureKind
 function M.classify_failure(output)
@@ -51,6 +55,14 @@ function M.classify_failure(output)
 		or text:find("check your internet connection", 1, true)
 	then
 		return "network"
+	end
+	if
+		text:find("rate limit exceeded", 1, true)
+		or text:find("secondary rate limit", 1, true)
+		or text:find("(http 429)", 1, true)
+		or text:find("too many requests", 1, true)
+	then
+		return "rate_limit"
 	end
 	if
 		text:find("not logged into any github hosts", 1, true)
@@ -75,6 +87,7 @@ local FAILURE_HINTS = {
 	missing = "Install the GitHub CLI (https://cli.github.com) and make sure `gh` is on your PATH.",
 	auth = "Run `gh auth login` to authenticate, then retry.",
 	network = "Could not reach GitHub — check your connection or https://www.githubstatus.com.",
+	rate_limit = "GitHub is rate-limiting this token. Wait for the window to reset — `gh api rate_limit` shows when — then retry; avoid rapid repeated refreshes until it does.",
 	permission = "Your token lacks the required permission. `gh auth status` lists its scopes; `gh auth refresh -s <scope>` adds one.",
 	-- GitHub answers 404 for private resources too, so "absent" and
 	-- "invisible to you" are indistinguishable and stay deliberately merged.

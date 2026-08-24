@@ -1333,7 +1333,7 @@ end
 
 ---@param number integer|string
 local function close_issue(number)
-	gh_issues.close(number, {}, function(err)
+	gh_issues.close(number, nil, {}, function(err)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return

@@ -432,7 +432,7 @@ function M.register(ctx)
 				if not number then
 					return "Usage: :Gitflow issue close <number>"
 				end
-				gh_issues.close(number, {}, function(err)
+				gh_issues.close(number, nil, {}, function(err)
 					if err then
 						shared.show_error(err)
 						return
