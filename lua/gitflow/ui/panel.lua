@@ -468,8 +468,8 @@ end
 ---  2. the remaining conveniences;
 ---  3. `essential` verbs BETWEEN the first and the last, so a cramped surface
 ---     keeps what the panel is FOR and the way out of it;
----  4. everything else that is not `always`, earliest first — the way out is
----     declared last in every registry, so it stands longest.
+---  4. last resort: everything else that is not `always`. What survives is
+---     what the panel is FOR plus `?`, which names the way out again.
 ---`always` (`?`) is in no pass: it is the affordance that reveals every other
 ---key, so it outlives all of them. `essential` and `destructive` are
 ---independent — a verb can be primary AND irreversible (rebase `X execute`,
@@ -546,9 +546,7 @@ local function fit_hints(hints, width, width_of)
 		{ function(hint) return hint.destructive == true and not keepable(hint) end },
 		{ function(hint) return not keepable(hint) end },
 		{ interior_essential },
-		-- Front first: the way out is declared last in every registry, so
-		-- eating primary verbs from the top leaves it standing longest.
-		{ function(hint) return hint.always ~= true end, true },
+		{ function(hint) return hint.always ~= true end },
 	}) do
 		fitted = drop_pass(pass[1], pass[2])
 		if fitted then

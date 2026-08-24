@@ -172,19 +172,19 @@ for _, name in ipairs(PANEL_NAMES) do
 				name, narrow
 			)
 		)
-		-- The way out is the last essential in every registry, and the last
-		-- verb elision gives up.
-		local exit_hint
+		-- What the panel is FOR is the first essential, and the last verb
+		-- elision gives up (after that only `?` is left, which names the rest).
+		local primary
 		for _, hint in ipairs(hints) do
-			if hint.essential then
-				exit_hint = hint
+			if hint.essential and not primary then
+				primary = hint
 			end
 		end
-		if exit_hint then
+		if primary then
 			assert_true(
-				narrow:find(exit_hint[1] .. " " .. exit_hint[2], 1, true) ~= nil,
-				("%s elided away the way out (%q): %q"):format(
-					name, exit_hint[1], narrow
+				narrow:find(primary[1] .. " " .. primary[2], 1, true) ~= nil,
+				("%s elided away its primary verb (%q): %q"):format(
+					name, primary[1], narrow
 				)
 			)
 		end

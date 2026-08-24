@@ -146,14 +146,23 @@ test("r is refresh in every surface that binds it", function()
 	end
 end)
 
+-- Two surfaces are text-entry, not browsing: `?` there is a character the
+-- user is typing or searching for, not a request for documentation. Both
+-- carry their keys some other way — the resolver on `c?`, the palette in the
+-- footers of its two panes.
+local NO_HELP_KEY = { palette = true }
+
 test("every panel surface binds ? to help", function()
 	for _, surface in ipairs(surfaces) do
 		-- The merge resolver is a modifiable editor pane, so `?` stays vim's
 		-- reverse search there and the overlay is on the c-prefixed `c?`.
 		local expected = surface.name == "conflict_resolver" and "c?" or "?"
-		local found = false
+		if NO_HELP_KEY[surface.name] then
+			expected = nil
+		end
+		local found = expected == nil
 		for _, entry in ipairs(surface.keymaps) do
-			if entry.key == expected then
+			if expected and entry.key == expected then
 				found = true
 				assert_equals(
 					entry.desc, "help",
@@ -161,7 +170,10 @@ test("every panel surface binds ? to help", function()
 				)
 			end
 		end
-		assert_true(found, ("%s should bind %s"):format(surface.name, expected))
+		assert_true(
+			found,
+			("%s should bind %s"):format(surface.name, tostring(expected))
+		)
 	end
 end)
 

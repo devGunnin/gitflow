@@ -631,7 +631,11 @@ Buffer-local bindings active in the notifications panel (`:Gitflow notifications
 
 ## Command Palette
 
-Bindings active in the command palette (`:Gitflow palette`).
+Bindings active in the command palette (`:Gitflow palette`). The palette is a
+text-entry surface, so `?` is a character you type here, not a help key — the
+footer of each pane carries its keys instead.
+
+<!-- keys: palette -->
 
 ### Prompt (Insert/Normal Mode)
 
@@ -641,7 +645,7 @@ Bindings active in the command palette (`:Gitflow palette`).
 | `<Esc>` | Close palette |
 | `<Down>` / `<C-n>` / `<Tab>` / `<C-j>` | Move selection down |
 | `<Up>` / `<C-p>` / `<S-Tab>` / `<C-k>` | Move selection up |
-| `1`-`9` | Run the numbered command directly (see the index shown next to the first 9 entries) |
+| `1-9` | Run the numbered command directly (see the index shown next to the first 9 entries) |
 
 ### List (Normal Mode)
 
@@ -650,7 +654,7 @@ Bindings active in the command palette (`:Gitflow palette`).
 | `<CR>` | Select highlighted command |
 | `j` / `<C-n>` | Move selection down |
 | `k` / `<C-p>` | Move selection up |
-| `1`-`9` | Run the numbered command directly |
+| `1-9` | Run the numbered command directly |
 | `q` / `<Esc>` | Close palette |
 
 ## Cross-Panel Key Rules

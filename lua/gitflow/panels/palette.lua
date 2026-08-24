@@ -4,6 +4,7 @@ local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
 local matcher = require("gitflow.ui.matcher")
+local panel = require("gitflow.ui.panel")
 
 ---@class GitflowPaletteEntry
 ---@field name string
@@ -625,98 +626,98 @@ local function setup_prompt_autocmd()
 	})
 end
 
+-- ── keys ───────────────────────────────────────────────────────────────
+-- The palette's only key registry. It is not a `Panel` — it drives two
+-- buffers, a prompt the user types into and a list — so it registers itself
+-- and binds from here. `views` names which of the two buffers an entry binds
+-- on; `insert` says whether the prompt also binds it in insert mode, where
+-- the map is an <expr> returning "" so the key never reaches the text.
+local DIGITS = {}
+for digit = 1, 9 do
+	DIGITS[digit] = tostring(digit)
+end
+
+---@param key string
+local function execute_digit(key)
+	execute_numbered(M.state.numbered_entries[tonumber(key)])
+end
+
+---@type GitflowPanelKeymap[]
+local KEYMAPS = {
+	{ key = "1-9", keys = DIGITS, desc = "quick select", views = { "prompt" },
+		insert = "schedule", run = execute_digit },
+	{ key = "<CR>", desc = "confirm", views = { "prompt" }, essential = true,
+		mode = { "n", "i" }, run = function() execute_selected() end },
+	{ key = "<Down>/<C-n>/<Tab>/<C-j>", desc = "next",
+		keys = { "<Down>", "<C-n>", "<Tab>", "<C-j>" },
+		views = { "prompt" }, insert = "expr",
+		run = function() move_selection(1) end },
+	{ key = "<Up>/<S-Tab>/<C-p>/<C-k>", desc = "prev",
+		keys = { "<Up>", "<S-Tab>", "<C-p>", "<C-k>" },
+		views = { "prompt" }, insert = "expr",
+		run = function() move_selection(-1) end },
+	{ key = "<Esc>", desc = "close", views = { "prompt" }, essential = true,
+		mode = { "n", "i" }, run = function() M.close() end },
+
+	{ key = "1-9", keys = DIGITS, desc = "quick select", views = { "list" },
+		run = execute_digit },
+	{ key = "<CR>", desc = "select", views = { "list" }, essential = true,
+		run = function() execute_selected() end },
+	{ key = "j/k", keys = { "j", "k" }, desc = "move", views = { "list" },
+		run = function(key)
+			move_selection(key == "j" and 1 or -1)
+		end },
+	{ key = "<C-n>/<C-p>", keys = { "<C-n>", "<C-p>" }, hint = false,
+		views = { "list" },
+		run = function(key)
+			move_selection(key == "<C-n>" and 1 or -1)
+		end },
+	{ key = "q", desc = "close", views = { "list" }, essential = true,
+		run = function() M.close() end },
+	{ key = "<Esc>", hint = false, views = { "list" },
+		run = function() M.close() end },
+}
+
+panel.register_surface({
+	name = "palette",
+	title = "Gitflow Command Palette",
+	keymaps = KEYMAPS,
+})
+
 local function apply_keymaps()
 	local prompt_bufnr = M.state.prompt_bufnr
 	local list_bufnr = M.state.list_bufnr
 	if not prompt_bufnr or not list_bufnr then
 		return
 	end
+	local cfg = M.state.cfg or require("gitflow.config").get()
+	panel.warn_overrides("palette", cfg)
 
-	local prompt_normal_opts = {
-		buffer = prompt_bufnr, silent = true, nowait = true,
-	}
-	local prompt_insert_opts = {
-		buffer = prompt_bufnr,
-		silent = true,
-		nowait = true,
-		expr = true,
-	}
-	local list_opts = {
-		buffer = list_bufnr, silent = true, nowait = true,
-	}
-	local prompt_navigation_keys = {
-		{ key = "<Down>", delta = 1 },
-		{ key = "<Up>", delta = -1 },
-		{ key = "<C-n>", delta = 1 },
-		{ key = "<C-p>", delta = -1 },
-		{ key = "<Tab>", delta = 1 },
-		{ key = "<S-Tab>", delta = -1 },
-		{ key = "<C-j>", delta = 1 },
-		{ key = "<C-k>", delta = -1 },
-	}
-
-	vim.keymap.set({ "n", "i" }, "<Esc>", function()
-		M.close()
-	end, prompt_normal_opts)
-	vim.keymap.set({ "n", "i" }, "<CR>", function()
-		execute_selected()
-	end, prompt_normal_opts)
-	for _, mapping in ipairs(prompt_navigation_keys) do
-		vim.keymap.set("n", mapping.key, function()
-			move_selection(mapping.delta)
-		end, prompt_normal_opts)
-		vim.keymap.set("i", mapping.key, function()
-			move_selection(mapping.delta)
-			return ""
-		end, prompt_insert_opts)
+	for _, entry in ipairs(panel.surface_keymaps("palette", cfg)) do
+		local bufnr = entry.views[1] == "prompt" and prompt_bufnr or list_bufnr
+		for _, key in ipairs(panel.bound_keys(entry)) do
+			vim.keymap.set(entry.mode or "n", key, function()
+				entry.run(key)
+			end, { buffer = bufnr, silent = true, nowait = true })
+			if entry.insert then
+				-- Deferred for the digits: they fire on the keystroke that
+				-- would otherwise be inserted, and closing the palette from
+				-- inside an <expr> map is not safe.
+				local deferred = entry.insert == "schedule"
+				vim.keymap.set("i", key, function()
+					if deferred then
+						vim.schedule(function() entry.run(key) end)
+					else
+						entry.run(key)
+					end
+					return ""
+				end, {
+					buffer = prompt_bufnr, silent = true, nowait = true,
+					expr = true,
+				})
+			end
+		end
 	end
-
-	for i = 1, 9 do
-		local num_key = tostring(i)
-		vim.keymap.set("n", num_key, function()
-			local entry = M.state.numbered_entries[i]
-			if entry then
-				execute_numbered(entry)
-			end
-		end, prompt_normal_opts)
-		vim.keymap.set("i", num_key, function()
-			local entry = M.state.numbered_entries[i]
-			if entry then
-				vim.schedule(function()
-					execute_numbered(entry)
-				end)
-			end
-			return ""
-		end, prompt_insert_opts)
-		vim.keymap.set("n", num_key, function()
-			local entry = M.state.numbered_entries[i]
-			if entry then
-				execute_numbered(entry)
-			end
-		end, list_opts)
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		execute_selected()
-	end, list_opts)
-	vim.keymap.set("n", "j", function()
-		move_selection(1)
-	end, list_opts)
-	vim.keymap.set("n", "k", function()
-		move_selection(-1)
-	end, list_opts)
-	vim.keymap.set("n", "<C-n>", function()
-		move_selection(1)
-	end, list_opts)
-	vim.keymap.set("n", "<C-p>", function()
-		move_selection(-1)
-	end, list_opts)
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, list_opts)
-	vim.keymap.set("n", "<Esc>", function()
-		M.close()
-	end, list_opts)
 end
 
 function M.close()
