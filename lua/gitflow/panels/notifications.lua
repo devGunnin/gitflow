@@ -1,7 +1,7 @@
-local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local icons = require("gitflow.icons")
 local notifications = require("gitflow.notifications")
 
@@ -13,20 +13,56 @@ local notifications = require("gitflow.notifications")
 ---@field line_context table<integer, GitflowNotificationContext>
 
 local M = {}
-local NOTIF_FLOAT_TITLE = "Gitflow Notifications"
-local NOTIF_FLOAT_FOOTER =
-	" <CR> open · r refresh · c clear · 1 error · 2 warn · 3 info · 0 all · q close "
-local NOTIF_HIGHLIGHT_NS =
-	vim.api.nvim_create_namespace("gitflow_notifications_hl")
 
 ---@type GitflowNotificationsPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	filter_level = nil,
 	line_context = {},
 }
+
+---Set the severity filter and repaint.
+---@param level integer|nil
+local function filter_to(level)
+	M.state.filter_level = level
+	M.refresh()
+end
+
+local P = panel.new({
+	name = "notifications",
+	title = "Gitflow Notifications",
+	filetype = "gitflownotifications",
+	loading = "Loading notifications…",
+	state = M.state,
+	entry_maps = { "line_context" },
+	keymaps = {
+		{ key = "<CR>", desc = "open", run = function()
+			M.open_context_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "c", desc = "clear", run = function()
+			notifications.clear()
+			M.refresh()
+		end },
+		{ key = "1", desc = "error", run = function()
+			filter_to(vim.log.levels.ERROR)
+		end },
+		{ key = "2", desc = "warn", run = function()
+			filter_to(vim.log.levels.WARN)
+		end },
+		{ key = "3", desc = "info", run = function()
+			filter_to(vim.log.levels.INFO)
+		end },
+		{ key = "0", desc = "all", run = function()
+			filter_to(nil)
+		end },
+		{ key = "q", desc = "close", run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@type table<integer, string>
 local level_label = {
@@ -87,104 +123,9 @@ local function context_label(context)
 	return table.concat(context.command_args, " ")
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("notifications", {
-			filetype = "gitflownotifications",
-			lines = components.loading_lines("Loading notifications…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-
-	if M.state.winid
-		and vim.api.nvim_win_is_valid(M.state.winid)
-	then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "notifications",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = NOTIF_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer
-				and NOTIF_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "notifications",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "c", function()
-		notifications.clear()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "1", function()
-		M.state.filter_level = vim.log.levels.ERROR
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "2", function()
-		M.state.filter_level = vim.log.levels.WARN
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "3", function()
-		M.state.filter_level = vim.log.levels.INFO
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "0", function()
-		M.state.filter_level = nil
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "<CR>", function()
-		M.open_context_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@param entries GitflowNotificationEntry[]
 local function render(entries)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Notifications", render_opts)
+	local B = P:begin_render()
 
 	local filter = M.state.filter_level
 
@@ -231,15 +172,15 @@ local function render(entries)
 			local message_lines = split_message_lines(entry.message)
 
 			local chunks = {
-				{ " ", nil },
+				{ components.spacing.edge, nil },
 				{ level_icon(entry.level) .. "  ", hl },
 				{ ts .. "  ", "GitflowRelTime" },
 				{ ("[%s]"):format(severity), hl },
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 				{ message_lines[1] or "", "GitflowCardTitle" },
 			}
 			if has_linked_context(entry.context) then
-				chunks[#chunks + 1] = { "    ", nil }
+				chunks[#chunks + 1] = { components.spacing.indent, nil }
 				chunks[#chunks + 1] = {
 					icons.get("ui", "chevron") .. " ", "GitflowHintKey",
 				}
@@ -255,30 +196,26 @@ local function render(entries)
 			-- Continuation lines are indented with four spaces.
 			for idx = 2, #message_lines do
 				B:push({
-					{ "    ", nil },
+					{ components.spacing.indent, nil },
 					{ message_lines[idx], hl },
 				})
 			end
 		end
 	end
 
+	P:push_hints(B)
+
 	-- In-buffer footer: entry count only — never a branch label.
 	B:blank()
-	B:raw(ui_render.separator(render_opts), "GitflowSeparator")
+	B:raw(ui_render.separator(P:render_opts()), "GitflowSeparator")
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ ("%d entries"):format(#filtered), "GitflowFooter" },
 	})
 
-	B:flush("notifications", M.state.bufnr, NOTIF_HIGHLIGHT_NS)
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B) then
+		M.state.line_context = line_context
 	end
-
-	components.cursorline(M.state.winid, true)
-	M.state.line_context = line_context
 end
 
 ---@param cfg GitflowConfig
@@ -286,7 +223,9 @@ function M.open(cfg)
 	M.state.cfg = cfg
 	M.state.filter_level = nil
 	M.state.line_context = {}
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -341,28 +280,14 @@ function M.refresh()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("notifications")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("notifications")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.filter_level = nil
 	M.state.line_context = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

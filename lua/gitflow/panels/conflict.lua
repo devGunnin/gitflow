@@ -3,7 +3,7 @@ local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
 local conflict_view = require("gitflow.ui.conflict")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 local icons = require("gitflow.icons")
 
@@ -23,25 +23,12 @@ local icons = require("gitflow.icons")
 ---@field auto_continue_prompted boolean
 ---@field auto_continue_operation GitflowConflictOperation|nil
 ---@field prompt_when_resolved boolean
+---@field request_id integer
 
 local M = {}
-local CONFLICT_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_conflict_hl")
-local CONFLICT_FLOAT_TITLE = "Gitflow Conflicts"
-local CONFLICT_FLOAT_FOOTER =
-	"<CR> open resolver  r refresh  C continue  A abort  q close"
--- Split-layout counterpart of CONFLICT_FLOAT_FOOTER; keep the two in sync.
-local CONFLICT_HINTS = {
-	{ "<CR>", "open resolver" },
-	{ "r", "refresh" },
-	{ "C", "continue" },
-	{ "A", "abort" },
-	{ "q", "close" },
-}
 
 ---@type GitflowConflictPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	files = {},
 	line_entries = {},
@@ -51,6 +38,34 @@ M.state = {
 	auto_continue_operation = nil,
 	prompt_when_resolved = false,
 }
+
+local P = panel.new({
+	name = "conflict",
+	title = "Gitflow Conflicts",
+	filetype = "gitflowconflict",
+	loading = "Loading conflicts…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "open resolver", essential = true, run = function()
+			M.open_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "R", hint = false, run = function()
+			M.refresh()
+		end },
+		{ key = "C", desc = "continue", essential = true, run = function()
+			M.continue_operation()
+		end },
+		{ key = "A", desc = "abort", destructive = true, run = function()
+			M.abort_operation()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@param result GitflowGitResult|nil
 ---@param fallback string
@@ -92,128 +107,33 @@ local function reset_auto_continue_prompt()
 	M.state.auto_continue_operation = nil
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("conflict", {
-			filetype = "gitflowconflict",
-			lines = components.loading_lines("Loading conflicts…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "conflict",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = CONFLICT_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and CONFLICT_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "conflict",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.open_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "R", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "C", function()
-		M.continue_operation()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "A", function()
-		M.abort_operation()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
----Paint a single styled state block (loading / error) with shared chrome.
----@param paint fun(B: GitflowRenderBuilder)
-local function render_state(paint)
-	local render_opts = { bufnr = M.state.bufnr, winid = M.state.winid }
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Conflicts", render_opts)
-	B:blank()
-	paint(B)
-	B:flush("conflict", M.state.bufnr, CONFLICT_HIGHLIGHT_NS)
-	M.state.line_entries = {}
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-end
-
 local function render_loading()
-	render_state(function(B)
-		components.loading(B, "Scanning for conflicts…")
-	end)
+	P:render_loading("Scanning for conflicts…")
 end
 
 ---@param message string
 local function render_error(message)
-	render_state(function(B)
-		components.error_state(B, "Could not list conflicts", {
-			detail = message,
-			hint = "Press r to retry · q to close",
-		})
-	end)
+	P:render_error("Could not list conflicts", {
+		detail = message,
+		hint = "Press r to retry \u{b7} q to close",
+	})
 end
 
 ---@param files GitflowConflictFileEntry[]
 ---@param operation GitflowConflictOperation|nil
 local function render(files, operation)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Conflicts", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: active operation + unresolved count. When everything is
 	-- resolved the count flips to an "all resolved" affordance in the ok accent.
 	local op = operation_label(operation)
 	local resolved = #files == 0
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("ui", "merge") .. "  ", "GitflowSectionIcon" },
 		{ op ~= "none" and (op .. " in progress") or "No active operation",
 			"GitflowSectionTitle" },
-		{ "     ", nil },
+		{ components.separators.field, nil },
 		{
 			resolved and (icons.get("git_state", "staged") .. " all resolved")
 				or ("%s %d unresolved"):format(
@@ -246,7 +166,7 @@ local function render(files, operation)
 	else
 		for _, item in ipairs(files) do
 			local line_no = B:push({
-				{ " ", nil },
+				{ components.spacing.edge, nil },
 				{ icons.get("git_state", "conflict") .. "  ", "GitflowConflictRemote" },
 				{ item.path, "GitflowCardTitle" },
 				{ ("   (%d hunk%s)"):format(
@@ -257,7 +177,7 @@ local function render(files, operation)
 
 			if item.marker_error then
 				B:push({
-					{ "     ", nil },
+					{ components.spacing.indent .. components.spacing.edge, nil },
 					{ icons.get("ui", "error") .. " ", "GitflowStateErrorIcon" },
 					{ item.marker_error, "GitflowStateError" },
 				})
@@ -265,18 +185,13 @@ local function render(files, operation)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, CONFLICT_HINTS)
+	P:push_hints(B)
 
-	B:flush("conflict", M.state.bufnr, CONFLICT_HIGHLIGHT_NS)
 	M.state.files = files
-	M.state.line_entries = line_entries
 	M.state.active_operation = operation
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B) then
+		M.state.line_entries = line_entries
 	end
-	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowConflictFileEntry|nil
@@ -373,18 +288,27 @@ end
 function M.open(cfg, opts)
 	M.state.cfg = cfg
 	M.state.pending_open_path = opts and opts.path or nil
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	render_loading()
 	M.refresh()
 end
 
 function M.refresh()
+	local request_id = P:next_request()
 	git_conflict.active_operation({}, function(operation_err, operation)
+		if not P:is_active(request_id) then
+			return
+		end
 		if operation_err then
 			utils.notify(operation_err, vim.log.levels.WARN)
 		end
 
 		git_conflict.list({}, function(err, paths)
+			if not P:is_active(request_id) then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
 				render_error(err)
@@ -519,20 +443,7 @@ function M.close()
 		conflict_view.close()
 	end
 
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("conflict")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("conflict")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.cfg = nil
 	M.state.files = {}
 	M.state.line_entries = {}
@@ -545,10 +456,7 @@ end
 
 ---@return boolean
 function M.is_open()
-	return M.state.winid ~= nil
-		and vim.api.nvim_win_is_valid(M.state.winid)
-		and M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:has_window() and P:is_open()
 end
 
 return M

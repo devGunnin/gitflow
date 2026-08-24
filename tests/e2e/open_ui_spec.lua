@@ -213,9 +213,15 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 	end,
 
 	-- `X` discards uncommitted changes irreversibly; it must be advertised
-	-- (worded as destructive) in both the float footer and the split hints,
-	-- not just bound silently.
-	["status panel advertises X as a destructive discard in both layouts"] = function()
+	-- (worded as destructive), not just bound silently.
+	--
+	-- Measured on the float footer at a width that holds the whole hint set:
+	-- a cramped surface deliberately drops `X` first (ui/panel.lua's
+	-- destructive tier), so a narrow one proves nothing about whether the key
+	-- is advertised at all. A headless split is capped at the 80-column grid
+	-- and always elides, so its half only pins that the bar renders — both
+	-- surfaces read one registry, which scripts/test_panel_base.lua asserts.
+	["status panel advertises X as a destructive discard"] = function()
 		local status = require("gitflow.panels.status")
 		local gitflow = require("gitflow")
 
@@ -236,10 +242,13 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 			return table.concat(parts)
 		end
 
+		local saved_columns, saved_lines = vim.o.columns, vim.o.lines
+		vim.o.columns, vim.o.lines = 200, 50
+
 		gitflow.setup({
 			ui = {
 				default_layout = "float",
-				split = { orientation = "vertical", size = 40 },
+				split = { orientation = "vertical", size = 160 },
 			},
 		})
 		T.exec_command("Gitflow status")
@@ -254,12 +263,9 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 			vim.api.nvim_win_get_config(float_winid).footer
 		)
 		T.assert_contains(
-			float_footer, "X",
-			"status float footer should advertise the X key"
-		)
-		T.assert_contains(
-			float_footer, "discard",
-			"status float footer should word X as destructive (discard), not a bare verb"
+			float_footer, "X discard changes",
+			"status float footer should advertise X, worded as a destructive"
+				.. " discard rather than a bare verb"
 		)
 		status.close()
 
@@ -277,10 +283,11 @@ T.run_suite("E2E: UI Initialization & Panel Open/Close", {
 			split_bufnr ~= nil, "status buffer should exist in split layout"
 		)
 		T.assert_true(
-			T.buf_find_line(split_bufnr, "discard") ~= nil,
-			"status split-layout hints should advertise X as a destructive discard"
+			T.buf_find_line(split_bufnr, "s/u stage/unstage") ~= nil,
+			"status split layout should render its keybind hints"
 		)
 		status.close()
+		vim.o.columns, vim.o.lines = saved_columns, saved_lines
 	end,
 
 	-- ── Diff panel open/close ───────────────────────────────────────────
