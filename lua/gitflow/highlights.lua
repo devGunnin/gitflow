@@ -209,9 +209,6 @@ local function build_default_groups(palette, lanes)
 		-- Window chrome — themed accent colors
 		GitflowBorder = { fg = palette.accent_primary },
 		GitflowTitle = vim.deepcopy(title_attrs),
-		-- Byte-identical alias of GitflowTitle, kept so existing user overrides
-		-- keep working. No gitflow code draws with it.
-		GitflowHeader = vim.deepcopy(title_attrs),
 		GitflowFooter = { fg = palette.accent_primary, italic = true },
 		GitflowSeparator = { fg = palette.separator_fg },
 		GitflowNormal = { link = "NormalFloat" },

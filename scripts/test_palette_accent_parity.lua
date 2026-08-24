@@ -179,7 +179,6 @@ end
 local chrome_groups = {
 	"GitflowBorder",
 	"GitflowTitle",
-	"GitflowHeader",
 	"GitflowFooter",
 	"GitflowFormLabel",
 	"GitflowPaletteEntryIcon",
@@ -335,13 +334,6 @@ assert_equals(
 	highlights.DEFAULT_GROUPS.GitflowGraphBranch3.fg,
 	highlights.GRAPH_LANES_DARK[1],
 	"graph lane 3 should revert to the dark lane palette"
-)
-
--- GitflowHeader is a back-compat alias of GitflowTitle: one style, one source.
-assert_equals(
-	vim.inspect(highlights.DEFAULT_GROUPS.GitflowHeader),
-	vim.inspect(highlights.DEFAULT_GROUPS.GitflowTitle),
-	"GitflowHeader should be identical to GitflowTitle"
 )
 
 -- User overrides should still take precedence over palette

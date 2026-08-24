@@ -171,7 +171,7 @@ local bufnr = vim.api.nvim_create_buf(false, true)
 local B = ui_render.builder()
 B:raw("Gitflow Test Panel", "GitflowTitle")
 B:raw(ui_render.separator(20), "GitflowSeparator")
-B:raw("Section Header", "GitflowHeader")
+B:raw("Section Header", "GitflowSectionTitle")
 B:raw("  entry one")
 B:raw("  entry two")
 B:blank()
@@ -192,7 +192,7 @@ assert_equals(
 )
 assert_equals(first_group(0), "GitflowTitle", "title line should carry GitflowTitle")
 assert_equals(first_group(1), "GitflowSeparator", "rule line should carry GitflowSeparator")
-assert_equals(first_group(2), "GitflowHeader", "entry line should carry its own group")
+assert_equals(first_group(2), "GitflowSectionTitle", "entry line should carry its own group")
 assert_equals(first_group(6), "GitflowFooter", "footer line should carry GitflowFooter")
 
 -- Re-rendering different content replaces the old spans rather than layering.
@@ -234,7 +234,6 @@ local highlights = require("gitflow.highlights")
 local themed_groups = {
 	"GitflowBorder",
 	"GitflowTitle",
-	"GitflowHeader",
 	"GitflowFooter",
 	"GitflowSeparator",
 }
@@ -254,18 +253,12 @@ assert_equals(normal_attrs.link, "NormalFloat", "GitflowNormal should link to No
 -- Accent color consistency: border and title share the same fg
 local border_fg = highlights.DEFAULT_GROUPS.GitflowBorder.fg
 local title_fg = highlights.DEFAULT_GROUPS.GitflowTitle.fg
-local header_fg = highlights.DEFAULT_GROUPS.GitflowHeader.fg
 assert_equals(border_fg, title_fg, "border and title should share accent color")
-assert_equals(title_fg, header_fg, "title and header should share accent color")
 
--- GitflowTitle and GitflowHeader should be bold
+-- GitflowTitle should be bold
 assert_true(
 	highlights.DEFAULT_GROUPS.GitflowTitle.bold == true,
 	"GitflowTitle should be bold"
-)
-assert_true(
-	highlights.DEFAULT_GROUPS.GitflowHeader.bold == true,
-	"GitflowHeader should be bold"
 )
 
 -- GitflowFooter should be italic

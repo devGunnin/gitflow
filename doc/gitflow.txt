@@ -539,7 +539,7 @@ Palette values are defined in `lua/gitflow/highlights.lua` and can be
 referenced from user highlight overrides:
 
     Name                Dark         Light        Used by ~
-    accent_primary      #56B6C2      #0E7490      Border, Title, Header, Footer, icons
+    accent_primary      #56B6C2      #0E7490      Border, Title, Footer, icons
     accent_secondary    #DCA561      #B5651D      Palette header bar background
     separator_fg        #3E4452      #C8CCD4      Separator lines
     backdrop_bg         #000000      #E8E8E8      Palette backdrop overlay
@@ -554,7 +554,6 @@ group individually: >lua
       highlights = {
         GitflowBorder  = { fg = "#98C379" },
         GitflowTitle   = { fg = "#98C379", bold = true },
-        GitflowHeader  = { fg = "#98C379", bold = true },
         GitflowFooter  = { fg = "#98C379", italic = true },
       },
     })
@@ -625,7 +624,6 @@ Accent-colored groups (dark-background defaults shown below; light mode uses
     Group                       Default Attrs ~
     GitflowBorder               fg=#56B6C2
     GitflowTitle                fg=#56B6C2, bold
-    GitflowHeader               fg=#56B6C2, bold  (alias of GitflowTitle)
     GitflowFooter               fg=#56B6C2, italic
     GitflowSeparator            fg=#3E4452
     GitflowFormLabel            fg=#56B6C2, bold
@@ -648,7 +646,6 @@ colors, override them with link-based definitions: >lua
       highlights = {
         GitflowBorder = { link = "FloatBorder" },
         GitflowTitle  = { link = "Title" },
-        GitflowHeader = { link = "TabLineSel" },
         GitflowFooter = { link = "Comment" },
       },
     })

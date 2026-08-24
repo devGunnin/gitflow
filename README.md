@@ -324,7 +324,6 @@ require("gitflow").setup({
     GitflowBorder = { fg = "#98C379" },
     GitflowTitle  = { fg = "#98C379", bold = true },
     -- Or switch accent groups to colorscheme links
-    GitflowHeader = { link = "TabLineSel" },
     GitflowFooter = { link = "Comment" },
   },
 })
