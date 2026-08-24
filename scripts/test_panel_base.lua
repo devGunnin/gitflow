@@ -6,7 +6,10 @@
 --   * open -> refresh -> close leaves no buffer, window or registry entry;
 --   * a callback from a superseded request is dropped, never painted;
 --   * the split hint bar advertises exactly the keys the panel bound, and the
---     float footer advertises the same set (elided to fit, essentials kept);
+--     float footer advertises the same set (elided to fit: essentials kept,
+--     destructive verbs dropped first);
+--   * at the shipped default split width the bar still names what the panel
+--     is FOR, not just how to leave it;
 --   * open_float returning nil (terminal too small) leaves nothing half-open.
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
@@ -183,7 +186,102 @@ for _, name in ipairs(PANEL_NAMES) do
 					)
 				)
 			end
+			-- A cramped surface must not end up advertising mainly the key
+			-- you least want fat-fingered.
+			if hint.destructive and vim.fn.strdisplaywidth(narrow) > width then
+				assert_true(
+					narrow:find(hint[1] .. " " .. hint[2], 1, true) == nil,
+					("%s kept the destructive key %q on an overflowing footer")
+						:format(name, hint[1])
+				)
+			end
 		end
+	end)
+end
+
+-- ── the split bar at the width a split user actually gets ─────────────
+-- The chrome this change exists to unify is read at `ui.split.size`, not at
+-- an unlimited width. At that default the bar must fit, must still name the
+-- panel's primary verbs, and must not have been reduced to its destructive
+-- one plus the exit.
+
+local default_split_size = require("gitflow.config").defaults().ui.split.size
+local cfg_default_split = vim.tbl_deep_extend("force", vim.deepcopy(cfg), {
+	ui = { split = { size = default_split_size } },
+})
+
+---@type { name: string, view: string|nil, keep: string[], drop: string[] }[]
+local DEFAULT_SPLIT_BARS = {
+	{
+		name = "status",
+		keep = { "s/u stage/unstage", "cc commit", "q close" },
+		drop = { "X discard changes" },
+	},
+	{
+		name = "worktree",
+		keep = { "<CR> switch", "a add", "q close" },
+		drop = { "d/D remove" },
+	},
+	{
+		name = "branch",
+		view = "list",
+		keep = { "<CR> switch", "c create", "q close" },
+		drop = { "D force delete" },
+	},
+}
+
+for _, case in ipairs(DEFAULT_SPLIT_BARS) do
+	test(("%s: the default-width split bar keeps the primary verbs"):format(
+		case.name
+	), function()
+		local P = panel_object("gitflow.panels." .. case.name)
+		assert_true(
+			P:ensure_window(cfg_default_split),
+			("%s should open in a split"):format(case.name)
+		)
+		local ok, err = pcall(function()
+			assert_equals(
+				P:split_width(), default_split_size,
+				"the split should be the shipped default width"
+			)
+			local B = P:begin_render()
+			P:push_hints(B, case.view)
+			assert_true(P:paint(B), ("%s should paint"):format(case.name))
+
+			local bar
+			for _, line in ipairs(
+				vim.api.nvim_buf_get_lines(P.state.bufnr, 0, -1, false)
+			) do
+				if line:find("q close", 1, true) then
+					bar = line
+				end
+			end
+			assert_true(bar ~= nil, ("%s should render a hint bar"):format(case.name))
+			assert_true(
+				vim.fn.strdisplaywidth(bar) <= default_split_size,
+				("%s hint bar overflows its split (%d > %d): %q"):format(
+					case.name, vim.fn.strdisplaywidth(bar),
+					default_split_size, bar
+				)
+			)
+			for _, hint in ipairs(case.keep) do
+				assert_true(
+					bar:find(hint, 1, true) ~= nil,
+					("%s dropped %q from its default-width bar: %q"):format(
+						case.name, hint, bar
+					)
+				)
+			end
+			for _, hint in ipairs(case.drop) do
+				assert_true(
+					bar:find(hint, 1, true) == nil,
+					("%s kept the destructive %q on its default-width bar: %q")
+						:format(case.name, hint, bar)
+				)
+			end
+		end)
+		P:close()
+		assert_true(ok, tostring(err))
 	end)
 end
 
@@ -241,15 +339,65 @@ end
 -- after, and its marker MUST appear: that is what keeps the stale assertion
 -- from passing vacuously.
 
+---A `prepare` for the picker-first panels: their `open` starts a branch
+---picker that is not the chain under test, so drop its result rather than let
+---it paint mid-assertion.
+---@return fun()  teardown
+local function drop_branch_picker()
+	local git_branch = require("gitflow.git.branch")
+	local real_list = git_branch.list
+	git_branch.list = function() end
+	return function()
+		git_branch.list = real_list
+	end
+end
+
 ---@class GitflowStaleGuardCase
 ---@field name string  panel module name
+---@field label string|nil  which guard, when a panel has more than one case
 ---@field module string  git module whose lister the refresh chain calls
 ---@field fn string  the lister; its last argument is the callback
----@field prepare fun(mod: table)|nil  state a refresh needs before it will run
+---@field before integer|nil  earlier calls to answer before holding one, so a
+---                          case can reach a guard deeper down the chain
+---@field answer fun(cb: function)|nil  how those earlier calls are answered
+---@field prepare fun(mod: table): (fun()|nil)  run before `open`; may return a teardown
+---@field arm fun(mod: table)|nil  put the panel in the stage whose refresh
+---                               reaches the lister (`open` starts a picker)
 
 ---@type GitflowStaleGuardCase[]
 local STALE_GUARD_PANELS = {
-	{ name = "status", module = "gitflow.git.status", fn = "fetch" },
+	{ name = "status", label = "the fetch guard",
+		module = "gitflow.git.status", fn = "fetch" },
+	{
+		-- status's decisive guard is the last one, not the first: the chain
+		-- runs branch -> status -> upstream -> outgoing log -> incoming log,
+		-- and only the innermost callback stands between a superseded chain
+		-- and a full repaint. Answer the outgoing log, hold the incoming one.
+		name = "status",
+		label = "the paint-adjacent guard",
+		module = "gitflow.git.log",
+		fn = "list",
+		before = 1,
+		answer = function(cb)
+			cb(nil, {})
+		end,
+		prepare = function()
+			-- The chain only reaches the logs when HEAD has an upstream, and
+			-- the checkout under test may not: answer rev-parse ourselves.
+			local git = require("gitflow.git")
+			local real_git = git.git
+			git.git = function(args, opts, cb)
+				if args and args[1] == "rev-parse" then
+					cb({ code = 0, stdout = "origin/main\n", stderr = "" })
+					return
+				end
+				return real_git(args, opts, cb)
+			end
+			return function()
+				git.git = real_git
+			end
+		end,
+	},
 	{ name = "log", module = "gitflow.git.log", fn = "list" },
 	{ name = "branch", module = "gitflow.git.branch", fn = "list" },
 	{ name = "stash", module = "gitflow.git.stash", fn = "list" },
@@ -259,6 +407,7 @@ local STALE_GUARD_PANELS = {
 	{ name = "revert", module = "gitflow.git.revert", fn = "list_commits" },
 	{ name = "conflict", module = "gitflow.git.conflict", fn = "list" },
 	{ name = "worktree", module = "gitflow.git.worktree", fn = "list" },
+	{ name = "labels", module = "gitflow.gh.labels", fn = "list" },
 	{
 		name = "blame",
 		module = "gitflow.git.blame",
@@ -267,7 +416,43 @@ local STALE_GUARD_PANELS = {
 			mod.state.filepath = project_root .. "/README.md"
 		end,
 	},
+	{
+		name = "cherry_pick",
+		module = "gitflow.git.cherry_pick",
+		fn = "list_unique_commits",
+		prepare = drop_branch_picker,
+		arm = function(mod)
+			mod.state.source_branch = "HEAD"
+			mod.state.stage = "commits"
+		end,
+	},
+	{
+		name = "rebase",
+		module = "gitflow.git.rebase",
+		fn = "list_commits",
+		prepare = drop_branch_picker,
+		arm = function(mod)
+			mod.state.base_ref = "HEAD"
+			mod.state.stage = "normal"
+		end,
+	},
 }
+
+test("every guard-carrying panel has a stale-guard case", function()
+	local covered = {}
+	for _, case in ipairs(STALE_GUARD_PANELS) do
+		covered[case.name] = true
+	end
+	for _, name in ipairs(PANEL_NAMES) do
+		-- notifications reads memory synchronously: nothing to supersede.
+		if name ~= "notifications" then
+			assert_true(
+				covered[name],
+				("%s consults the stale guard but no case drives it"):format(name)
+			)
+		end
+	end
+end)
 
 ---@param P table
 ---@return string
@@ -280,7 +465,10 @@ local function buffer_text(P)
 end
 
 for _, case in ipairs(STALE_GUARD_PANELS) do
-	test(("%s: a superseded callback never paints"):format(case.name), function()
+	local title = ("%s: a superseded callback never paints%s"):format(
+		case.name, case.label and (" (" .. case.label .. ")") or ""
+	)
+	test(title, function()
 		local modname = "gitflow.panels." .. case.name
 		local mod = require(modname)
 		local P = panel_object(modname)
@@ -290,9 +478,17 @@ for _, case in ipairs(STALE_GUARD_PANELS) do
 		local real_lister = git_mod[case.fn]
 		local real_notify = utils.notify
 		local notified = {}
+		-- Calls the case wants answered rather than held, counted per chain
+		-- so a deeper guard can be reached without racing the previous one.
+		local answered = 0
 		git_mod[case.fn] = function(...)
-			local args = { ... }
-			held[#held + 1] = args[select("#", ...)]
+			local cb = (select(select("#", ...), ...))
+			if answered < (case.before or 0) then
+				answered = answered + 1
+				case.answer(cb)
+				return
+			end
+			held[#held + 1] = cb
 		end
 		utils.notify = function(message)
 			notified[#notified + 1] = tostring(message)
@@ -304,6 +500,7 @@ for _, case in ipairs(STALE_GUARD_PANELS) do
 		---@return function
 		local function refresh_and_hold()
 			local before_count = #held
+			answered = 0
 			mod.refresh()
 			assert_true(
 				vim.wait(5000, function()
@@ -314,19 +511,24 @@ for _, case in ipairs(STALE_GUARD_PANELS) do
 			return held[#held]
 		end
 
+		local teardown_prepare
 		local ok, err = pcall(function()
 			if case.prepare then
-				case.prepare(mod)
+				teardown_prepare = case.prepare(mod)
 			end
 			mod.open(cfg, {})
-			assert_true(
-				vim.wait(5000, function()
-					return #held >= 1
-				end, 10),
-				("%s never reached %s.%s on open"):format(
-					case.name, case.module, case.fn
+			if case.arm then
+				case.arm(mod)
+			else
+				assert_true(
+					vim.wait(5000, function()
+						return #held >= 1
+					end, 10),
+					("%s never reached %s.%s on open"):format(
+						case.name, case.module, case.fn
+					)
 				)
-			)
+			end
 
 			local stale_cb = refresh_and_hold()
 			local live_cb = refresh_and_hold()
@@ -361,6 +563,9 @@ for _, case in ipairs(STALE_GUARD_PANELS) do
 
 		git_mod[case.fn] = real_lister
 		utils.notify = real_notify
+		if teardown_prepare then
+			teardown_prepare()
+		end
 		mod.close()
 		assert_true(ok, tostring(err))
 	end)
@@ -380,6 +585,14 @@ test("closing the window with :q invalidates the refresh chain", function()
 	assert_true(
 		not P:is_active(in_flight),
 		"closing the window must invalidate in-flight requests"
+	)
+	-- The generation bump only reaches requests already in flight. Every git
+	-- operation in the plugin refreshes the open panels, so a chain STARTED
+	-- after `:q` must be dropped too — it would paint a buffer nobody can see,
+	-- at the terminal's width rather than the split's.
+	assert_true(
+		not P:is_active(P:next_request()),
+		"a request started after :q must not be live either"
 	)
 	mod.close()
 end)
@@ -418,6 +631,65 @@ for _, name in ipairs(MAPPED_PANELS) do
 		mod.close()
 	end)
 end
+
+test("reopening the base picker drops the rows the last one left", function()
+	-- `b` flips rebase into the base stage synchronously while the new rows
+	-- load async, so <CR> on a commit row of the still-visible todo view used
+	-- to select whatever branch last occupied that line.
+	local mod = require("gitflow.panels.rebase")
+	local P = panel_object("gitflow.panels.rebase")
+	local git_branch = require("gitflow.git.branch")
+
+	local real_list, real_notify = git_branch.list, utils.notify
+	local notified = {}
+	git_branch.list = function() end
+	utils.notify = function(message)
+		notified[#notified + 1] = tostring(message)
+	end
+
+	mod.open(cfg)
+	local ok, err = pcall(function()
+		mod.state.base_ref = nil
+		mod.state.base_line_branches = { [1] = { name = "stale-branch" } }
+
+		mod.show_base_picker()
+
+		vim.api.nvim_set_current_win(P.state.winid)
+		vim.api.nvim_win_set_cursor(P.state.winid, { 1, 0 })
+		mod.select_base_branch()
+
+		assert_equals(
+			mod.state.base_ref, nil,
+			"<CR> picked a base from the previous picker's rows"
+		)
+		assert_true(
+			table.concat(notified, "\n"):find("Move cursor to a branch", 1, true)
+				~= nil,
+			"<CR> over an unloaded picker should say there is no branch there"
+		)
+	end)
+	git_branch.list, utils.notify = real_list, real_notify
+	mod.close()
+	assert_true(ok, tostring(err))
+end)
+
+test("a second entry map is invalidated too once its panel declares it", function()
+	-- rebase keeps the base picker's rows outside `line_entries`; the base
+	-- clears whatever the panel registered, so it cannot be forgotten.
+	local P = panel_object("gitflow.panels.rebase")
+
+	assert_true(P:ensure_window(cfg), "rebase should open in a split")
+	local ok, err = pcall(function()
+		P.state.base_line_branches = { [1] = { name = "stale-branch" } }
+		P:render_error("Boom", { hint = "b picks another base" })
+		assert_equals(
+			next(P.state.base_line_branches), nil,
+			"rebase kept the base picker's rows across the error state"
+		)
+	end)
+	P:close()
+	assert_true(ok, tostring(err))
+end)
 
 test("a destructive key resolves to nothing once status drops to its error state", function()
 	local mod = require("gitflow.panels.status")

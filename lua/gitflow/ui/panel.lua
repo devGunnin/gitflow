@@ -23,7 +23,8 @@ local components = require("gitflow.ui.components")
 ---@field nowait boolean|nil  default true
 ---@field hint boolean|nil  false to bind without advertising
 ---@field bind boolean|nil  false to advertise a key another entry already binds
----@field essential boolean|nil  never dropped when the float footer overflows
+---@field essential boolean|nil  a primary verb or the way out: kept when hints elide
+---@field destructive boolean|nil  irreversible: the first hint dropped when they elide
 
 ---@class GitflowPanelSpec
 ---@field name string  buffer/window registry name
@@ -31,6 +32,8 @@ local components = require("gitflow.ui.components")
 ---@field filetype string|nil
 ---@field loading string|nil  first-paint placeholder label
 ---@field state table|nil  the panel's own state table to adopt
+---@field entry_maps string[]|nil  state keys holding line->entry maps
+---                                (default `{ "line_entries" }`)
 ---@field keymaps GitflowPanelKeymap[]|nil
 ---@field on_close fun()|nil  extra teardown when the window closes
 
@@ -49,6 +52,15 @@ Panel.__index = Panel
 function M.new(spec)
 	assert(type(spec.name) == "string" and spec.name ~= "", "panel needs a name")
 	assert(type(spec.title) == "string" and spec.title ~= "", "panel needs a title")
+	for _, entry in ipairs(spec.keymaps or {}) do
+		-- The two hint tiers are opposite ends of the drop order.
+		assert(
+			not (entry.essential and entry.destructive),
+			("panel %s: %s cannot be both essential and destructive"):format(
+				spec.name, tostring(entry.key)
+			)
+		)
+	end
 
 	local state = spec.state or {}
 	state.bufnr = nil
@@ -61,6 +73,7 @@ function M.new(spec)
 		filetype = spec.filetype,
 		loading = spec.loading,
 		keymaps = spec.keymaps or {},
+		entry_maps = spec.entry_maps or { "line_entries" },
 		on_close = spec.on_close,
 		ns = vim.api.nvim_create_namespace("gitflow_" .. spec.name .. "_hl"),
 		state = state,
@@ -71,8 +84,11 @@ end
 -- Every async chain a panel starts captures the id current at its start and
 -- drops its result if a newer one has begun. It is bumped on open, on refresh
 -- and both ways a panel closes — `M.close()` and the window going away under
--- `:q` — so a slow response can neither repaint a superseded view, nor paint
--- into a buffer nobody can see, nor resurrect a closed panel.
+-- `:q` — so a slow response can neither repaint a superseded view nor
+-- resurrect a closed panel. The generation alone does not cover a chain
+-- STARTED after `:q`, so `is_active` also demands a live window: a `:q` leaves
+-- the buffer alive, and painting into it would both waste the work and redraw
+-- at the wrong width.
 
 ---Start a new request generation and return its id.
 ---@return integer
@@ -82,14 +98,15 @@ function Panel:next_request()
 end
 
 ---Whether `request_id` is still the live generation and the panel can be
----painted (buffer alive). False means the caller's result is stale — drop it.
+---painted: buffer alive AND on screen. False means the caller's result is
+---stale or invisible — drop it.
 ---@param request_id integer
 ---@return boolean
 function Panel:is_active(request_id)
 	if self.state.request_id ~= request_id then
 		return false
 	end
-	return self:is_open()
+	return self:is_open() and self:has_window()
 end
 
 ---@return boolean
@@ -146,7 +163,9 @@ function Panel:hints(view)
 	for _, entry in ipairs(self.keymaps) do
 		if entry.hint ~= false and entry.desc and shows_in_view(entry, view) then
 			pairs_out[#pairs_out + 1] = {
-				entry.key, entry.desc, essential = entry.essential,
+				entry.key, entry.desc,
+				essential = entry.essential,
+				destructive = entry.destructive,
 			}
 		end
 	end
@@ -166,10 +185,14 @@ function Panel:keymap_entries(view)
 	return entries
 end
 
----Reduce `hints` to what fits `width`, dropping conveniences from the end.
----Never drops an `essential` — a destructive verb or the way out stays
----advertised — and never drops below one entry, so a surface too narrow for
----the essentials alone overflows rather than hiding one of them.
+---Reduce `hints` to what fits `width`.
+---
+---Drop order: `destructive` verbs first — the keys you least want a narrow
+---bar to invite a fat finger onto — then the remaining conveniences from the
+---end. An `essential` (a primary verb, or the way out) survives both passes,
+---so what a cramped surface advertises is what the panel is FOR. Never drops
+---below one entry, so a surface too narrow for the essentials alone overflows
+---rather than hiding one of them.
 ---@param hints table[]
 ---@param width integer|nil  nil for unlimited
 ---@param width_of fun(shown: table[], truncated: boolean): integer
@@ -194,20 +217,38 @@ local function fit_hints(hints, width, width_of)
 	end
 
 	local count = #hints
-	for index = #hints, 1, -1 do
-		if count <= 1 then
-			break
-		end
-		if not hints[index].essential then
-			keep[index] = false
-			count = count - 1
-			local candidate = shown()
-			if width_of(candidate, true) <= width then
-				return candidate, true
+
+	---Drop matching hints from the end until the rest fits.
+	---@param droppable fun(hint: table): boolean
+	---@return table[]|nil  the fitting list, or nil if it never fit
+	local function drop_pass(droppable)
+		for index = #hints, 1, -1 do
+			if count <= 1 then
+				return nil
+			end
+			if keep[index] and droppable(hints[index]) then
+				keep[index] = false
+				count = count - 1
+				local candidate = shown()
+				if width_of(candidate, true) <= width then
+					return candidate
+				end
 			end
 		end
+		return nil
 	end
-	return shown(), true
+
+	local fitted = drop_pass(function(hint)
+		return hint.destructive == true
+	end) or drop_pass(function(hint)
+		return not hint.essential
+	end)
+	if fitted then
+		return fitted, true
+	end
+	-- Nothing left to drop. Say "truncated" only if something actually went,
+	-- so a lone oversized hint does not grow an ellipsis standing for nothing.
+	return shown(), count < #hints
 end
 
 ---The float footer's text for a hint list.
@@ -481,16 +522,19 @@ function Panel:paint(B)
 	return true
 end
 
----Drop the line→entry map a panel builds while rendering its list.
+---Drop every line→entry map the panel builds while rendering.
 ---
 ---A state render collapses the buffer, so a map built for the previous
 ---content would resolve a keypress on a hint or state line to an entry that
 ---is no longer on screen — on the status panel, to `X discard changes`.
----`state.line_entries` is the base's name for that map: every adopting panel
----that keeps one uses it.
-function Panel:clear_line_entries()
-	if type(self.state.line_entries) == "table" then
-		self.state.line_entries = {}
+---The maps are named by the panel's `entry_maps` spec field (default the
+---conventional `state.line_entries`), so a panel keeping a second one under
+---its own name declares it once and never has to remember it again.
+function Panel:clear_entry_maps()
+	for _, key in ipairs(self.entry_maps) do
+		if type(self.state[key]) == "table" then
+			self.state[key] = {}
+		end
 	end
 end
 
@@ -498,7 +542,7 @@ end
 ---@param label string|nil
 ---@param opts table|nil  { detail = string }
 function Panel:render_loading(label, opts)
-	self:clear_line_entries()
+	self:clear_entry_maps()
 	local B = self:begin_render()
 	components.loading(B, label or self.loading or "Loading…", opts)
 	self:paint(B)
@@ -510,7 +554,7 @@ end
 ---@param opts table|nil  { detail = string, hint = string, view = string }
 function Panel:render_error(message, opts)
 	opts = opts or {}
-	self:clear_line_entries()
+	self:clear_entry_maps()
 	local B = self:begin_render()
 	components.error_state(B, message, opts)
 	self:push_hints(B, opts.view)

@@ -65,7 +65,7 @@ local P = panel.new({
 	end,
 	keymaps = {
 		{ key = "s/u", keys = { "s", "u" }, desc = "stage/unstage",
-			run = function(key)
+			essential = true, run = function(key)
 				if key == "u" then
 					M.unstage_under_cursor()
 				else
@@ -90,7 +90,7 @@ local P = panel.new({
 		{ key = "<CR>", desc = "open", run = function()
 			M.open_file_under_cursor()
 		end },
-		{ key = "cc", desc = "commit", run = function()
+		{ key = "cc", desc = "commit", essential = true, run = function()
 			if M.state.opts.on_commit then
 				M.state.opts.on_commit()
 			else
@@ -103,7 +103,7 @@ local P = panel.new({
 		{ key = "cx", desc = "conflict", run = function()
 			M.open_conflict_under_cursor()
 		end },
-		{ key = "X", desc = "discard changes", essential = true, run = function()
+		{ key = "X", desc = "discard changes", destructive = true, run = function()
 			M.revert_under_cursor()
 		end },
 		{ key = "p", desc = "push", run = function()

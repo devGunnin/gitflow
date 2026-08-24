@@ -34,6 +34,7 @@ local P = panel.new({
 	filetype = "gitflownotifications",
 	loading = "Loading notifications…",
 	state = M.state,
+	entry_maps = { "line_context" },
 	keymaps = {
 		{ key = "<CR>", desc = "open", run = function()
 			M.open_context_under_cursor()

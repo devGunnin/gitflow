@@ -54,10 +54,14 @@ local P = panel.new({
 	filetype = "gitflowrebase",
 	loading = "Loading branches…",
 	state = M.state,
+	-- The base picker keeps its own line->entry map; declaring it here is
+	-- what stops a stale row from being selectable after a repaint.
+	entry_maps = { "line_entries", "base_line_branches" },
 	keymaps = {
 		-- <CR> means "pick this base" in the base stage and "cycle the action"
 		-- in the todo stage; one binding routes, two entries word it per view.
-		{ key = "<CR>", desc = "cycle", views = { "todo" }, run = function()
+		{ key = "<CR>", desc = "cycle", views = { "todo" }, essential = true,
+			run = function()
 			if M.state.stage == "base" then
 				M.select_base_branch()
 			else
@@ -65,7 +69,7 @@ local P = panel.new({
 			end
 		end },
 		{ key = "<CR>", desc = "select", views = { "base" }, bind = false,
-			run = function()
+			essential = true, run = function()
 				M.select_base_branch()
 			end },
 		{ key = "p/r/e/s/f/d", keys = { "p", "r", "e", "s", "f", "d" },
@@ -645,6 +649,10 @@ function M.show_base_picker()
 	end
 
 	M.state.stage = "base"
+	-- The picker's rows load async while the todo view is still on screen:
+	-- without this, <CR> on a commit row would select the branch that sat on
+	-- that line the last time the picker painted.
+	P:clear_entry_maps()
 	local request_id = next_picker_request_id()
 
 	git_branch.list({}, function(err, branches)

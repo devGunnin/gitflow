@@ -36,16 +36,18 @@ local P = panel.new({
 	loading = "Loading branches…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "switch", views = { "list" }, run = function()
+		{ key = "<CR>", desc = "switch", views = { "list" }, essential = true,
+			run = function()
 			M.switch_under_cursor()
 		end },
-		{ key = "c", desc = "create", views = { "list" }, run = function()
+		{ key = "c", desc = "create", views = { "list" }, essential = true,
+			run = function()
 			M.create_branch()
 		end },
 		{ key = "d", desc = "delete", views = { "list" }, run = function()
 			M.delete_under_cursor(false)
 		end },
-		{ key = "D", desc = "force delete", views = { "list" }, essential = true,
+		{ key = "D", desc = "force delete", views = { "list" }, destructive = true,
 			run = function()
 				M.delete_under_cursor(true)
 			end },
@@ -61,10 +63,10 @@ local P = panel.new({
 		{ key = ".", desc = "current", views = { "list" }, run = function()
 			M.jump_to_current()
 		end },
-		{ key = "R", desc = "refresh", essential = true, run = function()
+		{ key = "R", desc = "refresh", run = function()
 			M.refresh_with_fetch()
 		end },
-		{ key = "f", desc = "fetch", essential = true, run = function()
+		{ key = "f", desc = "fetch", run = function()
 			M.fetch_remotes()
 		end },
 		{ key = "G", desc = "graph", views = { "list" }, run = function()

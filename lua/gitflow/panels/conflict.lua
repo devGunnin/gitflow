@@ -46,7 +46,7 @@ local P = panel.new({
 	loading = "Loading conflicts…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "open resolver", run = function()
+		{ key = "<CR>", desc = "open resolver", essential = true, run = function()
 			M.open_under_cursor()
 		end },
 		{ key = "r", desc = "refresh", run = function()
@@ -58,7 +58,7 @@ local P = panel.new({
 		{ key = "C", desc = "continue", essential = true, run = function()
 			M.continue_operation()
 		end },
-		{ key = "A", desc = "abort", essential = true, run = function()
+		{ key = "A", desc = "abort", destructive = true, run = function()
 			M.abort_operation()
 		end },
 		{ key = "q", desc = "close", essential = true, run = function()

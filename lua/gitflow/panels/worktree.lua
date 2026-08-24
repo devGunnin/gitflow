@@ -41,13 +41,13 @@ local P = panel.new({
 	loading = "Loading worktrees…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "switch", run = function()
+		{ key = "<CR>", desc = "switch", essential = true, run = function()
 			M.switch_under_cursor()
 		end },
-		{ key = "a", desc = "add", run = function()
+		{ key = "a", desc = "add", essential = true, run = function()
 			M.add_worktree()
 		end },
-		{ key = "d/D", keys = { "d", "D" }, desc = "remove", essential = true,
+		{ key = "d/D", keys = { "d", "D" }, desc = "remove", destructive = true,
 			run = function(key)
 				M.remove_under_cursor(key == "D")
 			end },

@@ -41,7 +41,7 @@ local P = panel.new({
 	loading = "Loading branches…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "pick", run = function()
+		{ key = "<CR>", desc = "pick", essential = true, run = function()
 			M.select_under_cursor()
 		end },
 		{ key = "1-9", keys = POSITION_KEYS, hint = false, run = function(key)
