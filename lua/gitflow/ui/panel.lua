@@ -22,6 +22,7 @@ local components = require("gitflow.ui.components")
 ---@field views string[]|nil  views this key belongs to (nil = every view)
 ---@field nowait boolean|nil  default true
 ---@field hint boolean|nil  false to bind without advertising
+---@field bind boolean|nil  false to advertise a key another entry already binds
 ---@field essential boolean|nil  never dropped when the float footer overflows
 
 ---@class GitflowPanelSpec
@@ -265,7 +266,7 @@ end
 ---@param bufnr integer
 function Panel:bind_keymaps(bufnr)
 	for _, entry in ipairs(self.keymaps) do
-		for _, key in ipairs(M.bound_keys(entry)) do
+		for _, key in ipairs(entry.bind == false and {} or M.bound_keys(entry)) do
 			vim.keymap.set(entry.mode or "n", key, function()
 				entry.run(key)
 			end, {
