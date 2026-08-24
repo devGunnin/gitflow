@@ -1,0 +1,250 @@
+-- scripts/test_picker_contract.lua — exercises ui/list_picker.lua and
+-- ui/label_picker.lua against the SAME contract, over both of their call
+-- shapes (items=/table-or-string entries/multi_select on-or-off vs
+-- labels=/always-multi-select/color chips). Both wrap the shared
+-- ui/picker.lua engine; this spec is the guard against the two shapes
+-- drifting apart again.
+--
+-- Run: nvim --headless -u NONE -l scripts/test_picker_contract.lua
+
+local script_path = debug.getinfo(1, "S").source:sub(2)
+local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
+vim.opt.runtimepath:append(project_root)
+
+local passed = 0
+
+local function assert_true(cond, message)
+	if not cond then
+		error(message, 2)
+	end
+	passed = passed + 1
+end
+
+local function assert_equals(actual, expected, message)
+	if actual ~= expected then
+		error(
+			("%s (expected=%s, actual=%s)"):format(
+				message, vim.inspect(expected), vim.inspect(actual)
+			),
+			2
+		)
+	end
+	passed = passed + 1
+end
+
+local function find_line(lines, needle)
+	for i, line in ipairs(lines) do
+		if line:find(needle, 1, true) then
+			return i
+		end
+	end
+	return nil
+end
+
+local function wait_until(predicate, message, timeout_ms)
+	assert_true(vim.wait(timeout_ms or 2000, predicate, 20), message)
+end
+
+require("gitflow").setup({})
+
+local list_picker = require("gitflow.ui.list_picker")
+local label_picker = require("gitflow.ui.label_picker")
+
+---@class PickerShape
+---@field name string
+---@field module table
+---@field namespace_hl integer
+---@field namespace_active integer
+---@field open fun(entries: table, opts: table|nil): table|nil  opens with the shape's own entry key
+
+local shapes = {
+	{
+		name = "list_picker (multi_select)",
+		module = list_picker,
+		namespace_hl = vim.api.nvim_create_namespace("gitflow_list_picker_hl"),
+		namespace_active = vim.api.nvim_create_namespace("gitflow_list_picker_active"),
+		open = function(entries, opts)
+			opts = opts or {}
+			opts.items = entries
+			return list_picker.open(opts)
+		end,
+	},
+	{
+		name = "list_picker (single_select)",
+		module = list_picker,
+		namespace_hl = vim.api.nvim_create_namespace("gitflow_list_picker_hl"),
+		namespace_active = vim.api.nvim_create_namespace("gitflow_list_picker_active"),
+		open = function(entries, opts)
+			opts = opts or {}
+			opts.items = entries
+			opts.multi_select = false
+			return list_picker.open(opts)
+		end,
+	},
+	{
+		name = "label_picker",
+		module = label_picker,
+		namespace_hl = vim.api.nvim_create_namespace("gitflow_label_picker_hl"),
+		namespace_active = vim.api.nvim_create_namespace("gitflow_label_picker_active"),
+		open = function(entries, opts)
+			opts = opts or {}
+			opts.labels = entries
+			return label_picker.open(opts)
+		end,
+	},
+}
+
+local function press(winid, lhs)
+	vim.api.nvim_set_current_win(winid)
+	vim.api.nvim_feedkeys(
+		vim.api.nvim_replace_termcodes(lhs, true, false, true), "x", false
+	)
+end
+
+-- ── 1. Every shape opens, renders and exposes the same field set ────
+
+for _, shape in ipairs(shapes) do
+	local entries = {
+		{ name = "alpha", description = "first" },
+		{ name = "beta", description = "second" },
+	}
+	local submitted
+	local state = shape.open(entries, {
+		title = "Contract Test",
+		on_submit = function(sel) submitted = sel end,
+	})
+
+	assert_true(state ~= nil, shape.name .. ": open should return a state")
+	assert_true(state.winid ~= nil, shape.name .. ": state.winid should be set")
+	assert_true(vim.api.nvim_win_is_valid(state.winid), shape.name .. ": window should be valid")
+	assert_true(state.bufnr ~= nil, shape.name .. ": state.bufnr should be set")
+	assert_true(type(state.items) == "table", shape.name .. ": state.items should be a table regardless of the call shape's key name")
+	assert_equals(#state.items, 2, shape.name .. ": state.items should hold both entries")
+
+	local lines = vim.api.nvim_buf_get_lines(state.bufnr, 0, -1, false)
+	assert_true(find_line(lines, "alpha") ~= nil, shape.name .. ": alpha row should render")
+	assert_true(find_line(lines, "beta") ~= nil, shape.name .. ": beta row should render")
+
+	-- Every shape supports the same navigation/search/close keymaps.
+	local keymaps = vim.api.nvim_buf_get_keymap(state.bufnr, "n")
+	local have = {}
+	for _, m in ipairs(keymaps) do
+		have[m.lhs] = true
+	end
+	for _, lhs in ipairs({ "j", "k", "/", "q", "<Esc>", "<CR>", " " }) do
+		assert_true(have[lhs], ("%s: missing keymap %s"):format(shape.name, lhs))
+	end
+
+	-- The active-line accent lives in the shape's OWN namespace, so two
+	-- pickers open back to back never bleed extmarks into each other.
+	local accent_marks = vim.api.nvim_buf_get_extmarks(
+		state.bufnr, shape.namespace_active, 0, -1, { details = true }
+	)
+	local has_accent = false
+	for _, mark in ipairs(accent_marks) do
+		if mark[4] and mark[4].hl_group == "GitflowFormActiveField" then
+			has_accent = true
+		end
+	end
+	assert_true(has_accent, shape.name .. ": active-line accent should be in this shape's own namespace")
+
+	pcall(vim.api.nvim_win_close, state.winid, true)
+	pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
+	assert_true(true, shape.name .. ": open/render/keymap contract holds")
+end
+
+-- ── 2. Live search narrows results identically across shapes ────────
+
+for _, shape in ipairs(shapes) do
+	local entries = {
+		{ name = "main" }, { name = "develop" }, { name = "feature/x" },
+	}
+	local state = shape.open(entries, { on_submit = function() end })
+
+	-- "/" enters search mode (state.searching=true, the live-filter
+	-- autocmd registered). A headless script has no main loop to carry
+	-- startinsert's mode switch across a second feedkeys call, so the
+	-- query is set the same way test_stage10_palette.lua drives its
+	-- prompt: write the line, then fire the autocmd it listens for.
+	press(state.winid, "/")
+	vim.api.nvim_buf_set_lines(state.bufnr, 0, 1, false, { "dev" })
+	vim.api.nvim_exec_autocmds("TextChanged", { buffer = state.bufnr })
+
+	wait_until(function()
+		local lines = vim.api.nvim_buf_get_lines(state.bufnr, 0, -1, false)
+		return find_line(lines, "develop") ~= nil and find_line(lines, "main") == nil
+	end, shape.name .. ": search should narrow to develop only", 1000)
+
+	pcall(vim.api.nvim_win_close, state.winid, true)
+	pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
+end
+
+-- ── 3. Cancel fires on_cancel exactly once, per shape ────────────────
+
+for _, shape in ipairs(shapes) do
+	local calls = 0
+	local state = shape.open({ { name = "only" } }, {
+		on_submit = function() end,
+		on_cancel = function() calls = calls + 1 end,
+	})
+	press(state.winid, "q")
+	vim.wait(50, function() return false end, 10)
+	assert_equals(calls, 1, shape.name .. ": on_cancel should fire exactly once via q")
+	assert_true(state.closed, shape.name .. ": state.closed should be true after cancel")
+end
+
+-- ── 4. A too-small terminal refuses cleanly, per shape ───────────────
+
+local original_columns, original_lines = vim.o.columns, vim.o.lines
+vim.o.columns, vim.o.lines = 10, 3
+for _, shape in ipairs(shapes) do
+	local state = shape.open({ { name = "x" } }, { on_submit = function() end })
+	assert_true(state == nil, shape.name .. ": open should return nil on a too-small terminal")
+end
+vim.o.columns, vim.o.lines = original_columns, original_lines
+
+-- ── 5. Shape-specific behavior each wrapper alone is responsible for ─
+
+-- 5a. list_picker normalizes bare-string items (label_picker has no such
+-- shape: every label is a table with an optional color).
+local string_state = list_picker.open({
+	items = { "gamma", "delta" },
+	on_submit = function() end,
+})
+assert_equals(string_state.items[1].name, "gamma", "5a. list_picker normalizes a string item to {name=...}")
+pcall(vim.api.nvim_win_close, string_state.winid, true)
+pcall(vim.api.nvim_buf_delete, string_state.bufnr, { force = true })
+
+-- 5b. list_picker single-select toggles-and-submits on <CR> without <Space>
+-- accumulating a selection set; multi_select toggles then requires <CR>.
+local single_submit
+local single_state = list_picker.open({
+	items = { { name = "one" }, { name = "two" } },
+	multi_select = false,
+	on_submit = function(sel) single_submit = sel end,
+})
+press(single_state.winid, "<CR>")
+wait_until(function() return single_submit ~= nil end, "5b. single-select <CR> should submit immediately")
+assert_equals(#single_submit, 1, "5b. single-select submits exactly one item")
+
+-- 5c. label_picker always multi-selects and colors the name chip per label.
+local label_state = label_picker.open({
+	labels = { { name = "bug", color = "d73a4a" } },
+	on_submit = function() end,
+})
+assert_true(label_state.multi_select, "5c. label_picker is always multi-select")
+local label_marks = vim.api.nvim_buf_get_extmarks(
+	label_state.bufnr, shapes[3].namespace_hl, 0, -1, { details = true }
+)
+local has_color_chip = false
+for _, mark in ipairs(label_marks) do
+	local hl = mark[4] and mark[4].hl_group
+	if hl and hl:find("GitflowLabel_", 1, true) then
+		has_color_chip = true
+	end
+end
+assert_true(has_color_chip, "5c. label_picker renders a color-derived highlight group on the name")
+pcall(vim.api.nvim_win_close, label_state.winid, true)
+pcall(vim.api.nvim_buf_delete, label_state.bufnr, { force = true })
+
+print(("Picker-contract spec passed (%d assertions)"):format(passed))
