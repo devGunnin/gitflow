@@ -691,7 +691,7 @@ function M.refresh()
 		return
 	end
 
-	render_loading("Loading issues...")
+	render_loading("Loading issues…")
 	gh_issues.list(M.state.fetch, {}, function(err, issues)
 		if err then
 			render_loading("Failed to load issues")
@@ -714,7 +714,7 @@ function M.open_view(number, cfg)
 	end
 	ensure_window(M.state.cfg)
 
-	render_loading(("Loading issue #%s..."):format(tostring(number)))
+	render_loading(("Loading issue #%s…"):format(tostring(number)))
 	gh_issues.view(number, {}, function(err, issue)
 		if err then
 			render_loading("Failed to load issue")

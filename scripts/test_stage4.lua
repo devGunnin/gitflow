@@ -377,7 +377,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading issues") ~= nil
+	return find_line(lines, "Loading issues…") ~= nil
 end, "issue list should show loading indicator", 1000)
 
 wait_until(function()
@@ -406,7 +406,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading issue #1") ~= nil
+	return find_line(lines, "Loading issue #1…") ~= nil
 end, "issue view should show loading indicator", 1000)
 
 wait_until(function()
@@ -613,7 +613,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading pull requests") ~= nil
+	return find_line(lines, "Loading pull requests…") ~= nil
 end, "pr list should show loading indicator", 1000)
 
 wait_until(function()
@@ -793,7 +793,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading PR #7") ~= nil
+	return find_line(lines, "Loading PR #7…") ~= nil
 end, "pr view should show loading indicator", 1000)
 
 wait_until(function()
@@ -879,7 +879,7 @@ wait_until(function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	return find_line(lines, "Loading labels") ~= nil
+	return find_line(lines, "Loading labels…") ~= nil
 end, "label list should show loading indicator", 1000)
 
 wait_until(function()

@@ -221,7 +221,7 @@ function M.refresh()
 		return
 	end
 
-	render_loading("Loading labels...")
+	render_loading("Loading labels…")
 	gh_labels.list({}, function(err, labels)
 		if err then
 			render_loading("Failed to load labels")
