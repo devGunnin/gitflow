@@ -305,9 +305,10 @@ function M.builder()
 	---re-applied only on lines whose text or spans differ. This is what keeps a
 	---refresh from flickering and from resetting the cursor.
 	---
-	---Two contracts the caller owns: `buffer_target` and `bufnr` must name the
-	---same buffer, and `ns` must belong to this builder alone — the snapshot
-	---assumes nothing else clears or writes that namespace.
+	---Contracts the caller owns: `buffer_target` and `bufnr` must name the
+	---same buffer, `ns` must belong to this builder alone (the snapshot assumes
+	---nothing else clears or writes that namespace), and the builder itself is
+	---single-use — mutating it after this call corrupts the stored snapshot.
 	---@param buffer_target string|integer  buffer name or bufnr for ui.buffer.update
 	---@param bufnr integer  resolved bufnr to apply highlights on
 	---@param ns integer  highlight namespace
@@ -358,7 +359,9 @@ function M.builder()
 			repaint_if_spans_changed(#self.lines - offset, old_count - offset)
 		end
 
-		per_buffer[ns] = { spans = vim.deepcopy(self.spans) }
+		-- Builders are single-use, discarded right after flush -- aliasing
+		-- self.spans instead of deep-copying it is safe and skips the cost.
+		per_buffer[ns] = { spans = self.spans }
 	end
 
 	---Render this builder into a panel buffer. The single flush path: panels
