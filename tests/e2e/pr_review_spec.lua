@@ -1026,6 +1026,50 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["close_with_guard stops promising disk when the last save failed"] = function()
+		open_review(42)
+		T.drain_jobs(5000)
+
+		-- Exactly the state an unwritable data dir leaves behind: drafts in
+		-- memory, nothing of them on disk.
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				body = "Draft",
+				new_line = 13,
+			},
+		}
+		review_panel.state.draft_save_error =
+			"could not open /nope/42.json for writing: Not a directory"
+
+		local confirm_message = nil
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					confirm_message = msg
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(confirm_message ~= nil,
+			"close_with_guard should still prompt")
+		T.assert_false(
+			confirm_message:find("kept on disk", 1, true) ~= nil,
+			"the prompt must not claim drafts are on disk after a failed save")
+		T.assert_contains(confirm_message, "FAILED",
+			"it should say the save failed")
+		T.assert_contains(confirm_message, "Not a directory",
+			"and carry the reason")
+
+		cleanup_panels()
+	end,
+
 	-- ── Toggle command path ────────────────────────────────────────────
 
 	["toggle on an open review closes it"] = function()

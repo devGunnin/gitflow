@@ -200,6 +200,57 @@ test("a slug answering after the review moved on is dropped", function()
 	end)
 end)
 
+test("refreshing before the slug lands does not fall back to a blocking lookup", function()
+	with_stubbed_network(function(seen)
+		review.open(cfg, 46)
+
+		local calls = record_blocking_calls(function()
+			require("gitflow.review.load").refresh()
+		end)
+
+		assert_true(not ran(calls, "gh"),
+			"r ran a blocking gh call: " .. vim.inspect(calls))
+		assert_equals(seen.blocking_slugs, 0,
+			"r resolved the draft-cache slug the blocking way")
+		assert_equals(seen.views, 0,
+			"and loaded nothing before the drafts cache location is known")
+	end)
+end)
+
+test("closing before the drafts are read back still warns", function()
+	with_stubbed_network(function(seen)
+		review.open(cfg, 47)
+
+		local input = require("gitflow.ui.input")
+		local real_confirm = input.confirm
+		local asked
+		input.confirm = function(msg)
+			asked = msg
+			return false
+		end
+
+		local ok, err = pcall(review.close_with_guard)
+
+		input.confirm = real_confirm
+		assert_true(ok, tostring(err))
+		assert_true(asked ~= nil,
+			"closing while the disk copy is unread must not claim zero drafts")
+		assert_true(review.is_open(), "and declining keeps the review open")
+
+		-- Non-vacuous: once the drafts are known, closing is silent again.
+		seen.deliver_slug("owner_repo")
+		asked = nil
+		input.confirm = function(msg)
+			asked = msg
+			return true
+		end
+		local closed_ok, close_err = pcall(review.close_with_guard)
+		input.confirm = real_confirm
+		assert_true(closed_ok, tostring(close_err))
+		assert_true(asked == nil, "a review with no drafts closes without a prompt")
+	end)
+end)
+
 test("deleting a submitted comment reads the login without blocking", function()
 	with_stubbed_network(function(seen)
 		review.open(cfg, 45)
@@ -228,6 +279,11 @@ test("deleting a submitted comment reads the login without blocking", function()
 			"api user -q .login", "and asked gh for the current login")
 	end)
 end)
+
+-- Restoring a review's drafts creates that slug's cache directory; the
+-- stubbed slug's is this script's litter, so it goes back out.
+pcall(vim.fn.delete,
+	("%s/gitflow/review/owner_repo"):format(vim.fn.stdpath("data")), "d")
 
 print(string.rep("\u{2500}", 50))
 print(("review async open: %d passed, %d failed"):format(passed, failed))

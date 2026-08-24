@@ -189,6 +189,123 @@ test("hydrating restores drafts when there are none in memory", function()
 	clean()
 end)
 
+-- ── a cache that cannot be written ─────────────────────────────────────
+
+---A cache path no process can ever write: its parent is a regular file, so
+---`io.open` fails with ENOTDIR for every user, root included.
+---@return string path, string blocker
+local function unwritable_path()
+	local blocker = vim.fn.tempname()
+	local file = assert(io.open(blocker, "w"))
+	file:write("not a directory")
+	file:close()
+	return blocker .. "/drafts.json", blocker
+end
+
+test("a draft cache that cannot be written is reported, not silently dropped", function()
+	local rstate = require("gitflow.review.state")
+	local utils = require("gitflow.utils")
+	local path, blocker = unwritable_path()
+
+	local real_path_for, real_notify = cache.path_for, utils.notify
+	local notes = {}
+	cache.path_for = function()
+		return path
+	end
+	utils.notify = function(msg, level)
+		notes[#notes + 1] = { msg = tostring(msg), level = level }
+	end
+
+	rstate.reset()
+	rstate.state.pr_number = TEST_PR
+	rstate.state.repo_slug = TEST_SLUG
+	rstate.state.pending_comments = { { id = 1, path = "a.lua", body = "unsent" } }
+
+	-- Three mutations, as a reviewer typing produces: the failure must be
+	-- visible, and it must not be shouted once per keystroke.
+	local ok, err = pcall(function()
+		rstate.persist_pending()
+		rstate.persist_pending()
+		rstate.persist_pending()
+	end)
+
+	cache.path_for, utils.notify = real_path_for, real_notify
+	pcall(vim.fn.delete, blocker)
+	assert_true(ok, tostring(err))
+
+	assert_equals(#notes, 1, "a failed draft save is reported exactly once")
+	assert_equals(notes[1].level, vim.log.levels.ERROR, "and reported as an error")
+	assert_true(notes[1].msg:find("save review drafts", 1, true) ~= nil,
+		"naming what could not be saved: " .. notes[1].msg)
+	assert_true(rstate.state.draft_save_error ~= nil,
+		"and recorded, so the close prompt stops promising the disk copy")
+
+	-- Recovery: a save that lands clears the record, so a later failure is
+	-- reported again instead of being swallowed by the first one.
+	rstate.persist_pending()
+	assert_equals(rstate.state.draft_save_error, nil,
+		"a successful save clears the failure")
+	assert_equals(#cache.load(TEST_PR, TEST_SLUG).comments, 1,
+		"and actually writes the draft")
+
+	rstate.reset()
+	clean()
+end)
+
+-- ── submitting clears the disk copy ────────────────────────────────────
+
+test("an accepted review leaves no drafts on disk", function()
+	-- Without this, a regressed clear would re-restore already-submitted
+	-- comments on the next open and post them to the PR a second time.
+	local rstate = require("gitflow.review.state")
+	local load = require("gitflow.review.load")
+	local submit = require("gitflow.review.submit")
+	local gh_prs = require("gitflow.gh.prs")
+
+	local draft = {
+		id = 1,
+		path = "a.lua",
+		body = "please rename this",
+		new_line = 12,
+		created_at = "2026-08-24T00:00:00Z",
+	}
+	save({ draft })
+	assert_equals(#cache.load(TEST_PR, TEST_SLUG).comments, 1,
+		"the draft is on disk before the submit")
+
+	rstate.reset()
+	rstate.state.cfg = {}
+	rstate.state.pr_number = TEST_PR
+	rstate.state.repo_slug = TEST_SLUG
+	rstate.state.pending_comments = { draft }
+	-- Only drafts anchored to a line in the diff are sent, so the submit
+	-- needs a diff that carries this one.
+	rstate.state.file_diffs = {
+		["a.lua"] = { hunks = { { lines = { { new_line = 12 } } } } },
+	}
+
+	local real_submit, real_refresh = gh_prs.submit_review, load.refresh
+	local sent
+	gh_prs.submit_review = function(_, _, _, comments, _, cb)
+		sent = comments
+		cb(nil)
+	end
+	load.refresh = function() end
+
+	local ok, err = pcall(submit.submit_review_direct, "approve", "lgtm")
+
+	gh_prs.submit_review, load.refresh = real_submit, real_refresh
+	assert_true(ok, tostring(err))
+
+	assert_true(sent ~= nil and #sent == 1, "the draft was sent to GitHub")
+	assert_equals(#rstate.state.pending_comments, 0, "nothing is left in memory")
+	assert_equals(#cache.load(TEST_PR, TEST_SLUG).comments, 0,
+		"and nothing on disk for the next open to re-post")
+
+	rstate.reset()
+	clean()
+end)
+
 -- ── the two slug paths must agree ──────────────────────────────────────
 
 ---Run `fn` with both the blocking and the async subprocess layers answering
@@ -287,6 +404,79 @@ test("the resolved slug is memoized, not re-fetched per draft save", function()
 
 	assert_equals(calls, 1, "the second call is answered from the memo")
 	assert_equals(first, second, "and gives the same slug")
+end)
+
+test("callers that arrive while a resolve is out share it", function()
+	local calls, deliver = 0, nil
+	local real_gh_run = gh.run
+	gh.run = function(_, _, cb)
+		calls = calls + 1
+		deliver = cb
+	end
+	cache.invalidate_repo_slug()
+
+	local first, second
+	cache.resolve_repo_slug(function(slug) first = slug end)
+	cache.resolve_repo_slug(function(slug) second = slug end)
+
+	local in_flight = calls
+	local answered_early = first ~= nil or second ~= nil
+	if deliver then
+		deliver({ code = 0, stdout = "octo/gitflow\n", stderr = "" })
+	end
+	gh.run = real_gh_run
+	cache.invalidate_repo_slug()
+
+	assert_equals(in_flight, 1,
+		"a second caller joins the lookup in flight instead of spawning gh again")
+	assert_true(not answered_early, "and neither is answered before gh is")
+	assert_equals(first, "octo_gitflow", "the first caller gets the slug")
+	assert_equals(second, first, "and so does the one that joined")
+end)
+
+test("a missing gh still resolves a slug, so drafts are not stranded", function()
+	-- vim.system raises rather than answering when the executable is absent,
+	-- and the caller restores the reviewer's drafts from this callback.
+	local real_gh_run, real_git_git = gh.run, git.git
+	gh.run = function()
+		error("ENOENT: no such file or directory: gh")
+	end
+	git.git = function(_, _, cb)
+		cb({ code = 0, stdout = "/home/someone/src/gitflow\n", stderr = "" })
+	end
+	cache.invalidate_repo_slug()
+
+	local resolved
+	local ok, err = pcall(cache.resolve_repo_slug, function(slug)
+		resolved = slug
+	end)
+
+	gh.run, git.git = real_gh_run, real_git_git
+	cache.invalidate_repo_slug()
+	assert_true(ok, "a missing gh must not escape the resolve: " .. tostring(err))
+	assert_equals(resolved, "_home_someone_src_gitflow",
+		"it falls back to the git toplevel")
+end)
+
+test("neither gh nor git available still answers, with the last-resort slug", function()
+	local real_gh_run, real_git_git = gh.run, git.git
+	gh.run = function()
+		error("ENOENT: no such file or directory: gh")
+	end
+	git.git = function()
+		error("ENOENT: no such file or directory: git")
+	end
+	cache.invalidate_repo_slug()
+
+	local resolved
+	local ok, err = pcall(cache.resolve_repo_slug, function(slug)
+		resolved = slug
+	end)
+
+	gh.run, git.git = real_gh_run, real_git_git
+	cache.invalidate_repo_slug()
+	assert_true(ok, "no subprocess at all must not raise: " .. tostring(err))
+	assert_equals(resolved, "unknown", "the drafts still get a cache file")
 end)
 
 clean()
