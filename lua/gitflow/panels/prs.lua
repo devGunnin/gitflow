@@ -676,6 +676,11 @@ local function perform_mutation(opts)
 			return
 		end
 		utils.notify(opts.done_message, vim.log.levels.INFO)
+		-- Closed under the mutation: nothing to repaint, and a refresh here
+		-- would spend a gh call on a buffer that is gone.
+		if not M.is_open() then
+			return
+		end
 		if M.state.mode == "view" and M.state.active_pr_number then
 			M.open_view(M.state.active_pr_number)
 		else
