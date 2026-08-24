@@ -154,7 +154,9 @@ This covers every registered surface, including the three that are not panels
 (actions, conflict_resolver, review_diff) and the command palette.
 
 A pair or range entry (`s/u`, `p/w/e/s/f`, `1-9`) can be re-keyed whole: name
-several keys separated by `/`.  A single key collapses the entry to that key.
+several keys separated by `/`.  Behaviour follows position, so `r` below does
+what `w` did.  A single key collapses the entry to that key, keeping the first
+of its actions; naming more keys than the entry binds is refused.
 >lua
     panel_keybindings = {
       rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },  -- r rewords again
@@ -162,7 +164,8 @@ several keys separated by `/`.  A single key collapses the entry to that key.
 <
 Two guards, both loud.  A label that matches no key in that panel warns when
 the panel opens.  An override that would land on a key the panel already binds
-is REFUSED whole for that panel, with a warning naming the clash -- otherwise
+is REFUSED whole for that panel -- every other override for that panel goes
+back with it -- with a warning naming the clash; otherwise
 one verb silently wins the key while the hints advertise both.  Move the other
 key in the same table, as `r = "R"` does above, and both apply.
 
@@ -333,7 +336,8 @@ Cross-panel rules ~
     r                   Refresh, in every panel.
     q                   Close, in every panel.
     ?                   Key help, in every panel.
-    Destructive keys    d D x X H cD are delete/discard/rewrite verbs.  No
+    Destructive keys    d D x X H, plus cD and <leader>x, are the
+                        delete/discard/rewrite verbs.  No
                         key that is destructive in one panel is a benign
                         action in another -- scripts/test_keymap_contract.lua
                         fails the build if that stops being true.  Every

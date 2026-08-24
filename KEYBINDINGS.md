@@ -667,19 +667,24 @@ it is in, so gitflow constrains itself:
   panel. The two exceptions are text-entry surfaces, where `?` is a character
   you type: the merge resolver puts its help on `c?`, and the command palette
   carries its keys in the footer of each pane.
-- **`?` is never elided.** A narrow panel drops hints to fit; `?` is the last
-  one it gives up, because it is what shows you the ones already gone.
+- **`?` is never elided.** A narrow panel drops hints to fit; `?` is the one
+  hint no width can take away, because it is what shows you the ones already
+  gone. Everything else can go, including a primary verb: the merge-conflict
+  list drops `X abort` around 62 usable columns, and `? help` is how you get
+  it back.
 - **No key is destructive in one panel and benign in another.** The destructive
-  verbs live on `d` `D` `x` `X` `H` (and `cD` in the merge resolver), and those
-  keys are never a harmless action anywhere. `scripts/test_keymap_contract.lua`
-  fails the build if that stops being true.
+  verbs live on `d` `D` `x` `X` `H`, plus the two prefixed ones — `cD` in the
+  merge resolver and `<leader>x` in the review diff pane — and none of those is
+  a harmless action anywhere. `scripts/test_keymap_contract.lua` fails the
+  build if that stops being true, over every key, not just this list.
 - **Every destructive verb confirms**, and declining does nothing at all — no
   partial write, no refresh, no side effect. Rebase's `d drop` is the one
   deliberate exception: it edits a todo list you have not executed yet.
   `scripts/test_confirm_gates.lua` drives three of the gates with the answer NO
   and asserts the underlying git/gh call was never made; the rest of the audit
-  is by hand, and the spec lints for a verb that describes destruction without
-  carrying the flag.
+  is by hand. The spec also lints descriptions for destructive wording, but
+  that is a wording floor, not a check of what the verb does: a destructive
+  verb described neutrally carries no flag and nothing catches it.
 - **The prompt defaults to Cancel** for anything that discards work.
 
 Keys that legitimately differ across panels are all benign: `A` is apply
@@ -705,8 +710,9 @@ or a review thread popup.
 
 ## Migration from the pre-v2 keymaps
 
-v2 is a **breaking change**. Everything below can be put back through
-configuration.
+v2 is a **breaking change**. Every key below can be put back through
+configuration. The two behaviour changes at the end of the panel table — the
+new confirm prompts — cannot: there is no setting that turns a confirm off.
 
 ### Global mappings
 
@@ -758,7 +764,10 @@ require("gitflow").setup({
   panel_keybindings = {
     conflict = { X = "A" },
     reflog   = { H = "R" },
-    -- Two rows where the old key is now taken by refresh or by `?`:
+    -- Three rows where the old key is now taken by refresh or by `?`. Move the
+    -- key that took it in the same table, or the whole panel's table is
+    -- refused: `branch = { e = "r" }` alone puts rename and refresh on `r`.
+    branch = { e = "r", r = "R" },
     conflict_resolver = { cD = "cx" },
     rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },
     status = { ["?"] = false },  -- `?` back to reverse search
@@ -766,8 +775,8 @@ require("gitflow").setup({
 })
 ```
 
-`scripts/test_keymap_contract.lua` drives the awkward rows of that table end to
-end and asserts the old key works again.
+`scripts/test_keymap_contract.lua` PRESSES every row of that table on the real
+panel buffer and asserts what the press did — not what the hint says.
 
 ## Overriding Keybindings
 
@@ -838,16 +847,22 @@ panel_keybindings = {
 }
 ```
 
-A single key collapses the entry to that one key, which is sometimes what you
-want and is otherwise how four verbs quietly disappear — so say what you mean.
+A single key collapses the entry to that one key, keeping the FIRST of its
+actions and dropping the rest — sometimes what you want, and otherwise how four
+verbs quietly disappear, so say what you mean. Naming MORE keys than the entry
+binds is refused: the extra key would have no action behind it.
+
+Re-keying moves behaviour, not just the letter. `["p/w/e/s/f"] = "p/r/e/s/f"`
+makes `r` do what `w` did, position for position.
 
 Two guards, both loud:
 
 - A label that matches no key in that panel warns when the panel opens.
 - An override that would land on a key the panel already binds is **refused
-  whole** for that panel, with a warning naming the clash. Otherwise one verb
-  would silently win the key while the hints kept advertising both. Move the
-  other key in the same table (as `r = "R"` does above) and both apply.
+  whole** for that panel — every other override you wrote for it goes back too,
+  which the warning says. Otherwise one verb would silently win the key while
+  the hints kept advertising both. Move the other key in the same table (as
+  `r = "R"` does above) and both apply.
 
 Panel names: `status` `branch` `log` `blame` `stash` `tag` `reflog` `reset`
 `revert` `cherry_pick` `rebase` `conflict` `conflict_resolver` `worktree`
