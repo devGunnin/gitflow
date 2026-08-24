@@ -536,8 +536,9 @@ Cross-panel inconsistencies ~
        run (actions panel, destructive, confirms first, default choice
        Cancel) / reopen the issue (issue list) / edit reviewers (PR list).
     M: enable or cancel auto-merge (PR list, destructive, confirms
-       first); the issue milestone is T, so no key is destructive in one
-       panel and benign in another.
+       first); the issue milestone moved to T so M does not also mean a
+       benign action. R above is still split that way, so this is not
+       yet true of every key.
     D: delete a saved view (issue list) / merge and delete the branch (PR
        list, destructive, confirms first).
     d: always delete — the comment under cursor (issue detail view) or a
@@ -552,14 +553,18 @@ Cross-panel inconsistencies ~
     strategy, which branch gets deleted. Declining sends nothing to
     GitHub; a second press while one is in flight is refused, not queued.
 
-    Every destructive prompt also names the repository it will act on:
-    gh resolves that from the working directory, which can move under an
-    open panel.
+    Every destructive prompt also names the repository it will act on,
+    resolved the way gh resolves it (a `gh repo set-default` override
+    first, else upstream > github > origin). When git cannot say which
+    repo gh would pick, the prompt names the directory rather than
+    assert a repo the command would not touch.
 
     The PR panel renders the PR's CI checks from `statusCheckRollup`: a
-    per-state count on each list card, every check named with its state
-    in the detail view. The verdict never reads greener than the worst
-    check — a cancelled or unrecognised check outranks a pass. Issue
+    per-state count plus the verdict on each list card, every check
+    named with its state in the detail view. The verdict never reads
+    greener than the worst check — a cancelled or unrecognised check
+    outranks a pass — and cancelled has its own glyph and failure
+    colouring so it cannot be mistaken for a skip. Issue
     cards carry a cue for any open PR that LOOKS like it closes them,
     inferred from the PR text (a "Closes #<n>" keyword in the body, or
     the <n>-slug branch name the issue panel's B generates).

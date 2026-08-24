@@ -305,8 +305,10 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `q` | Close |
 
 Both views show the PR's CI checks: the list card carries a per-state count
-(`checks ✓3 ✗1 ●2`) and the detail view names every check with its state plus
-one verdict. The verdict never reads greener than the worst check — a
+followed by the verdict (`checks ✓3 ✗1 ●2 failure`) and the detail view names
+every check with its state plus the same verdict, coloured by it. A cancelled
+check has its own glyph (`⊗`) and failure colouring — `gh` counts it as
+failing — so it never reads like a benign skip (`⊘`). The verdict never reads greener than the worst check — a
 cancelled or unrecognised check outranks a pass, and checks that decide
 nothing read `skipped`, not `none`.
 
@@ -642,8 +644,9 @@ bug — but it can catch you out if you jump between panels on muscle memory:
   popup) / [reopen the issue](#issue-list) (Issue List) / [edit
   reviewers](#pr-list) (PR List).
 - **`M`** — [enable or cancel auto-merge](#pr-list) (PR List, destructive,
-  confirms first); the issue milestone is `T`, so no key is destructive in one
-  panel and benign in another. **`D`** — [delete a saved view](#issue-list)
+  confirms first); the issue milestone moved to `T` so `M` does not also mean a
+  benign action. `R` above is still split that way (reflog reset vs. reopen /
+  edit reviewers), so this is not yet true of every key. **`D`** — [delete a saved view](#issue-list)
   (Issue List) / [merge and delete the branch](#pr-list) (PR List,
   destructive, confirms first). **`d`** — always delete: [the comment under
   the cursor](#issue-list) (Issue List detail view) / [a

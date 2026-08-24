@@ -155,6 +155,12 @@ end
 ---evidence of a pass, so both outrank success.
 local CHECK_VERDICTS = { "failure", "cancelled", "pending", "unknown", "success", "skipped" }
 
+---@type table<string, true>
+local CHECK_BUCKETS = {}
+for _, bucket in ipairs(CHECK_VERDICTS) do
+	CHECK_BUCKETS[bucket] = true
+end
+
 ---Roll normalized checks up to one verdict, never greener than the worst
 ---check. `none` means there are no checks; checks that exist but decide
 ---nothing read as `skipped`.
@@ -167,7 +173,10 @@ function M.checks_summary(checks)
 	}
 	for _, check in ipairs(checks or {}) do
 		summary.total = summary.total + 1
-		summary[check.state] = (summary[check.state] or 0) + 1
+		-- Count only into the buckets: an unmapped state must not write over
+		-- `total` or `state`, and it is not evidence of a pass.
+		local bucket = CHECK_BUCKETS[check.state] and check.state or "unknown"
+		summary[bucket] = summary[bucket] + 1
 	end
 	if summary.total == 0 then
 		return summary
@@ -665,14 +674,12 @@ function M.merge(number, options, opts, cb)
 	end
 
 	local settings = type(options) == "table" and options or { strategy = options }
-	local args = { "pr", "merge", normalize_number(number) }
-	if settings.strategy == "squash" then
-		args[#args + 1] = "--squash"
-	elseif settings.strategy == "rebase" then
-		args[#args + 1] = "--rebase"
-	else
-		args[#args + 1] = "--merge"
+	local strategy = settings.strategy or "merge"
+	-- A typo must not silently become a different, irreversible merge.
+	if strategy ~= "merge" and strategy ~= "squash" and strategy ~= "rebase" then
+		error(("gitflow gh error: unknown merge strategy %q"):format(tostring(strategy)), 2)
 	end
+	local args = { "pr", "merge", normalize_number(number), "--" .. strategy }
 	if settings.auto then
 		args[#args + 1] = "--auto"
 	end
