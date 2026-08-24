@@ -744,17 +744,30 @@ function M.register(ctx)
 					end
 				end
 
+				-- --auto only ARMS the merge; saying "merged" would report
+				-- something that has not happened yet.
+				local what = settings.strategy
+				if settings.delete_branch then
+					what = what .. ", delete branch"
+				end
 				gh_prs.merge(number, settings, {}, function(err)
 					if err then
 						shared.show_error(err)
 						return
 					end
-					shared.show_info(("Merged PR #%s (%s)"):format(number, settings.strategy))
+					shared.show_info(
+						settings.auto
+							and ("PR #%s queued to auto-merge once checks pass (%s)")
+								:format(number, what)
+							or ("Merged PR #%s (%s)"):format(number, what)
+					)
 					if pr_panel.is_open() then
 						pr_panel.refresh()
 					end
 				end)
-				return ("Merging PR #%s (%s)..."):format(number, settings.strategy)
+				return settings.auto
+					and ("Queueing auto-merge for PR #%s (%s)..."):format(number, what)
+					or ("Merging PR #%s (%s)..."):format(number, what)
 			end
 
 			if action == "reopen" then

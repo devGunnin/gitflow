@@ -3,6 +3,7 @@ local input = require("gitflow.ui.input")
 local components = require("gitflow.ui.components")
 local panel = require("gitflow.ui.panel")
 local form = require("gitflow.ui.form")
+local gh = require("gitflow.gh")
 local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
 local gh_issues = require("gitflow.gh.issues")
@@ -119,7 +120,9 @@ local P = panel.new({
 		{ key = "M", desc = "auto-merge", destructive = true, run = function()
 			M.auto_merge_under_cursor()
 		end },
-		{ key = "d", desc = "draft", run = function()
+		-- `t`, not `d`: `d` is delete everywhere else in gitflow (branch,
+		-- labels, stash, issue comments) and this toggle is reversible.
+		{ key = "t", desc = "draft", run = function()
 			M.toggle_draft_under_cursor()
 		end },
 		{ key = "o", desc = "checkout", run = function()
@@ -458,7 +461,8 @@ end
 
 ---@param pr table
 ---@param review_comments table[]|nil
-local function render_view(pr, review_comments)
+---@param view_cwd string  cwd the detail was FETCHED under, not the live one
+local function render_view(pr, review_comments, view_cwd)
 	local view_state = pr_state(pr)
 	local view_icon = pr_state_icon(view_state)
 	local B = P:begin_render(
@@ -601,8 +605,10 @@ local function render_view(pr, review_comments)
 	M.state.active_pr_number = tonumber(pr.number)
 	M.state.active_pr = pr
 	-- gh resolves the repo from the cwd; a verb must never fire against a
-	-- repo this detail did not come from.
-	M.state.view_cwd = vim.fn.getcwd()
+	-- repo this detail did not come from. Stamped with the cwd the fetch was
+	-- ISSUED under — re-reading it here would take it from the losing side of
+	-- a `cd` that raced the round trip.
+	M.state.view_cwd = view_cwd
 	P:paint(B)
 	-- No rows in the detail view: drop whatever the list left behind.
 	P:clear_entry_maps()
@@ -626,18 +632,20 @@ end
 ---The PR a keypress acts on, resolved at press time — never a number cached
 ---from an older paint. Returns nil when nothing is selected, or when the rows
 ---on screen belong to a repo we have since left.
----@return table|nil
+---@return table|nil pr
+---@return string|nil scope  cwd the target is valid under
 local function target_pr()
+	local cwd = vim.fn.getcwd()
 	if M.state.mode == "view" then
-		if M.state.view_cwd ~= vim.fn.getcwd() then
-			return nil
+		if M.state.view_cwd ~= cwd then
+			return nil, nil
 		end
-		return M.state.active_pr
+		return M.state.active_pr, cwd
 	end
 	if not scoped_cache() then
-		return nil
+		return nil, nil
 	end
-	return entry_under_cursor()
+	return entry_under_cursor(), cwd
 end
 
 ---Run a confirm-gated, single-flight mutation. Declining fires no `gh` call
@@ -647,9 +655,11 @@ end
 ---@field confirm_message string  names exactly what will happen
 ---@field in_progress_message string
 ---@field done_message string
+---@field scope string  cwd the target was resolved under
 ---@field call fun(cb: fun(err: string|nil))
 ---@param opts GitflowGhMutation
 local function perform_mutation(opts)
+	assert(type(opts.scope) == "string", "a mutation must carry the scope it was chosen under")
 	if M.state.busy then
 		utils.notify(
 			("Already busy: %s — wait for it to finish"):format(M.state.busy),
@@ -658,11 +668,23 @@ local function perform_mutation(opts)
 		return
 	end
 
-	local confirmed = input.confirm(opts.confirm_message, {
-		choices = { "&Yes", "&No" },
-		default_choice = 2,
-	})
+	-- The repo is named here rather than by each gate: `gh` resolves it from
+	-- the cwd, so which repo is about to be hit is part of every prompt.
+	local confirmed = input.confirm(
+		("%s\nRepository: %s"):format(opts.confirm_message, gh.repo_label()),
+		{ choices = { "&Yes", "&No" }, default_choice = 2 }
+	)
 	if not confirmed then
+		return
+	end
+
+	-- Prompts can be async, so the cwd may have moved between choosing the
+	-- target and this spawn; gh would resolve the other repo.
+	if opts.scope ~= vim.fn.getcwd() then
+		utils.notify(
+			"Repository changed since this was selected — nothing was sent",
+			vim.log.levels.ERROR
+		)
 		return
 	end
 
@@ -687,6 +709,22 @@ local function perform_mutation(opts)
 			M.refresh()
 		end
 	end)
+end
+
+---Drop a detail fetch whose repo moved under it: no paint, and no state a
+---verb could act on.
+---@param number integer|string
+local function abandon_view(number)
+	M.state.active_pr, M.state.active_pr_number, M.state.view_cwd = nil, nil, nil
+	utils.notify(
+		("PR #%s was loaded in another repository — not shown"):format(tostring(number)),
+		vim.log.levels.WARN
+	)
+	P:render_error("Repository changed while loading", {
+		detail = ("PR #%s belongs to the repository you left."):format(tostring(number)),
+		hint = "r loads this repository's pull requests",
+		view = "view",
+	})
 end
 
 ---@param cfg GitflowConfig
@@ -769,9 +807,17 @@ function M.open_view(number, cfg)
 	end
 
 	local request_id = P:next_request()
+	-- The scope this fetch is issued under. A `cd` during the round trip makes
+	-- the answer describe a repo we left, and painting it would arm every
+	-- verb against the new one.
+	local requested_cwd = vim.fn.getcwd()
 	P:render_loading(("Loading PR #%s…"):format(tostring(number)))
 	gh_prs.view(number, {}, function(err, pr)
 		if not P:is_active(request_id) then
+			return
+		end
+		if requested_cwd ~= vim.fn.getcwd() then
+			abandon_view(number)
 			return
 		end
 		if err then
@@ -787,7 +833,11 @@ function M.open_view(number, cfg)
 			if not P:is_active(request_id) then
 				return
 			end
-			render_view(pr or {}, not rc_err and rc or nil)
+			if requested_cwd ~= vim.fn.getcwd() then
+				abandon_view(number)
+				return
+			end
+			render_view(pr or {}, not rc_err and rc or nil, requested_cwd)
 		end)
 	end)
 end
@@ -1387,7 +1437,7 @@ end
 
 ---@param delete_branch boolean
 local function merge_selected_pr(delete_branch)
-	local pr = target_pr()
+	local pr, scope = target_pr()
 	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
@@ -1409,6 +1459,7 @@ local function merge_selected_pr(delete_branch)
 	end
 
 	perform_mutation({
+		scope = scope,
 		confirm_message = delete_branch
 			and ("Merge PR #%s (%s) by %s AND DELETE branch %s? Both are irreversible.")
 				:format(tostring(number), refs_text(pr), strategy, head)
@@ -1438,7 +1489,7 @@ end
 ---Enable or cancel auto-merge. Enabling arms a merge that will happen with no
 ---further prompt, so the confirm spells that out.
 function M.auto_merge_under_cursor()
-	local pr = target_pr()
+	local pr, scope = target_pr()
 	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
@@ -1455,6 +1506,7 @@ function M.auto_merge_under_cursor()
 
 	if choice == 2 then
 		perform_mutation({
+			scope = scope,
 			confirm_message = ("Cancel the queued auto-merge for PR #%s?")
 				:format(tostring(number)),
 			in_progress_message = ("Disabling auto-merge for PR #%s"):format(tostring(number)),
@@ -1471,6 +1523,7 @@ function M.auto_merge_under_cursor()
 		return
 	end
 	perform_mutation({
+		scope = scope,
 		confirm_message = ("Queue PR #%s (%s) to auto-merge by %s once checks pass?"
 			.. " It will then merge with no further confirmation.")
 			:format(tostring(number), refs_text(pr), strategy),
@@ -1483,7 +1536,7 @@ function M.auto_merge_under_cursor()
 end
 
 function M.close_pr_under_cursor()
-	local pr = target_pr()
+	local pr, scope = target_pr()
 	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
@@ -1491,6 +1544,7 @@ function M.close_pr_under_cursor()
 	local number = pr.number
 
 	perform_mutation({
+		scope = scope,
 		confirm_message = ("Close PR #%s without merging?"):format(tostring(number)),
 		in_progress_message = ("Closing PR #%s"):format(tostring(number)),
 		done_message = ("Closed PR #%s"):format(tostring(number)),
@@ -1502,7 +1556,7 @@ end
 
 ---The inverse of `x`: bring a closed PR back.
 function M.reopen_under_cursor()
-	local pr = target_pr()
+	local pr, scope = target_pr()
 	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
@@ -1510,6 +1564,7 @@ function M.reopen_under_cursor()
 	local number = pr.number
 
 	perform_mutation({
+		scope = scope,
 		confirm_message = ("Reopen PR #%s?"):format(tostring(number)),
 		in_progress_message = ("Reopening PR #%s"):format(tostring(number)),
 		done_message = ("Reopened PR #%s"):format(tostring(number)),
@@ -1521,7 +1576,7 @@ end
 
 ---Flip a PR between draft and ready-for-review.
 function M.toggle_draft_under_cursor()
-	local pr = target_pr()
+	local pr, scope = target_pr()
 	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
@@ -1530,6 +1585,7 @@ function M.toggle_draft_under_cursor()
 	local to_draft = not pr.isDraft
 
 	perform_mutation({
+		scope = scope,
 		confirm_message = to_draft
 			and ("Convert PR #%s back to a draft?"):format(tostring(number))
 			or ("Mark PR #%s ready for review?"):format(tostring(number)),
@@ -1687,7 +1743,8 @@ function M.close()
 	M.state.active_pr_number = nil
 	M.state.active_pr = nil
 	M.state.view_cwd = nil
-	M.state.busy = nil
+	-- `busy` deliberately survives: the in-flight mutation clears it when it
+	-- lands. Clearing it here re-armed the single-flight guard mid-merge.
 end
 
 ---@return boolean

@@ -148,10 +148,16 @@ end
 ---@field skipped integer
 ---@field cancelled integer
 ---@field unknown integer
----@field state "success"|"failure"|"pending"|"none"  worst state that matters
+---@field state "failure"|"cancelled"|"pending"|"unknown"|"success"|"skipped"|"none"
 
----Roll normalized checks up to one verdict. Failure outranks pending outranks
----success, so the summary never reads greener than the worst check.
+---Worst-first: the verdict is the first of these present. `gh pr checks`
+---counts a cancelled run as failing, and an unrecognised conclusion is not
+---evidence of a pass, so both outrank success.
+local CHECK_VERDICTS = { "failure", "cancelled", "pending", "unknown", "success", "skipped" }
+
+---Roll normalized checks up to one verdict, never greener than the worst
+---check. `none` means there are no checks; checks that exist but decide
+---nothing read as `skipped`.
 ---@param checks GitflowPrCheck[]
 ---@return GitflowPrCheckSummary
 function M.checks_summary(checks)
@@ -166,12 +172,11 @@ function M.checks_summary(checks)
 	if summary.total == 0 then
 		return summary
 	end
-	if summary.failure > 0 then
-		summary.state = "failure"
-	elseif summary.pending > 0 then
-		summary.state = "pending"
-	elseif summary.success > 0 then
-		summary.state = "success"
+	for _, verdict in ipairs(CHECK_VERDICTS) do
+		if summary[verdict] > 0 then
+			summary.state = verdict
+			break
+		end
 	end
 	return summary
 end

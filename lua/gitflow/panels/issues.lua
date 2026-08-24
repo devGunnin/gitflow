@@ -3,6 +3,7 @@ local input = require("gitflow.ui.input")
 local components = require("gitflow.ui.components")
 local panel = require("gitflow.ui.panel")
 local form = require("gitflow.ui.form")
+local gh = require("gitflow.gh")
 local gh_issues = require("gitflow.gh.issues")
 local gh_labels = require("gitflow.gh.labels")
 local gh_prs = require("gitflow.gh.prs")
@@ -138,7 +139,10 @@ local P = panel.new({
 		{ key = "A", desc = "assign", run = function()
 			M.edit_assignees_under_cursor()
 		end },
-		{ key = "M", desc = "milestone", run = function()
+		-- `T`, not `M`: `M` is the PR panel's auto-merge, which arms an
+		-- irreversible merge — no key may be destructive in one panel and
+		-- benign in another.
+		{ key = "T", desc = "milestone", run = function()
 			M.set_milestone_under_cursor()
 		end },
 		{ key = "e", desc = "edit comment", views = { "view" }, run = function()
@@ -477,7 +481,8 @@ local function render_list(groups, total)
 end
 
 ---@param issue table
-local function render_view(issue)
+---@param view_cwd string  cwd the detail was FETCHED under, not the live one
+local function render_view(issue, view_cwd)
 	local view_state = issue_state(issue)
 	local view_icon = icons.get("github", "issue_" .. view_state)
 	local B = P:begin_render(("Issue #%s: %s"):format(
@@ -552,8 +557,10 @@ local function render_view(issue)
 	M.state.active_issue_number = tonumber(issue.number)
 	M.state.active_issue = issue
 	-- gh resolves the repo from the cwd; a verb must never fire against a
-	-- repo this detail did not come from.
-	M.state.view_cwd = vim.fn.getcwd()
+	-- repo this detail did not come from. Stamped with the cwd the fetch was
+	-- ISSUED under — re-reading it here would take it from the losing side of
+	-- a `cd` that raced the round trip.
+	M.state.view_cwd = view_cwd
 	local painted = P:paint(B)
 	-- The list's rows are gone; the comment map replaces them.
 	P:clear_entry_maps()
@@ -703,6 +710,23 @@ function M.refresh()
 	end)
 end
 
+---Drop a detail fetch whose repo moved under it: no paint, and no state a
+---verb could act on.
+---@param number integer|string
+local function abandon_view(number)
+	M.state.active_issue, M.state.active_issue_number, M.state.view_cwd = nil, nil, nil
+	M.state.line_comments = {}
+	utils.notify(
+		("Issue #%s was loaded in another repository — not shown"):format(tostring(number)),
+		vim.log.levels.WARN
+	)
+	P:render_error("Repository changed while loading", {
+		detail = ("Issue #%s belongs to the repository you left."):format(tostring(number)),
+		hint = "r loads this repository's issues",
+		view = "view",
+	})
+end
+
 ---@param number integer|string
 ---@param cfg GitflowConfig|nil
 function M.open_view(number, cfg)
@@ -717,9 +741,17 @@ function M.open_view(number, cfg)
 	end
 
 	local request_id = P:next_request()
+	-- The scope this fetch is issued under. A `cd` during the round trip makes
+	-- the answer describe a repo we left, and painting it would arm every
+	-- verb against the new one.
+	local requested_cwd = vim.fn.getcwd()
 	P:render_loading(("Loading issue #%s…"):format(tostring(number)))
 	gh_issues.view(number, {}, function(err, issue)
 		if not P:is_active(request_id) then
+			return
+		end
+		if requested_cwd ~= vim.fn.getcwd() then
+			abandon_view(number)
 			return
 		end
 		if err then
@@ -731,7 +763,7 @@ function M.open_view(number, cfg)
 			})
 			return
 		end
-		render_view(issue or {})
+		render_view(issue or {}, requested_cwd)
 	end)
 end
 
@@ -932,18 +964,20 @@ end
 ---The issue a keypress acts on, resolved at press time — never a number
 ---cached from an older paint. Returns nil when nothing is selected, or when
 ---what is on screen belongs to a repo we have since left.
----@return table|nil
+---@return table|nil issue
+---@return string|nil scope  cwd the target is valid under
 local function target_issue()
+	local cwd = vim.fn.getcwd()
 	if M.state.mode == "view" then
-		if M.state.view_cwd ~= vim.fn.getcwd() then
-			return nil
+		if M.state.view_cwd ~= cwd then
+			return nil, nil
 		end
-		return M.state.active_issue
+		return M.state.active_issue, cwd
 	end
 	if not scoped_cache() then
-		return nil
+		return nil, nil
 	end
-	return entry_under_cursor()
+	return entry_under_cursor(), cwd
 end
 
 ---Run a confirm-gated, single-flight mutation. Declining fires no `gh` call
@@ -952,9 +986,11 @@ end
 ---@field confirm_message string  names exactly what will happen
 ---@field in_progress_message string
 ---@field done_message string
+---@field scope string  cwd the target was resolved under
 ---@field call fun(cb: fun(err: string|nil))
 ---@param opts GitflowGhMutation
 local function perform_mutation(opts)
+	assert(type(opts.scope) == "string", "a mutation must carry the scope it was chosen under")
 	if M.state.busy then
 		utils.notify(
 			("Already busy: %s — wait for it to finish"):format(M.state.busy),
@@ -963,11 +999,23 @@ local function perform_mutation(opts)
 		return
 	end
 
-	local confirmed = input.confirm(opts.confirm_message, {
-		choices = { "&Yes", "&No" },
-		default_choice = 2,
-	})
+	-- The repo is named here rather than by each gate: `gh` resolves it from
+	-- the cwd, so which repo is about to be hit is part of every prompt.
+	local confirmed = input.confirm(
+		("%s\nRepository: %s"):format(opts.confirm_message, gh.repo_label()),
+		{ choices = { "&Yes", "&No" }, default_choice = 2 }
+	)
 	if not confirmed then
+		return
+	end
+
+	-- Prompts can be async, so the cwd may have moved between choosing the
+	-- target and this spawn; gh would resolve the other repo.
+	if opts.scope ~= vim.fn.getcwd() then
+		utils.notify(
+			"Repository changed since this was selected — nothing was sent",
+			vim.log.levels.ERROR
+		)
 		return
 	end
 
@@ -1483,7 +1531,7 @@ end
 ---planned" and shows them with different glyphs, so the reason is asked for
 ---rather than defaulted.
 function M.close_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1501,6 +1549,7 @@ function M.close_under_cursor()
 	local reason = choice == 1 and "completed" or "not_planned"
 
 	perform_mutation({
+		scope = scope,
 		confirm_message = ("Close issue #%s as %s?"):format(tostring(number), reason),
 		in_progress_message = ("Closing issue #%s"):format(tostring(number)),
 		done_message = ("Closed issue #%s as %s"):format(tostring(number), reason),
@@ -1512,7 +1561,7 @@ end
 
 ---The inverse of `x`: bring a closed issue back.
 function M.reopen_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1520,6 +1569,7 @@ function M.reopen_under_cursor()
 	local number = issue.number
 
 	perform_mutation({
+		scope = scope,
 		confirm_message = ("Reopen issue #%s?"):format(tostring(number)),
 		in_progress_message = ("Reopening issue #%s"):format(tostring(number)),
 		done_message = ("Reopened issue #%s"):format(tostring(number)),
@@ -1536,7 +1586,7 @@ local NO_MILESTONE = "(none)"
 ---milestone list comes from the repo, not from the fetched issues: a
 ---milestone nothing is filed under yet must still be selectable.
 function M.set_milestone_under_cursor()
-	local issue = target_issue()
+	local issue, scope = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1579,6 +1629,7 @@ function M.set_milestone_under_cursor()
 				focus_panel()
 				local clearing = chosen == NO_MILESTONE
 				perform_mutation({
+					scope = scope,
 					confirm_message = clearing
 						and ("Clear the milestone on issue #%s?"):format(tostring(number))
 						or ("Set issue #%s to milestone '%s'?"):format(tostring(number), chosen),
@@ -1602,24 +1653,25 @@ end
 
 ---The comment under the cursor in the detail view, with the numeric id the
 ---REST endpoints need. Reports what is missing rather than acting on a guess.
----@return table|nil comment, integer|nil comment_id
+---@return table|nil comment, integer|nil comment_id, string|nil scope
 local function comment_under_cursor()
 	if M.state.mode ~= "view" then
 		utils.notify("Open an issue first", vim.log.levels.WARN)
-		return nil, nil
+		return nil, nil, nil
 	end
-	if M.state.view_cwd ~= vim.fn.getcwd() then
+	local scope = M.state.view_cwd
+	if scope ~= vim.fn.getcwd() then
 		utils.notify("This issue was loaded in another repository", vim.log.levels.WARN)
-		return nil, nil
+		return nil, nil, nil
 	end
 	if not M.state.bufnr or vim.api.nvim_get_current_buf() ~= M.state.bufnr then
-		return nil, nil
+		return nil, nil, nil
 	end
 
 	local comment = M.state.line_comments[vim.api.nvim_win_get_cursor(0)[1]]
 	if not comment then
 		utils.notify("Move the cursor onto a comment", vim.log.levels.WARN)
-		return nil, nil
+		return nil, nil, nil
 	end
 
 	local comment_id = gh_issues.comment_rest_id(comment)
@@ -1628,14 +1680,14 @@ local function comment_under_cursor()
 			"This comment carries no id GitHub can address — refresh (r) and retry",
 			vim.log.levels.ERROR
 		)
-		return nil, nil
+		return nil, nil, nil
 	end
-	return comment, comment_id
+	return comment, comment_id, scope
 end
 
 ---Rewrite an existing comment, prefilled with its current body.
 function M.edit_comment_under_cursor()
-	local comment, comment_id = comment_under_cursor()
+	local comment, comment_id, scope = comment_under_cursor()
 	if not comment then
 		return
 	end
@@ -1656,6 +1708,7 @@ function M.edit_comment_under_cursor()
 		end
 
 		perform_mutation({
+			scope = scope,
 			confirm_message = "Save this edit to the comment?",
 			in_progress_message = "Updating comment",
 			done_message = "Comment updated",
@@ -1667,7 +1720,7 @@ function M.edit_comment_under_cursor()
 end
 
 function M.delete_comment_under_cursor()
-	local comment, comment_id = comment_under_cursor()
+	local comment, comment_id, scope = comment_under_cursor()
 	if not comment then
 		return
 	end
@@ -1675,6 +1728,7 @@ function M.delete_comment_under_cursor()
 	local author = comment.author
 		and components.maybe_text(comment.author.login) or "unknown"
 	perform_mutation({
+		scope = scope,
 		confirm_message = ("Delete @%s's comment on issue #%s? This cannot be undone.")
 			:format(author, tostring(M.state.active_issue_number)),
 		in_progress_message = "Deleting comment",
@@ -1838,7 +1892,8 @@ function M.close()
 	M.state.active_issue_number = nil
 	M.state.active_issue = nil
 	M.state.view_cwd = nil
-	M.state.busy = nil
+	-- `busy` deliberately survives: the in-flight mutation clears it when it
+	-- lands. Clearing it here re-armed the single-flight guard mid-merge.
 end
 
 ---@return boolean

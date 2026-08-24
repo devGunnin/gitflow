@@ -202,7 +202,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `R` | Reopen issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
-| `M` | Set or clear the milestone (picked from the repo's milestones) |
+| `T` | Set or clear the milestone (picked from the repo's milestones) |
 | `f` | Open filter menu (state / labels / assignee / milestone) |
 | `Q` | Search issues (GitHub search syntax; empty clears it) |
 | `X` | Clear all filters |
@@ -231,7 +231,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `R` | Reopen issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
-| `M` | Set or clear the milestone |
+| `T` | Set or clear the milestone |
 | `f` | Open filter menu |
 | `X` | Clear all filters |
 | `s` | Cycle sort key |
@@ -249,9 +249,10 @@ state, so they take effect from either view but only become visible once you
 go back (`b`) to the list. `e`/`d` need a comment under the cursor, so they
 only do anything in the detail view.
 
-An issue card shows a pull-request cue when an open PR closes it — either
-through a `Closes #<n>` keyword in the PR body or the `<n>-slug` branch name
-`B` generates.
+An issue card shows a pull-request cue when an open PR *looks like* it closes
+it — inferred from the PR text, either a `Closes #<n>` keyword in the body or
+the `<n>-slug` branch name `B` generates. It is a cue, not GitHub's own link,
+so a keyword in prose or a code fence can produce one.
 
 ## PR List
 
@@ -271,7 +272,7 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `m` | Merge PR (asks for the strategy, then confirms) |
 | `D` | Merge PR **and delete its branch** (confirms, irreversible) |
 | `M` | Enable or cancel auto-merge (confirms, merges unattended once armed) |
-| `d` | Toggle draft / ready for review |
+| `t` | Toggle draft / ready for review |
 | `x` | Close PR |
 | `O` | Reopen PR |
 | `o` | Checkout PR branch |
@@ -295,7 +296,7 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `m` | Merge PR (asks for the strategy, then confirms) |
 | `D` | Merge PR **and delete its branch** (confirms, irreversible) |
 | `M` | Enable or cancel auto-merge (confirms) |
-| `d` | Toggle draft / ready for review |
+| `t` | Toggle draft / ready for review |
 | `x` | Close PR |
 | `O` | Reopen PR |
 | `o` | Checkout PR branch |
@@ -304,12 +305,16 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `q` | Close |
 
 Both views show the PR's CI checks: the list card carries a per-state count
-(`checks ✓3 ✗1 ●2`) and the detail view names every check with its state.
+(`checks ✓3 ✗1 ●2`) and the detail view names every check with its state plus
+one verdict. The verdict never reads greener than the worst check — a
+cancelled or unrecognised check outranks a pass, and checks that decide
+nothing read `skipped`, not `none`.
 
 `m`, `D` and `M` each end in a confirmation naming exactly what will happen —
-which PR, which strategy, and which branch (if any) gets deleted. Declining
-sends nothing to GitHub, and a second press while one is in flight is refused
-rather than queued.
+which PR, which strategy, which branch (if any) gets deleted, and which
+repository it will act on (`gh` resolves that from the working directory,
+which can move under an open panel). Declining sends nothing to GitHub, and a
+second press while one is in flight is refused rather than queued.
 
 ## PR Review Mode
 
@@ -636,13 +641,13 @@ bug — but it can catch you out if you jump between panels on muscle memory:
   the current line](#pr-review-mode) (PR Review Mode editing pane and thread
   popup) / [reopen the issue](#issue-list) (Issue List) / [edit
   reviewers](#pr-list) (PR List).
-- **`M`** — [set the milestone](#issue-list) (Issue List) / [enable or cancel
-  auto-merge](#pr-list) (PR List, destructive, confirms first). **`D`** —
-  [delete a saved view](#issue-list) (Issue List) / [merge and delete the
-  branch](#pr-list) (PR List, destructive, confirms first). **`d`** — [delete
-  the comment under the cursor](#issue-list) (Issue List detail view,
-  destructive) / [toggle draft](#pr-list) (PR List) / [delete a
-  label](#label-panel) (Label Panel).
+- **`M`** — [enable or cancel auto-merge](#pr-list) (PR List, destructive,
+  confirms first); the issue milestone is `T`, so no key is destructive in one
+  panel and benign in another. **`D`** — [delete a saved view](#issue-list)
+  (Issue List) / [merge and delete the branch](#pr-list) (PR List,
+  destructive, confirms first). **`d`** — always delete: [the comment under
+  the cursor](#issue-list) (Issue List detail view) / [a
+  label](#label-panel) (Label Panel); the PR draft toggle is `t`.
 - **`<C-n>` / `<C-p>`** — next / previous page (PR List, Label Panel) / move the
   selection down / up (command palette, searchable pickers). Both mean "the
   next one", on different things. In the PR and Label lists they also shadow

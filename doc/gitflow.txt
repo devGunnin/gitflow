@@ -535,12 +535,13 @@ Cross-panel inconsistencies ~
        list) / reply to comment thread (review view) / rerun a workflow
        run (actions panel, destructive, confirms first, default choice
        Cancel) / reopen the issue (issue list) / edit reviewers (PR list).
-    M: set the milestone (issue list) / enable or cancel auto-merge (PR
-       list, destructive, confirms first).
+    M: enable or cancel auto-merge (PR list, destructive, confirms
+       first); the issue milestone is T, so no key is destructive in one
+       panel and benign in another.
     D: delete a saved view (issue list) / merge and delete the branch (PR
        list, destructive, confirms first).
-    d: delete the comment under cursor (issue detail view, destructive) /
-       toggle draft (PR list) / delete a label (label panel).
+    d: always delete — the comment under cursor (issue detail view) or a
+       label (label panel); the PR draft toggle is t.
     "Back to list": b (issue list, PR list) or <BS> (actions panel, now a
        general "back one level": log view -> its parent, workflow list ->
        run list, run detail -> run list).
@@ -551,11 +552,17 @@ Cross-panel inconsistencies ~
     strategy, which branch gets deleted. Declining sends nothing to
     GitHub; a second press while one is in flight is refused, not queued.
 
+    Every destructive prompt also names the repository it will act on:
+    gh resolves that from the working directory, which can move under an
+    open panel.
+
     The PR panel renders the PR's CI checks from `statusCheckRollup`: a
     per-state count on each list card, every check named with its state
-    in the detail view. Issue cards carry a cue for any open PR that
-    closes them (a "Closes #<n>" keyword in the PR body, or the
-    <n>-slug branch name the issue panel's B generates).
+    in the detail view. The verdict never reads greener than the worst
+    check — a cancelled or unrecognised check outranks a pass. Issue
+    cards carry a cue for any open PR that LOOKS like it closes them,
+    inferred from the PR text (a "Closes #<n>" keyword in the body, or
+    the <n>-slug branch name the issue panel's B generates).
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*

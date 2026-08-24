@@ -344,23 +344,111 @@ test("an in-flight check run reports pending, not unknown", function()
 	assert_equals(checks[1].state, "pending", "a running check is pending")
 end)
 
+---@type { name: string, rollup: table, state: string, why: string }[]
+local CHECK_VERDICT_CASES = {
+	{
+		name = "mixed: one failure among passes",
+		rollup = {
+			{ name = "a", status = "COMPLETED", conclusion = "SUCCESS" },
+			{ name = "b", status = "COMPLETED", conclusion = "SUCCESS" },
+			{ name = "c", status = "COMPLETED", conclusion = "FAILURE" },
+		},
+		state = "failure",
+		why = "one failing check makes the rollup fail",
+	},
+	{
+		name = "pending only",
+		rollup = { { name = "a", status = "QUEUED" }, { name = "b", status = "IN_PROGRESS" } },
+		state = "pending",
+		why = "nothing has decided yet",
+	},
+	{
+		name = "pending alongside a pass",
+		rollup = {
+			{ name = "a", status = "COMPLETED", conclusion = "SUCCESS" },
+			{ name = "b", status = "QUEUED" },
+		},
+		state = "pending",
+		why = "a queued check outranks a passing one",
+	},
+	{
+		name = "zero checks",
+		rollup = {},
+		state = "none",
+		why = "no checks is not a verdict",
+	},
+	{
+		name = "legacy commit status failing beside an Actions pass",
+		rollup = {
+			{ __typename = "CheckRun", name = "build", status = "COMPLETED", conclusion = "SUCCESS" },
+			{ __typename = "StatusContext", context = "legacy/ci", state = "FAILURE" },
+		},
+		state = "failure",
+		why = "a commit status counts the same as a check run",
+	},
+	{
+		name = "cancelled beside a pass",
+		rollup = {
+			{ name = "a", status = "COMPLETED", conclusion = "SUCCESS" },
+			{ name = "b", status = "COMPLETED", conclusion = "CANCELLED" },
+		},
+		state = "cancelled",
+		why = "gh pr checks counts a cancelled run as failing, so it cannot read green",
+	},
+	{
+		name = "completed with a null conclusion beside a pass",
+		rollup = {
+			{ name = "a", status = "COMPLETED", conclusion = "SUCCESS" },
+			{ name = "b", status = "COMPLETED", conclusion = vim.NIL },
+		},
+		state = "unknown",
+		why = "a check we cannot read is not evidence of a pass",
+	},
+	{
+		name = "cancelled only",
+		rollup = { { name = "a", status = "COMPLETED", conclusion = "CANCELLED" } },
+		state = "cancelled",
+		why = "a cancelled check is a check, not an absence of one",
+	},
+	{
+		name = "skipped only",
+		rollup = { { name = "a", status = "COMPLETED", conclusion = "SKIPPED" } },
+		state = "skipped",
+		why = "checks that decide nothing must not read as zero checks",
+	},
+	{
+		name = "unmapped conclusion only",
+		rollup = { { name = "a", status = "COMPLETED", conclusion = "SOMETHING_NEW" } },
+		state = "unknown",
+		why = "a conclusion outside the map is unknown, not absent",
+	},
+}
+
 test("checks_summary never reads greener than its worst check", function()
+	for _, case in ipairs(CHECK_VERDICT_CASES) do
+		local summary = gh_prs.checks_summary(gh_prs.normalize_checks(case.rollup))
+		assert_equals(summary.state, case.state, ("%s: %s"):format(case.name, case.why))
+		assert_equals(
+			summary.total, #case.rollup,
+			("%s: every node should be counted"):format(case.name)
+		)
+	end
 	assert_equals(
 		gh_prs.checks_summary(gh_prs.normalize_checks(PR_ROWS[1].statusCheckRollup)).state,
 		"failure",
-		"one failing check makes the rollup fail"
+		"the panel fixture's rollup fails on its one failing check"
 	)
-	assert_equals(
-		gh_prs.checks_summary(gh_prs.normalize_checks({
-			{ name = "a", status = "COMPLETED", conclusion = "SUCCESS" },
-			{ name = "b", status = "QUEUED" },
-		})).state,
-		"pending",
-		"a queued check outranks a passing one"
-	)
-	assert_equals(
-		gh_prs.checks_summary({}).state, "none", "no checks is not a verdict"
-	)
+end)
+
+test("a non-empty check set never renders the zero-checks verdict", function()
+	for _, case in ipairs(CHECK_VERDICT_CASES) do
+		if #case.rollup > 0 then
+			assert_true(
+				gh_prs.checks_summary(gh_prs.normalize_checks(case.rollup)).state ~= "none",
+				("%s rendered \"Checks (%d) — none\""):format(case.name, #case.rollup)
+			)
+		end
+	end
 end)
 
 test("the PR list card shows per-state check counts", function()
@@ -871,6 +959,224 @@ test("a detail view loaded elsewhere refuses to mutate after a cd", function()
 	assert_true(ok, tostring(err))
 end)
 
+---Run `fn` with the cwd in a throwaway directory pair, restoring both after.
+---@param fn fun(repo_a: string, repo_b: string)
+local function with_two_repos(fn)
+	local original_cwd = vim.fn.getcwd()
+	local repo_a, repo_b = vim.fn.tempname(), vim.fn.tempname()
+	vim.fn.mkdir(repo_a, "p")
+	vim.fn.mkdir(repo_b, "p")
+	local ok, err = pcall(fn, repo_a, repo_b)
+	vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+	vim.fn.delete(repo_a, "rf")
+	vim.fn.delete(repo_b, "rf")
+	assert_true(ok, tostring(err))
+end
+
+---Hold every gh answer so a `cd` can be slipped into the round trip. Returns
+---a release function that answers everything issued so far, in order.
+---@return fun()
+local function hold_gh_answers()
+	local held, next_index = {}, 1
+	gh.json = function(args, _opts, cb)
+		calls[#calls + 1] = vim.deepcopy(args)
+		held[#held + 1] = function()
+			cb(nil, json_answer(args), { code = 0, signal = 0, stdout = "", stderr = "", cmd = args })
+		end
+	end
+	gh.run = function(args, _opts, cb)
+		calls[#calls + 1] = vim.deepcopy(args)
+		held[#held + 1] = function()
+			cb({ code = 0, signal = 0, stdout = "", stderr = "", cmd = args })
+		end
+	end
+	return function()
+		while next_index <= #held do
+			local release = held[next_index]
+			next_index = next_index + 1
+			release()
+		end
+	end
+end
+
+test("a PR detail that lands after a cd is not painted and arms no verb", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			stub_confirm(1)
+			stub_vim_confirm(1)
+			pr_panel.close()
+			pr_panel.state.cache = nil
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+
+			local release = hold_gh_answers()
+			pr_panel.open_view(12, cfg)
+			-- The fetch is in flight; the repo moves under it.
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+			release()
+
+			local text = buffer_text(pr_panel.state.bufnr)
+			assert_true(
+				text:find("Add the thing", 1, true) == nil,
+				("repo A's PR was painted in repo B: %q"):format(text)
+			)
+			assert_equals(pr_panel.state.active_pr, nil, "no PR may be left actionable")
+			assert_equals(pr_panel.state.view_cwd, nil, "no scope stamp may survive")
+
+			local verbs = {
+				["merge+delete branch"] = pr_panel.merge_delete_branch_under_cursor,
+				["auto-merge"] = pr_panel.auto_merge_under_cursor,
+				["close"] = pr_panel.close_pr_under_cursor,
+			}
+			for name, press in pairs(verbs) do
+				local fired = capture(press)
+				assert_equals(
+					#fired, 0,
+					("%s fired against repo B: %s"):format(name, vim.inspect(fired))
+				)
+			end
+		end)
+	end)
+	pr_panel.close()
+	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("an issue detail that lands after a cd is not painted and arms no verb", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			stub_confirm(1)
+			issue_panel.close()
+			issue_panel.state.cache = nil
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+
+			local release = hold_gh_answers()
+			issue_panel.open_view(7, cfg)
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+			release()
+
+			local text = buffer_text(issue_panel.state.bufnr)
+			assert_true(
+				text:find("Something is broken", 1, true) == nil,
+				("repo A's issue was painted in repo B: %q"):format(text)
+			)
+			assert_equals(issue_panel.state.active_issue, nil, "no issue may be left actionable")
+			assert_equals(issue_panel.state.view_cwd, nil, "no scope stamp may survive")
+
+			local verbs = {
+				["close"] = issue_panel.close_under_cursor,
+				["delete comment"] = issue_panel.delete_comment_under_cursor,
+				["edit comment"] = issue_panel.edit_comment_under_cursor,
+			}
+			for name, press in pairs(verbs) do
+				local fired = capture(press)
+				assert_equals(
+					#fired, 0,
+					("%s fired against repo B: %s"):format(name, vim.inspect(fired))
+				)
+			end
+		end)
+	end)
+	issue_panel.close()
+	issue_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("a cd between the prompt and the spawn cancels the mutation", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		with_two_repos(function(repo_a, repo_b)
+			stub_confirm(1)
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+			issue_panel.close()
+			issue_panel.state.cache = nil
+			issue_panel.open_view(7, cfg)
+			focus_first(issue_panel, "line_comments")
+
+			-- The comment body prompt is async: answer it from repo B.
+			input.prompt = function(_opts, on_confirm)
+				vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+				on_confirm("second thought")
+			end
+			local fired = capture(function()
+				issue_panel.edit_comment_under_cursor()
+			end)
+			assert_equals(
+				#fired, 0,
+				("the edit reached repo B: %s"):format(vim.inspect(fired))
+			)
+		end)
+	end)
+	issue_panel.close()
+	issue_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("every destructive confirm names the repository it will act on", function()
+	install_stubs()
+	local seen = {}
+	local ok, err = pcall(function()
+		input.confirm = function(message)
+			seen[#seen + 1] = message
+			return false, 2
+		end
+		stub_vim_confirm(1)
+		open_prs()
+		pr_panel.merge_delete_branch_under_cursor()
+		pr_panel.close_pr_under_cursor()
+		open_issues()
+		issue_panel.close_under_cursor()
+
+		assert_true(#seen > 0, "no gate was reached")
+		local label = ("Repository: %s"):format(gh.repo_label())
+		for _, message in ipairs(seen) do
+			-- The reason prompts that precede a gate are not gates themselves.
+			if message:find("?", 1, true) then
+				assert_true(
+					message:find(label, 1, true) ~= nil,
+					("a gate did not name the repo: %q"):format(message)
+				)
+			end
+		end
+	end)
+	pr_panel.close()
+	issue_panel.close()
+	pr_panel.state.cache, issue_panel.state.cache = nil, nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("repo_label reads the origin slug, and falls back to the directory", function()
+	local original_cwd = vim.fn.getcwd()
+	local dir = vim.fn.tempname()
+	vim.fn.mkdir(dir, "p")
+	local ok, err = pcall(function()
+		vim.fn.system({ "git", "-C", dir, "init" })
+		assert_equals(vim.v.shell_error, 0, "the fixture repo should initialize")
+		vim.cmd("cd " .. vim.fn.fnameescape(dir))
+		assert_equals(gh.repo_label(), vim.fn.getcwd(), "no origin: name the directory")
+
+		vim.fn.system({
+			"git", "-C", dir, "remote", "add", "origin",
+			"git@github.com:octo/thing.git",
+		})
+		assert_equals(gh.repo_label(), "octo/thing", "an ssh remote yields owner/repo")
+
+		vim.fn.system({
+			"git", "-C", dir, "remote", "set-url", "origin",
+			"https://github.com/octo/thing.git",
+		})
+		assert_equals(gh.repo_label(), "octo/thing", "an https remote yields owner/repo")
+	end)
+	vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+	vim.fn.delete(dir, "rf")
+	assert_true(ok, tostring(err))
+end)
+
 -- ── 6. issue search + linked-PR cue ─────────────────────────────────────
 
 test("the search prompt reaches gh as --search", function()
@@ -988,9 +1294,9 @@ local HINT_CASES = {
 	{
 		panel = "gitflow.panels.prs",
 		view = "list",
-		keys = { "O", "d", "M", "D", "E", "R" },
+		keys = { "O", "t", "M", "D", "E", "R" },
 	},
-	{ panel = "gitflow.panels.issues", view = "list", keys = { "R", "M", "Q" } },
+	{ panel = "gitflow.panels.issues", view = "list", keys = { "R", "T", "Q" } },
 	{ panel = "gitflow.panels.issues", view = "view", keys = { "e", "d" } },
 }
 

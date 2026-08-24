@@ -4,10 +4,16 @@
 # Returns canned JSON from tests/fixtures/gh/ for supported commands.
 # Set GITFLOW_GH_LOG to a file path to record all invocations.
 # Set GITFLOW_GH_FAIL=<subcommand> to force that subcommand to fail.
+# Set GITFLOW_GH_DELAY=<seconds> to hold every answer open, so a test can slip
+# a `cd` into the round trip.
 set -eu
 
 if [ -n "${GITFLOW_GH_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$GITFLOW_GH_LOG"
+fi
+
+if [ -n "${GITFLOW_GH_DELAY:-}" ]; then
+  sleep "$GITFLOW_GH_DELAY"
 fi
 
 needs_stdin=false

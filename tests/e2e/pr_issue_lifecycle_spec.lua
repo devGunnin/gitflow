@@ -12,6 +12,8 @@ local cfg = _G.TestConfig
 
 local commands = require("gitflow.commands")
 local prs_panel = require("gitflow.panels.prs")
+local issues_panel = require("gitflow.panels.issues")
+local input = require("gitflow.ui.input")
 
 ---@param fn fun(log_path: string)
 local function with_temp_gh_log(fn)
@@ -150,6 +152,129 @@ T.run_suite("E2E: PR and issue lifecycle verbs", {
 		)
 		prs_panel.close()
 		prs_panel.state.cache = nil
+	end,
+
+	-- ── the detail path is scoped to the repo it was FETCHED in ───────
+	--
+	-- Held open with GITFLOW_GH_DELAY, a `cd` is slipped into the round trip
+	-- and the verdict is taken at the process boundary: whether a gh PROCESS
+	-- was spawned in the new repo, not whether a Lua function was called.
+
+	["a detail fetch that lands after a cd paints nothing and spawns no gh"] = function()
+		local original_cwd = vim.fn.getcwd()
+		local repo_a, repo_b = vim.fn.tempname(), vim.fn.tempname()
+		vim.fn.mkdir(repo_a, "p")
+		vim.fn.mkdir(repo_b, "p")
+
+		-- Always answer "Yes": a refusal must come from the scope check, not
+		-- from a prompt the harness declined.
+		local real_confirm = input.confirm
+		input.confirm = function()
+			return true, 1
+		end
+
+		local ok, err = xpcall(function()
+			with_temp_gh_log(function(log_path)
+				vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+				prs_panel.close()
+				prs_panel.state.cache = nil
+
+				vim.env.GITFLOW_GH_DELAY = "1"
+				prs_panel.open_view(42, cfg)
+				-- The gh process is running in repo A; move out from under it.
+				vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+				vim.env.GITFLOW_GH_DELAY = nil
+				T.drain_jobs(8000)
+
+				local text = table.concat(T.buf_lines(prs_panel.state.bufnr), "\n")
+				T.assert_true(
+					text:find("Add dark mode support", 1, true) == nil,
+					("repo A's PR was painted after the cd: %s"):format(text)
+				)
+				T.assert_equals(prs_panel.state.active_pr, nil, "no PR may stay actionable")
+				T.assert_equals(prs_panel.state.view_cwd, nil, "no scope stamp may survive")
+
+				local before = #T.read_file(log_path)
+				prs_panel.merge_delete_branch_under_cursor()
+				prs_panel.auto_merge_under_cursor()
+				prs_panel.close_pr_under_cursor()
+				T.drain_jobs(3000)
+				local after = T.read_file(log_path)
+				T.assert_equals(
+					#after - before, 0,
+					("a verb spawned gh in repo B: %s"):format(
+						table.concat(vim.list_slice(after, before + 1), " | ")
+					)
+				)
+			end)
+		end, debug.traceback)
+
+		input.confirm = real_confirm
+		vim.env.GITFLOW_GH_DELAY = nil
+		prs_panel.close()
+		prs_panel.state.cache = nil
+		vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+		vim.fn.delete(repo_a, "rf")
+		vim.fn.delete(repo_b, "rf")
+		if not ok then
+			error(err, 0)
+		end
+	end,
+
+	["an issue detail that lands after a cd paints nothing and spawns no gh"] = function()
+		local original_cwd = vim.fn.getcwd()
+		local repo_a, repo_b = vim.fn.tempname(), vim.fn.tempname()
+		vim.fn.mkdir(repo_a, "p")
+		vim.fn.mkdir(repo_b, "p")
+
+		local real_confirm = input.confirm
+		input.confirm = function()
+			return true, 1
+		end
+
+		local ok, err = xpcall(function()
+			with_temp_gh_log(function(log_path)
+				vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+				issues_panel.close()
+				issues_panel.state.cache = nil
+
+				vim.env.GITFLOW_GH_DELAY = "1"
+				issues_panel.open_view(1, cfg)
+				vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+				vim.env.GITFLOW_GH_DELAY = nil
+				T.drain_jobs(8000)
+
+				local text = table.concat(T.buf_lines(issues_panel.state.bufnr), "\n")
+				T.assert_true(
+					text:find("Setup CI pipeline", 1, true) == nil,
+					("repo A's issue was painted after the cd: %s"):format(text)
+				)
+				T.assert_equals(issues_panel.state.active_issue, nil, "no issue may stay actionable")
+
+				local before = #T.read_file(log_path)
+				issues_panel.close_under_cursor()
+				issues_panel.delete_comment_under_cursor()
+				T.drain_jobs(3000)
+				local after = T.read_file(log_path)
+				T.assert_equals(
+					#after - before, 0,
+					("a verb spawned gh in repo B: %s"):format(
+						table.concat(vim.list_slice(after, before + 1), " | ")
+					)
+				)
+			end)
+		end, debug.traceback)
+
+		input.confirm = real_confirm
+		vim.env.GITFLOW_GH_DELAY = nil
+		issues_panel.close()
+		issues_panel.state.cache = nil
+		vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+		vim.fn.delete(repo_a, "rf")
+		vim.fn.delete(repo_b, "rf")
+		if not ok then
+			error(err, 0)
+		end
 	end,
 
 	["the PR detail view names every check and its state"] = function()

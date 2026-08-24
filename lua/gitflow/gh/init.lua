@@ -42,9 +42,11 @@ end
 --- Classify a failed `gh` invocation from its combined output.
 --- Every pattern here was observed from a real gh (2.95.0); none are guessed.
 --- Order matters twice: network is tested first (a connection failure
---- otherwise reads as auth), and rate limiting before permission — GitHub
---- answers a spent primary quota with HTTP 403, which is otherwise "your
---- token lacks rights" and sends the user off to `gh auth refresh`.
+--- otherwise reads as auth), and rate limiting ahead of BOTH auth and
+--- permission — GitHub answers a spent primary quota with HTTP 403, which is
+--- otherwise "your token lacks rights" and sends the user off to `gh auth
+--- refresh`. Safe because no observed auth or permission message contains a
+--- rate-limit phrase.
 ---@param output string
 ---@return GitflowGhFailureKind
 function M.classify_failure(output)
@@ -131,6 +133,41 @@ function M.run(args, opts, on_exit)
 		end
 		on_exit(result)
 	end)
+end
+
+---Owner/repo out of a remote url, in either form git writes it:
+---`git@host:owner/repo.git` or `https://host/owner/repo(.git)`.
+---@param url string
+---@return string|nil
+local function slug_from_remote_url(url)
+	local path = url:match("^[%w+.-]+://[^/]+/(.+)$") or url:match("^[^/]+:(.+)$")
+	if not path then
+		return nil
+	end
+	path = path:gsub("%.git$", ""):gsub("/+$", "")
+	local owner, repo = path:match("([^/]+)/([^/]+)$")
+	if not owner or not repo then
+		return nil
+	end
+	return ("%s/%s"):format(owner, repo)
+end
+
+---Which repository a `gh` call made from this cwd will act on, for prompts
+---that must name it. Read from git, never from `gh` — a confirm gate must not
+---spend a request (or fire a process) just to describe itself. Falls back to
+---the directory when there is no usable origin, which still tells the user
+---where they are.
+---@return string
+function M.repo_label()
+	local cwd = vim.fn.getcwd()
+	local out = vim.fn.systemlist({ "git", "-C", cwd, "remote", "get-url", "origin" })
+	if vim.v.shell_error == 0 and out and out[1] then
+		local slug = slug_from_remote_url(vim.trim(out[1]))
+		if slug then
+			return slug
+		end
+	end
+	return cwd
 end
 
 ---@param result GitflowGitResult
