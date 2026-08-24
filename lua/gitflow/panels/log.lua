@@ -18,11 +18,11 @@ local components = require("gitflow.ui.components")
 
 local M = {}
 local LOG_FLOAT_TITLE = "  Gitflow Log  "
-local LOG_FLOAT_FOOTER = " <CR> review commit · V range select · r refresh · q close "
+local LOG_FLOAT_FOOTER = " <CR> review commit · <leader>v range select · r refresh · q close "
 -- Split-layout counterpart of LOG_FLOAT_FOOTER; keep the two in sync.
 local LOG_HINTS = {
 	{ "<CR>", "review commit" },
-	{ "V", "range select" },
+	{ "<leader>v", "range select" },
 	{ "r", "refresh" },
 	{ "q", "close" },
 }
@@ -86,7 +86,9 @@ local function ensure_window(cfg)
 		M.open_commit_under_cursor()
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "V", function()
+	-- V is deliberately left unbound: it collides with vim's visual-line
+	-- select, the same class of defect as the issues panel (#428).
+	vim.keymap.set("n", "<leader>v", function()
 		M.mark_range_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 

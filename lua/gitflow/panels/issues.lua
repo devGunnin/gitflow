@@ -36,7 +36,7 @@ local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
 	" <CR> view · c create · C comment · E edit · x close · L labels"
 	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · G group · <Tab> fold group · v/W/D views · B branch"
+	.. " · G group · <Tab> fold group · <leader>v/W/D views · B branch"
 	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
@@ -162,12 +162,13 @@ local function ensure_window(cfg)
 		M.toggle_group_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "v", function()
+	-- v/V are deliberately left unbound: they collide with vim's charwise and
+	-- visual-line select, which the panel's readonly buffer should still
+	-- support (#428). switch_view moves to <leader>v instead.
+	vim.keymap.set("n", "<leader>v", function()
 		M.switch_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	-- V is deliberately left unbound: it collides with vim's visual-line
-	-- select, which the panel's readonly buffer should still support (#428).
 	vim.keymap.set("n", "W", function()
 		M.save_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -1354,19 +1355,30 @@ local function comment_on_issue(number)
 	end)
 end
 
-function M.comment_under_cursor()
+---Resolve the issue under cursor (list mode) or the active issue (detail
+---mode), notifying and returning nil when neither is available.
+---@return integer|string|nil
+local function issue_number_under_cursor()
 	local number = M.state.active_issue_number
 	if M.state.mode == "list" then
 		local entry = entry_under_cursor()
 		if not entry then
 			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
+			return nil
 		end
 		number = entry.number
 	end
 
 	if not number then
 		utils.notify("No issue selected", vim.log.levels.WARN)
+		return nil
+	end
+	return number
+end
+
+function M.comment_under_cursor()
+	local number = issue_number_under_cursor()
+	if not number then
 		return
 	end
 	comment_on_issue(number)
@@ -1375,30 +1387,41 @@ end
 -- ── Edit title/body (#428) ────────────────────────────────────────────
 
 ---@param number integer|string
----@param issue table
+---@param issue table  already validated: issue.title is a string
 local function open_edit_form(number, issue)
+	assert(number ~= nil, "open_edit_form: number is required")
+	assert(type(issue) == "table", "open_edit_form: issue must be a table")
+
 	form.open({
 		title = ("Edit Issue #%s"):format(tostring(number)),
-		draft_key = ("issue:%s:edit"):format(tostring(number)),
+		-- No draft_key: this form's source of truth is the remote issue, so
+		-- a stashed draft from a cancelled edit must never win over a fresh
+		-- fetch (#428 follow-up). Drafts stay for issue:create / comments.
 		fields = {
 			{
 				name = "Title",
 				key = "title",
 				required = true,
-				default = maybe_text(issue.title) ~= "-" and issue.title or "",
+				default = type(issue.title) == "string" and issue.title or "",
 			},
 			{
 				name = "Body",
 				key = "body",
 				multiline = true,
-				default = tostring(issue.body or ""),
+				default = type(issue.body) == "string" and issue.body or "",
 			},
 		},
+		-- Prefill is a snapshot from form-open time; submit is last-write-wins
+		-- with no updatedAt/ETag guard against a concurrent remote edit. A
+		-- deliberate simplification for a plugin, not an oversight.
 		on_submit = function(values)
-			gh_issues.edit(number, {
-				title = values.title,
-				body = values.body,
-			}, {}, function(err)
+			local edit_opts = { title = values.title }
+			-- Only carry a body the user actually has, so a degenerate fetch
+			-- (empty payload, null body) can never blank the remote body.
+			if values.body ~= nil and vim.trim(values.body) ~= "" then
+				edit_opts.body = values.body
+			end
+			gh_issues.edit(number, edit_opts, {}, function(err)
 				if err then
 					utils.notify(err, vim.log.levels.ERROR)
 					return
@@ -1416,30 +1439,26 @@ end
 
 ---@param number integer|string
 local function edit_issue(number)
+	assert(number ~= nil, "edit_issue: number is required")
 	gh_issues.view(number, {}, function(err, issue)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		vim.schedule(function()
-			open_edit_form(number, issue or {})
-		end)
+		if type(issue) ~= "table" or type(issue.title) ~= "string" then
+			utils.notify(
+				("Could not load issue #%s"):format(tostring(number)),
+				vim.log.levels.ERROR
+			)
+			return
+		end
+		open_edit_form(number, issue)
 	end)
 end
 
 function M.edit_issue_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
+	local number = issue_number_under_cursor()
 	if not number then
-		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
 	edit_issue(number)
@@ -1511,18 +1530,8 @@ local function parse_label_patch(value)
 end
 
 function M.edit_labels_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
+	local number = issue_number_under_cursor()
 	if not number then
-		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
 
@@ -1579,18 +1588,8 @@ local function parse_assignee_patch(value)
 end
 
 function M.edit_assignees_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
+	local number = issue_number_under_cursor()
 	if not number then
-		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
 

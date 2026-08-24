@@ -15,6 +15,7 @@ local views_store = require("gitflow.issues.views")
 local ui = require("gitflow.ui")
 local input = require("gitflow.ui.input")
 local form = require("gitflow.ui.form")
+local utils = require("gitflow.utils")
 
 local GH_LOG = vim.fn.tempname()
 
@@ -95,10 +96,13 @@ local function has_line(lines, needle)
 end
 
 ---@param bufnr integer
----@param lhs string
+---@param lhs string  may contain a literal `<leader>`, resolved before lookup
 ---@return table|nil
 local function buf_map(bufnr, lhs)
-	local target = vim.api.nvim_replace_termcodes(lhs, true, true, true)
+	local leader = vim.g.mapleader or "\\"
+	local target = vim.api.nvim_replace_termcodes(
+		(lhs:gsub("<leader>", leader)), true, true, true
+	)
 	for _, map in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
 		if vim.api.nvim_replace_termcodes(map.lhs, true, true, true) == target then
 			return map
@@ -752,7 +756,7 @@ T.run_suite("issues_panel_spec", {
 
 	["view keymaps are bound on the panel buffer"] = function()
 		local bufnr = open_and_wait()
-		for _, lhs in ipairs({ "v", "W", "D" }) do
+		for _, lhs in ipairs({ "<leader>v", "W", "D" }) do
 			T.assert_true(
 				buf_map(bufnr, lhs) ~= nil,
 				("%s should be mapped on the issues buffer"):format(lhs)
@@ -760,10 +764,14 @@ T.run_suite("issues_panel_spec", {
 		end
 	end,
 
-	-- ── #428 shift-V no longer collides with visual-line select ────────
+	-- ── #428 v/V no longer collide with charwise/visual-line select ────
 
-	["V is left unbound so visual-line select still works"] = function()
+	["v and V are both left unbound so vim's select still works"] = function()
 		local bufnr = open_and_wait()
+		T.assert_true(
+			buf_map(bufnr, "v") == nil,
+			"v should not be mapped on the issues buffer"
+		)
 		T.assert_true(
 			buf_map(bufnr, "V") == nil,
 			"V should not be mapped on the issues buffer"
@@ -987,5 +995,170 @@ T.run_suite("issues_panel_spec", {
 			end
 		end
 		T.assert_true(matched, "gh issue edit should carry the new title and body")
+	end,
+
+	-- ── fix round: B1 a stale draft must never override the fetch ──────
+
+	["a stale draft never overrides the freshly-fetched issue"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		-- Seed a stale draft exactly as the reviewer's probe did, then let
+		-- the REAL form.lua (not a stub) render — a stub would bypass the
+		-- draft-restore logic this test exists to catch.
+		form._drafts["issue:1:edit"] = { title = "STALE TITLE", body = "STALE BODY" }
+
+		local opened_state = nil
+		local original_open = form.open
+		form.open = function(opts)
+			opened_state = original_open(opts)
+			return opened_state
+		end
+
+		issues_panel.edit_issue_under_cursor()
+		T.wait_until(function()
+			return opened_state ~= nil
+		end, "edit form should open once the issue is fetched", 5000)
+		form.open = original_open
+		form._drafts["issue:1:edit"] = nil
+
+		local lines = vim.api.nvim_buf_get_lines(opened_state.bufnr, 0, -1, false)
+		local text = table.concat(lines, "\n")
+		pcall(vim.api.nvim_win_close, opened_state.winid, true)
+		pcall(vim.api.nvim_buf_delete, opened_state.bufnr, { force = true })
+
+		T.assert_true(
+			text:find("STALE TITLE", 1, true) == nil,
+			"a stale draft must not override the fetched title"
+		)
+		T.assert_true(
+			text:find("STALE BODY", 1, true) == nil,
+			"a stale draft must not override the fetched body"
+		)
+		T.assert_true(
+			text:find("Setup CI pipeline", 1, true) ~= nil,
+			"the form should show the freshly-fetched title"
+		)
+	end,
+
+	-- ── fix round: B2 a degenerate fetch must never open/blank the form ─
+
+	["a payload with no usable title refuses to open the edit form"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local original_view = gh_issues.view
+		gh_issues.view = function(_number, _opts, cb)
+			-- Mirrors gh/init.lua's exit-0-with-empty-stdout path.
+			cb(nil, {})
+		end
+
+		local opened = false
+		local original_open = form.open
+		form.open = function(opts)
+			opened = true
+			return original_open(opts)
+		end
+
+		local notified = nil
+		local original_notify = utils.notify
+		utils.notify = function(message, level, opts)
+			notified = { message = message, level = level }
+			return original_notify(message, level, opts)
+		end
+
+		issues_panel.edit_issue_under_cursor()
+		T.wait_until(function()
+			return notified ~= nil
+		end, "a degenerate payload should notify an error", 5000)
+
+		gh_issues.view = original_view
+		form.open = original_open
+		utils.notify = original_notify
+
+		T.assert_true(not opened, "the edit form must not open for a payload with no title")
+		T.assert_equals(notified.level, vim.log.levels.ERROR, "the notify should be an error")
+		T.drain_jobs()
+		T.assert_equals(gh_call_count("issue edit"), 0, "gh issue edit must never run")
+	end,
+
+	["a null body prefills empty instead of leaking the vim.NIL sentinel"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local original_view = gh_issues.view
+		gh_issues.view = function(_number, _opts, cb)
+			cb(nil, { number = 1, title = "Setup CI pipeline", body = vim.NIL })
+		end
+
+		local opened_state = nil
+		local original_open = form.open
+		form.open = function(opts)
+			opened_state = original_open(opts)
+			return opened_state
+		end
+
+		issues_panel.edit_issue_under_cursor()
+		T.wait_until(function()
+			return opened_state ~= nil
+		end, "edit form should open for a valid title with a null body", 5000)
+
+		gh_issues.view = original_view
+		form.open = original_open
+
+		local lines = vim.api.nvim_buf_get_lines(opened_state.bufnr, 0, -1, false)
+		local text = table.concat(lines, "\n")
+		pcall(vim.api.nvim_win_close, opened_state.winid, true)
+		pcall(vim.api.nvim_buf_delete, opened_state.bufnr, { force = true })
+
+		T.assert_true(
+			text:find("vim.NIL", 1, true) == nil,
+			"a JSON-null body must not leak the vim.NIL sentinel into the form"
+		)
+	end,
+
+	["submitting with an empty body field does not send --body"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local submitted = false
+		local original_open = form.open
+		form.open = function(opts)
+			opts.on_submit({ title = "Setup CI pipeline v2", body = "" })
+			submitted = true
+			return { bufnr = nil, winid = nil }
+		end
+
+		issues_panel.edit_issue_under_cursor()
+		T.wait_until(function()
+			return submitted
+		end, "the form should open and submit", 5000)
+		form.open = original_open
+
+		T.drain_jobs()
+		T.assert_equals(gh_call_count("issue edit"), 1, "one edit call")
+
+		local sent_body_flag = false
+		for _, line in ipairs(gh_calls()) do
+			if line:find("issue edit", 1, true) and line:find("--body", 1, true) then
+				sent_body_flag = true
+			end
+		end
+		T.assert_true(
+			not sent_body_flag,
+			"an empty body field must never erase the remote body"
+		)
 	end,
 })

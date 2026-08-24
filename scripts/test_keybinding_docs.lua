@@ -113,6 +113,94 @@ local function parse_helptxt_defaults()
 	return entries
 end
 
+-- ── Panel keybinding tables (S4 follow-up) ──────────────────────────────
+-- The tables above only ever covered the Global table + README's global
+-- mappings. Panel-local tables (Issue List, Issue Detail, Log View, ...)
+-- were validated by nothing, so a row could drift from the real buffer-local
+-- keymap silently (this is what let #428's `W`/`E` additions go unchecked).
+
+---@param line string
+---@return integer|nil  the heading's `#` depth, or nil if not a heading
+local function heading_level(line)
+	local hashes = line:match("^(#+)%s")
+	return hashes and #hashes or nil
+end
+
+---Parse literal `key` rows out of one heading's table in KEYBINDINGS.md.
+---Row format: | `<key>` | <description> |
+---@param heading string  exact heading line, e.g. "### List View"
+---@return string[]
+local function parse_panel_table_keys(heading)
+	local level = heading_level(heading)
+	assert_true(level ~= nil, ("heading %q must start with #"):format(heading))
+
+	local lines = vim.fn.readfile(root .. "KEYBINDINGS.md")
+	local keys = {}
+	local in_section = false
+	for _, line in ipairs(lines) do
+		if not in_section and line == heading then
+			in_section = true
+		elseif in_section then
+			local this_level = heading_level(line)
+			if this_level and this_level <= level then
+				break
+			end
+			local key = line:match("^| `([^`]+)` |")
+			if key then
+				keys[#keys + 1] = key
+			end
+		end
+	end
+	return keys
+end
+
+---@param key string  as written in KEYBINDINGS.md, e.g. "<leader>v"
+---@return string  the literal lhs nvim_buf_get_keymap would report
+local function resolved_doc_key(key)
+	local leader = vim.g.mapleader or "\\"
+	return vim.api.nvim_replace_termcodes((key:gsub("<leader>", leader)), true, true, true)
+end
+
+---@param bufnr integer
+---@return table<string, boolean>  resolved normal-mode lhs -> true
+local function runtime_keys(bufnr)
+	local set = {}
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+		set[vim.api.nvim_replace_termcodes(map.lhs, true, true, true)] = true
+	end
+	return set
+end
+
+---Assert every doc-table key in `doc_keys` is actually bound on `bufnr`.
+---@param label string
+---@param bufnr integer
+---@param doc_keys string[]
+local function assert_doc_keys_are_bound(label, bufnr, doc_keys)
+	local bound = runtime_keys(bufnr)
+	for _, key in ipairs(doc_keys) do
+		assert_true(
+			bound[resolved_doc_key(key)],
+			("%s: %q is documented but not bound on the panel buffer"):format(label, key)
+		)
+	end
+end
+
+---Assert every key actually bound on `bufnr` (besides `allowed_extra`, e.g.
+---filetype defaults gitflow does not own) is covered by `documented`.
+---@param label string
+---@param bufnr integer
+---@param documented table<string, boolean>  resolved lhs -> true
+---@param allowed_extra table<string, boolean>
+local function assert_no_undocumented_keys(label, bufnr, documented, allowed_extra)
+	for lhs, _ in pairs(runtime_keys(bufnr)) do
+		assert_true(
+			documented[lhs] or allowed_extra[lhs],
+			("%s: %q is bound on the panel buffer but not in any documented table")
+				:format(label, lhs)
+		)
+	end
+end
+
 local doc_entries = parse_keybindings_md()
 local readme_mappings = parse_readme_global_mappings()
 local helptxt_defaults = parse_helptxt_defaults()
@@ -228,6 +316,65 @@ test("no two default keybindings collide on the same key", function()
 		end
 		seen[doc_key] = cfg_key
 	end
+end)
+
+-- ── Panel keybinding tables vs. the real buffer-local keymap ────────────
+-- Issue List and Issue Detail share one physical buffer/keymap set (the
+-- panel only opens one window per mode), so they are checked together
+-- against their tables' union rather than each table individually.
+test(
+	"Issue List / Issue Detail keybinding tables match the panel's runtime keymap",
+	function()
+		local issues_panel = require("gitflow.panels.issues")
+		issues_panel.close()
+		issues_panel.open(cfg)
+		local bufnr = issues_panel.state.bufnr
+		assert_true(bufnr ~= nil, "issues panel should create a buffer")
+
+		local list_keys = parse_panel_table_keys("### List View")
+		local detail_keys = parse_panel_table_keys("### Detail View")
+		assert_true(#list_keys >= 10, "should parse the List View table")
+		assert_true(#detail_keys >= 10, "should parse the Detail View table")
+
+		assert_doc_keys_are_bound("Issue List", bufnr, list_keys)
+		assert_doc_keys_are_bound("Issue Detail", bufnr, detail_keys)
+
+		local documented = {}
+		for _, key in ipairs(list_keys) do
+			documented[resolved_doc_key(key)] = true
+		end
+		for _, key in ipairs(detail_keys) do
+			documented[resolved_doc_key(key)] = true
+		end
+		-- [[ / ]] / gO are markdown-ftplugin defaults, not gitflow's own.
+		assert_no_undocumented_keys(
+			"Issue List/Detail", bufnr, documented,
+			{ ["[["] = true, ["]]"] = true, ["gO"] = true }
+		)
+
+		issues_panel.close()
+	end
+)
+
+test("Log View keybinding table matches the panel's runtime keymap", function()
+	local log_panel = require("gitflow.panels.log")
+	log_panel.close()
+	log_panel.open(cfg)
+	local bufnr = log_panel.state.bufnr
+	assert_true(bufnr ~= nil, "log panel should create a buffer")
+
+	local log_keys = parse_panel_table_keys("## Log View")
+	assert_true(#log_keys >= 4, "should parse the Log View table")
+
+	assert_doc_keys_are_bound("Log View", bufnr, log_keys)
+
+	local documented = {}
+	for _, key in ipairs(log_keys) do
+		documented[resolved_doc_key(key)] = true
+	end
+	assert_no_undocumented_keys("Log View", bufnr, documented, {})
+
+	log_panel.close()
 end)
 
 -- Spot checks for the three specific cases called out in the QA report.

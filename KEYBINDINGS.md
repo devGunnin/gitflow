@@ -155,10 +155,14 @@ Buffer-local bindings active in the log panel (`:Gitflow log`).
 | Key | Action |
 | --- | --- |
 | `<CR>` | Review commit under cursor (or, with a range marked, the range) |
-| `V` | Mark the commit under cursor as a range start (`<CR>` on another commit reviews the combined range); `V` on the same commit clears it |
+| `<leader>v` | Mark the commit under cursor as a range start (`<CR>` on another commit reviews the combined range); `<leader>v` on the same commit clears it |
 | `<Esc>` | Cancel a pending range selection |
 | `r` | Refresh |
 | `q` | Close |
+
+Note: `V` (shift-v) is deliberately left unbound here too, so vim's
+visual-line select still works for highlighting and copying log entries
+(#428, same class of defect as the issue list/detail views below).
 
 ## Reset Panel
 
@@ -207,7 +211,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `S` | Toggle sort direction |
 | `G` | Cycle grouping (none → milestone → assignee → label) |
 | `<Tab>` | Fold / unfold the group under cursor (when grouped) |
-| `v` | Switch to a saved view |
+| `<leader>v` | Switch to a saved view |
 | `W` | Save current filters/sort as a named view |
 | `D` | Delete a saved view |
 | `B` | Create a branch from the selected issue (prompts, prefilled name) |
@@ -230,20 +234,22 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `s` | Cycle sort key |
 | `S` | Toggle sort direction |
 | `G` | Cycle grouping |
-| `v` | Switch to a saved view |
+| `<leader>v` | Switch to a saved view |
 | `W` | Save current filters/sort as a named view |
 | `D` | Delete a saved view |
 | `B` | Create a branch from this issue (prompts, prefilled name) |
 | `r` | Refresh |
 | `q` | Close |
 
-`f`/`X`/`s`/`S`/`G`/`v`/`W`/`D` act on the panel's shared filter/sort/group/view
-state, so they take effect from either view but only become visible once you
-go back (`b`) to the list.
+`f`/`X`/`s`/`S`/`G`/`<leader>v`/`W`/`D` act on the panel's shared
+filter/sort/group/view state, so they take effect from either view but only
+become visible once you go back (`b`) to the list.
 
-Note: `V` (shift-v) is deliberately left unbound in the issue list/detail
-views so vim's visual-line select still works for highlighting and copying
-text (#428).
+Note: `v` and `V` are both deliberately left unbound in the issue list/detail
+views so vim's charwise and visual-line select still work for highlighting
+and copying text (#428); `switch_view` moved to `<leader>v` to free `v`. `W`
+shadows vim's WORD-forward motion, consistent with how much of this panel's
+alphabet is already repurposed (see the full key list above).
 
 ## PR List
 

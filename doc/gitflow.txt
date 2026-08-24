@@ -313,11 +313,16 @@ Branch list ~
 
 Log view ~
     <CR>    Review commit under cursor (or, with a range marked, the range)
-    V       Mark commit under cursor as range start (<CR> on another
-            commit reviews the combined range; V on the same commit clears)
+    <leader>v   Mark commit under cursor as range start (<CR> on another
+            commit reviews the combined range; <leader>v on the same commit
+            clears)
     <Esc>   Cancel a pending range selection
     r       Refresh
     q       Close
+
+    Note: V (shift-v) is deliberately left unbound here too, so vim's
+    visual-line select still works for highlighting and copying log
+    entries (#428, same class of defect as the issue list/detail views).
 
 Stash panel ~
     P       Pop stash entry under cursor
@@ -341,7 +346,7 @@ Issue list ~
     S       Toggle sort direction
     G       Cycle grouping (none/milestone/assignee/label)
     <Tab>   Fold/unfold group under cursor (list mode, when grouped)
-    v       Switch to a saved view
+    <leader>v   Switch to a saved view
     W       Save current filters/sort as a named view
     D       Delete a saved view
     B       Create a branch from the selected issue
@@ -349,8 +354,11 @@ Issue list ~
     b       Back to list (detail view)
     q       Close
 
-    Note: V (shift-v) is deliberately left unbound so vim's visual-line
-    select still works for highlighting and copying issue text.
+    Note: v and V are both deliberately left unbound so vim's charwise and
+    visual-line select still work for highlighting and copying issue text
+    (#428); switch_view moved to <leader>v to free v. W shadows vim's
+    WORD-forward motion, consistent with how much of this panel's alphabet
+    is already repurposed.
 
 PR list ~
     <CR>    View PR under cursor (list mode)
