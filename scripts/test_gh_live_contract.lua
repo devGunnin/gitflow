@@ -6,10 +6,11 @@
 -- under tests/minimal_init.lua — against this repo's own label list, through
 -- gitflow's actual production parsing path (gh/labels.lua -> gh.json).
 --
--- It skips cleanly (exit 0) whenever the environment can't support a live
--- call: gh missing, unauthenticated, or unreachable. It fails loudly only for
--- what it's meant to catch: a JSON shape gitflow's own code can't parse, or a
--- shape assertion on real data.
+-- It skips cleanly (exit 0) only when gh.classify_failure() says the
+-- environment can't support a live call: gh missing/unauthenticated
+-- (checked up front) or a network condition. Anything else gh rejects —
+-- most notably a field this test's query no longer matches upstream — is
+-- exactly the drift this test exists to catch, and fails loudly instead.
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -51,32 +52,61 @@ if not completed then
 end
 
 if call_result and call_result.code ~= 0 then
-	-- Nonzero exit with no parse attempt made: an environment condition
-	-- (auth expired mid-run, rate limit, network), not a code bug.
-	skip(("gh label list exited %d — %s"):format(
-		call_result.code, gh.output(call_result)
-	))
+	local output = gh.output(call_result)
+	local kind = gh.classify_failure(output)
+	-- Only a genuine environment condition skips. Anything else — most
+	-- notably gh rejecting a field this test's own query no longer
+	-- matches upstream ("Unknown JSON field") — is the drift this test
+	-- exists to catch, and must fail loudly, not skip green.
+	if kind == "network" or kind == "auth" then
+		skip(("gh label list exited %d (%s) — %s"):format(
+			call_result.code, kind, output
+		))
+	end
+	fail(("gh label list exited %d (%s) — %s"):format(call_result.code, kind, output))
+	return
 end
 
 if call_err then
 	-- Exit was 0 but gitflow's own JSON decode failed: this IS the drift
 	-- this test exists to catch.
 	fail(("gh label list returned unparsable JSON: %s"):format(call_err))
+	return
 end
 
 if type(call_data) ~= "table" then
 	fail(("gh label list did not decode to a table (got %s)"):format(type(call_data)))
+	return
+end
+
+if #call_data == 0 then
+	-- An empty result asserts nothing about the shape; skip rather than
+	-- claim a pass the data can't back up.
+	skip("gh label list returned zero labels — nothing to shape-check")
 end
 
 for i, label in ipairs(call_data) do
 	if type(label) ~= "table" then
 		fail(("label #%d is not an object (got %s)"):format(i, type(label)))
+		return
 	end
 	if type(label.name) ~= "string" or label.name == "" then
 		fail(("label #%d has no string 'name' field"):format(i))
+		return
 	end
 	if type(label.color) ~= "string" then
 		fail(("label #%d has no string 'color' field"):format(i))
+		return
+	end
+	-- Assert every field gitflow's production query requests
+	-- (gh/labels.lua LABEL_FIELDS), not just what this test happens to use.
+	if type(label.description) ~= "string" then
+		fail(("label #%d has no string 'description' field"):format(i))
+		return
+	end
+	if type(label.isDefault) ~= "boolean" then
+		fail(("label #%d has no boolean 'isDefault' field"):format(i))
+		return
 	end
 end
 
