@@ -59,19 +59,20 @@ local cfg = gitflow.setup({})
 local panel = require("gitflow.ui.panel")
 local help = require("gitflow.ui.help")
 
--- Load every key surface. Globbed, not listed: a hardcoded list lets a new
--- panel opt out of this contract by simply not being added to it.
-for _, path in ipairs(vim.fn.glob(project_root .. "/lua/gitflow/panels/*.lua", false, true)) do
-	local modname = vim.fn.fnamemodify(path, ":t:r")
-	local ok, err = pcall(require, "gitflow.panels." .. modname)
-	assert(ok, ("could not load panel %s: %s"):format(modname, tostring(err)))
-end
--- Surfaces that are not panel modules: review's diff pane and the merge
--- resolver register themselves from these.
-require("gitflow.review.overlay")
-require("gitflow.ui.conflict")
+-- Load every key surface. Discovered across the whole tree by source, and
+-- REGISTRATION is what is verified — see scripts/lib/key_surfaces.lua for the
+-- escapes a `panels/*.lua` glob left open.
+local key_surfaces = dofile(project_root .. "/scripts/lib/key_surfaces.lua")
+local load_problems = key_surfaces.load(project_root)
 
 local surfaces = panel.surfaces()
+
+test("every module that binds keys registers a key surface", function()
+	assert_equals(
+		#load_problems, 0,
+		"unregistered key surfaces:\n    " .. table.concat(load_problems, "\n    ")
+	)
+end)
 
 ---Every advertised key on every surface: key -> list of { surface, desc,
 ---destructive }. Only advertised entries count — an entry with no `desc` is a

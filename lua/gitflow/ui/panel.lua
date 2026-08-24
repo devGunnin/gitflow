@@ -53,6 +53,8 @@ local M = {}
 ---@field name string  stable id; also the `panel_keybindings` config key
 ---@field title string  the `?` overlay's title
 ---@field keymaps GitflowPanelKeymap[]
+---@field source string|nil  file that registered it; the contract spec reads
+---                          it to prove a module that binds keys registers
 
 ---@type table<string, GitflowKeySurface>
 local surfaces = {}
@@ -64,6 +66,8 @@ function M.register_surface(surface)
 	assert(type(surface.name) == "string" and surface.name ~= "", "surface needs a name")
 	assert(type(surface.title) == "string" and surface.title ~= "", "surface needs a title")
 	assert(type(surface.keymaps) == "table", "surface needs keymaps")
+	surface.source = surface.source
+		or (debug.getinfo(2, "S").source or ""):gsub("^@", "")
 	if not surfaces[surface.name] then
 		surface_order[#surface_order + 1] = surface.name
 	end
@@ -342,6 +346,9 @@ function M.new(spec)
 		name = instance.name,
 		title = instance.title,
 		keymaps = instance.keymaps,
+		-- The panel module, not this file: the contract spec reads it to
+		-- prove the module registers at load rather than inside `open()`.
+		source = (debug.getinfo(2, "S").source or ""):gsub("^@", ""),
 	})
 	return instance
 end

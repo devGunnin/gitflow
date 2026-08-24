@@ -450,16 +450,21 @@ local function parse_panel_key_tables()
 end
 
 local panel = require("gitflow.ui.panel")
-for _, path in ipairs(vim.fn.glob(root .. "lua/gitflow/panels/*.lua", false, true)) do
-	require("gitflow.panels." .. vim.fn.fnamemodify(path, ":t:r"))
-end
-require("gitflow.review.overlay")
-require("gitflow.ui.conflict")
+-- Same discovery the contract spec uses: every surface, wherever it is
+-- declared, so a key cannot go undocumented by living outside panels/.
+dofile(root .. "scripts/lib/key_surfaces.lua").load(
+	vim.fn.fnamemodify(root, ":h")
+)
 
 test("every panel key is documented, and every documented key exists", function()
 	local documented = parse_panel_key_tables()
 	local problems = {}
 
+	-- Guard the check against passing because nothing loaded.
+	assert_true(
+		#panel.surfaces() >= 20,
+		("only %d key surfaces loaded"):format(#panel.surfaces())
+	)
 	for _, surface in ipairs(panel.surfaces()) do
 		local rows = documented[surface.name]
 		if not rows then

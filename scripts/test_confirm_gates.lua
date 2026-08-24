@@ -216,12 +216,10 @@ end)
 
 -- ── the registry says which verbs owe a gate ──────────────────────────
 
-test("every destructive verb is reachable from a panel that registers it", function()
-	local panel = require("gitflow.ui.panel")
-	for _, path in ipairs(vim.fn.glob(project_root .. "/lua/gitflow/panels/*.lua", false, true)) do
-		require("gitflow.panels." .. vim.fn.fnamemodify(path, ":t:r"))
-	end
+local panel = require("gitflow.ui.panel")
+dofile(project_root .. "/scripts/lib/key_surfaces.lua").load(project_root)
 
+test("every destructive verb is reachable from a panel that registers it", function()
 	local destructive = 0
 	for _, surface in ipairs(panel.surfaces()) do
 		for _, entry in ipairs(surface.keymaps) do
@@ -237,6 +235,49 @@ test("every destructive verb is reachable from a panel that registers it", funct
 		end
 	end
 	assert_true(destructive >= 10, "the destructive tier should not have emptied out")
+end)
+
+
+-- ── the destructive tag itself ────────────────────────────────────────
+-- `destructive` is self-declared, and the collision rule only fires when a
+-- key carries BOTH labels — so untagging every instance of a key hides it
+-- from every spec. Nothing here can read a verb's call graph; this is a
+-- wording lint, and it is a floor, not a ceiling: it catches a verb whose own
+-- description says it destroys something and that forgot the flag.
+
+local DESTRUCTIVE_WORDS = {
+	"delete", "del", "discard", "drop", "remove", "reset",
+	"nuke", "wipe", "destroy", "purge", "force",
+}
+
+--- Descriptions that use one of those words for something that loses nothing.
+local BENIGN_DESCS = {
+	["soft reset"] = true,
+}
+
+test("a verb whose description destroys something carries the flag", function()
+	local untagged = {}
+	for _, surface in ipairs(panel.surfaces()) do
+		for _, entry in ipairs(surface.keymaps) do
+			local desc = entry.desc
+			if desc and not entry.destructive and not BENIGN_DESCS[desc] then
+				for _, word in ipairs(DESTRUCTIVE_WORDS) do
+					if (" " .. desc .. " "):find("%W" .. word .. "%W") then
+						untagged[#untagged + 1] = ("%s: %s %q says %q"):format(
+							surface.name, entry.key, desc, word
+						)
+						break
+					end
+				end
+			end
+		end
+	end
+	table.sort(untagged)
+	assert_equals(
+		#untagged, 0,
+		"verbs that describe destruction but are not tagged destructive:\n    "
+			.. table.concat(untagged, "\n    ")
+	)
 end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))
