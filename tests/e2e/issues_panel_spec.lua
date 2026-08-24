@@ -342,7 +342,7 @@ T.run_suite("issues_panel_spec", {
 
 	["filter keymaps are bound on the panel buffer"] = function()
 		local bufnr = open_and_wait()
-		for _, lhs in ipairs({ "f", "X" }) do
+		for _, lhs in ipairs({ "f", "F" }) do
 			T.assert_true(
 				buf_map(bufnr, lhs) ~= nil,
 				("%s should be mapped on the issues buffer"):format(lhs)

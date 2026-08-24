@@ -29,13 +29,13 @@ local P = panel.new({
 	loading = "Loading stash list…",
 	state = M.state,
 	keymaps = {
-		{ key = "A", desc = "apply", run = function()
+		{ key = "A", desc = "apply", essential = true, run = function()
 			M.apply_under_cursor()
 		end },
 		{ key = "P", desc = "pop", run = function()
 			M.pop_under_cursor()
 		end },
-		{ key = "D", desc = "drop", run = function()
+		{ key = "D", desc = "drop", destructive = true, run = function()
 			M.drop_under_cursor()
 		end },
 		{ key = "S", desc = "stash", run = function()
@@ -44,7 +44,7 @@ local P = panel.new({
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},
@@ -232,7 +232,10 @@ function M.drop_under_cursor()
 		return
 	end
 
-	local confirmed = vim.fn.confirm(("Drop %s?"):format(entry.ref), "&Yes\n&No", 2) == 1
+	local confirmed = ui.input.confirm(
+		("Drop %s?"):format(entry.ref),
+		{ choices = { "&Drop", "&Cancel" }, default_choice = 2 }
+	)
 	if not confirmed then
 		return
 	end

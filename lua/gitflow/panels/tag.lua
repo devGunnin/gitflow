@@ -28,13 +28,13 @@ local P = panel.new({
 	loading = "Loading tags…",
 	state = M.state,
 	keymaps = {
-		{ key = "c", desc = "create", run = function()
+		{ key = "c", desc = "create", essential = true, run = function()
 			M.create_tag()
 		end },
-		{ key = "D", desc = "delete", run = function()
+		{ key = "D", desc = "delete", destructive = true, run = function()
 			M.delete_under_cursor()
 		end },
-		{ key = "X", desc = "remote del", run = function()
+		{ key = "X", desc = "remote del", destructive = true, run = function()
 			M.delete_remote_under_cursor()
 		end },
 		{ key = "P", desc = "push", run = function()
@@ -43,7 +43,7 @@ local P = panel.new({
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

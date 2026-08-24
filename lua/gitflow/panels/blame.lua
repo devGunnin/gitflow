@@ -31,13 +31,13 @@ local P = panel.new({
 	loading = "Loading blame…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "open commit", run = function()
+		{ key = "<CR>", desc = "open commit", essential = true, run = function()
 			M.open_commit_under_cursor()
 		end },
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

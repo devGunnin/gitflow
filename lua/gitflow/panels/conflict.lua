@@ -52,13 +52,10 @@ local P = panel.new({
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "R", hint = false, run = function()
-			M.refresh()
-		end },
 		{ key = "C", desc = "continue", essential = true, run = function()
 			M.continue_operation()
 		end },
-		{ key = "A", desc = "abort", destructive = true, run = function()
+		{ key = "X", desc = "abort", destructive = true, run = function()
 			M.abort_operation()
 		end },
 		{ key = "q", desc = "close", essential = true, run = function()

@@ -341,7 +341,7 @@ end, "merge conflict should auto-open conflict panel", 10000)
 
 local conflict_buf = buffer.get("conflict")
 assert_true(conflict_buf ~= nil, "conflict panel buffer should exist")
-assert_keymaps(conflict_buf, { "<CR>", "r", "R", "C", "A", "q" })
+assert_keymaps(conflict_buf, { "<CR>", "r", "C", "X", "q", "?" })
 
 local asserted_view_shape = false
 

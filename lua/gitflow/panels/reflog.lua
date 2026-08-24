@@ -29,20 +29,20 @@ local P = panel.new({
 	loading = "Loading reflog…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "checkout", run = function()
+		{ key = "<CR>", desc = "checkout", essential = true, run = function()
 			M.checkout_under_cursor()
 		end },
 		{ key = "1-9", keys = QUICK_SELECT_KEYS, desc = "quick checkout",
 			run = function(key)
 				M.select_by_position(tonumber(key))
 			end },
-		{ key = "R", desc = "reset", run = function()
+		{ key = "H", desc = "hard reset", destructive = true, run = function()
 			M.reset_under_cursor()
 		end },
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

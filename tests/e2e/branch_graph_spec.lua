@@ -740,7 +740,7 @@ T.run_suite("Branch Graph Visualization", {
 
 		local bufnr = ui.buffer.get("branch")
 		T.assert_keymaps(bufnr, {
-			"<CR>", "c", "d", "D", "r", "R", "f", "G", "u", "q",
+			"<CR>", "c", "d", "D", "r", "M", "f", "G", "u", "q", "?",
 		})
 
 		close_panel()
@@ -800,7 +800,7 @@ T.run_suite("Branch Graph Visualization", {
 
 			local before_lines = T.read_file(log_path)
 			vim.api.nvim_set_current_win(winid)
-			T.feedkeys("R")
+			T.feedkeys("r")
 			T.drain_jobs(3000)
 
 			local after_lines = T.read_file(log_path)
@@ -817,11 +817,11 @@ T.run_suite("Branch Graph Visualization", {
 
 			T.assert_true(
 				fetch_line ~= nil,
-				"R refresh should run git fetch"
+				"r refresh should run git fetch"
 			)
 			T.assert_true(
 				graph_line ~= nil,
-				"R refresh should redraw graph"
+				"r refresh should redraw graph"
 			)
 			T.assert_true(
 				fetch_line < graph_line,

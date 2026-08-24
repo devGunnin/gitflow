@@ -31,7 +31,7 @@ local P = panel.new({
 	loading = "Loading git log…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "review commit", run = function()
+		{ key = "<CR>", desc = "review commit", essential = true, run = function()
 			M.open_commit_under_cursor()
 		end },
 		{ key = "V", desc = "range select", run = function()
@@ -43,7 +43,7 @@ local P = panel.new({
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

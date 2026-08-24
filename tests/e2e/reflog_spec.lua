@@ -103,7 +103,7 @@ T.run_suite("E2E: Reflog Panel", {
 		local bufnr = ui.buffer.get("reflog")
 		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
 		T.assert_keymaps(bufnr, {
-			"q", "r", "R", "<CR>", "1", "2", "3", "4", "5",
+			"q", "r", "H", "?", "<CR>", "1", "2", "3", "4", "5",
 			"6", "7", "8", "9",
 		})
 
@@ -123,8 +123,10 @@ T.run_suite("E2E: Reflog Panel", {
 		local bufnr = ui.buffer.get("reflog")
 		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
 		local lines = T.buf_lines(bufnr)
+		-- `1-9 quick checkout` is a convenience, so it elides at the 50-column
+		-- split width; assert on a hint the fit is required to keep.
 		T.assert_true(
-			T.find_line(lines, "quick checkout") ~= nil,
+			T.find_line(lines, "q close") ~= nil,
 			"reflog panel split layout should render its keybind hints"
 		)
 

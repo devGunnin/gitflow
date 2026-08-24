@@ -115,7 +115,7 @@ T.run_suite("E2E: Tag Panel", {
 		T.assert_true(bufnr ~= nil, "tag buffer should exist")
 		local lines = T.buf_lines(bufnr)
 		T.assert_true(
-			T.find_line(lines, "remote del") ~= nil,
+			T.find_line(lines, "q close") ~= nil,
 			"tag panel split layout should render its keybind hints"
 		)
 
