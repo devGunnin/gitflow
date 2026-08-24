@@ -105,36 +105,6 @@ function M.failure_hint(kind)
 	return FAILURE_HINTS[kind]
 end
 
----@param result GitflowGitResult
----@return string
-function M.output(result)
-	return git.output(result)
-end
-
----@param args string[]
----@param opts GitflowGitRunOpts|nil
----@param on_exit fun(result: GitflowGitResult)
-function M.run(args, opts, on_exit)
-	if type(args) ~= "table" then
-		error("gitflow gh error: run(args, opts, on_exit) requires args table", 2)
-	end
-	if type(on_exit) ~= "function" then
-		error("gitflow gh error: run(args, opts, on_exit) requires callback", 2)
-	end
-
-	git.run(build_command(args), opts, function(result)
-		-- An auth-shaped failure means the cached verdict went stale (token
-		-- expired, `gh auth logout` elsewhere) — re-check on next use.
-		if
-			result.code ~= 0
-			and M.classify_failure(M.output(result)) == "auth"
-		then
-			M.state.checked = false
-		end
-		on_exit(result)
-	end)
-end
-
 ---Host and `owner/repo` out of a remote url, in either form git writes it:
 ---`git@host:owner/repo.git` or `https://host/owner/repo(.git)`. Nested paths
 ---(GitLab subgroups) yield no slug: two segments is what GitHub has.
