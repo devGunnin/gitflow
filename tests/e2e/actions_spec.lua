@@ -8,6 +8,9 @@
 --   3. GH actions data layer parses fixture data
 --   4. Status icon rendering produces expected icons
 --   5. Buffer-local keymaps are set
+--   6. Filters, pagination, rerun/rerun-failed/rerun-job, cancel (confirm
+--      gate, single-flight guard), watch (bounded polling, stop conditions),
+--      and the log viewer (ANSI stripping, jump-to-first-error)
 
 local T = _G.T
 local cfg = _G.TestConfig
@@ -18,6 +21,7 @@ local gh = require("gitflow.gh")
 local gh_actions = require("gitflow.gh.actions")
 local git_branch = require("gitflow.git.branch")
 local actions_panel = require("gitflow.panels.actions")
+local input = require("gitflow.ui.input")
 
 ---@param patches table[]
 ---@param fn fun()
@@ -53,6 +57,25 @@ local function with_temp_gh_log(fn)
 	vim.env.GITFLOW_GH_LOG = previous
 	pcall(vim.fn.delete, log_path)
 
+	if not ok then
+		error(err, 0)
+	end
+end
+
+-- Stub ui.input.confirm so a confirmation dialog answers deterministically.
+-- Headless nvim's vim.fn.confirm() returns the default choice (no prompt UI),
+-- which is "&No" for every mutation here — tests that expect the mutation to
+-- proceed must stub this to simulate the user confirming.
+---@param answer boolean
+---@param fn fun()
+local function with_confirm_answer(answer, fn)
+	local original = input.confirm
+	input.confirm = function()
+		return answer
+	end
+
+	local ok, err = xpcall(fn, debug.traceback)
+	input.confirm = original
 	if not ok then
 		error(err, 0)
 	end
@@ -944,6 +967,595 @@ T.run_suite("E2E: GitHub Actions Panel", {
 			found,
 			"palette entries should include actions"
 		)
+	end,
+
+	-- ── ANSI stripping / error detection (data layer) ───────────────────
+
+	["strip_ansi removes SGR and OSC-8 escapes"] = function()
+		T.assert_equals(
+			gh_actions.strip_ansi("\27[32mPASS\27[0m ok"),
+			"PASS ok",
+			"SGR color codes should be stripped"
+		)
+		T.assert_equals(
+			gh_actions.strip_ansi(
+				"\27]8;;https://example.test\7link\27]8;;\7"
+			),
+			"link",
+			"OSC-8 hyperlink wrappers should be stripped"
+		)
+	end,
+
+	["find_first_error_line prefers a ##[error] annotation"] = function()
+		local lines = {
+			"note: starting build",
+			"##[error]Something broke",
+			"error: a plain-text error mentioned later",
+		}
+		T.assert_equals(
+			gh_actions.find_first_error_line(lines), 2,
+			"the ##[error] annotation should win over a later plain mention"
+		)
+	end,
+
+	["find_first_error_line falls back to a plain error mention"] = function()
+		local lines = { "note: starting build", "Error: build failed" }
+		T.assert_equals(
+			gh_actions.find_first_error_line(lines), 2,
+			"should fall back to a substring match when no annotation exists"
+		)
+	end,
+
+	["find_first_error_line returns nil for a clean log"] = function()
+		T.assert_true(
+			gh_actions.find_first_error_line({ "all good", "done" }) == nil,
+			"a log with no error mentions should report no match"
+		)
+	end,
+
+	-- ── Full run log / per-job log (data layer) ──────────────────────────
+
+	["log fetches and formats the full run log"] = function()
+		local lines_result, err_result
+		T.wait_async(function(done)
+			gh_actions.log(12345, nil, function(err, lines)
+				err_result, lines_result = err, lines
+				done()
+			end)
+		end)
+		T.assert_true(err_result == nil, "log should not error: " .. tostring(err_result))
+		T.assert_true(type(lines_result) == "table" and #lines_result > 0, "log should return lines")
+
+		local joined = table.concat(lines_result, "\n")
+		T.assert_true(joined:find("\27", 1, true) == nil, "log output must be ANSI-stripped")
+		T.assert_true(joined:find("PASS test_one", 1, true) ~= nil, "log should contain step output")
+		T.assert_true(
+			joined:find("lint / Lint check", 1, true) ~= nil,
+			"log should header each job/step change"
+		)
+		T.assert_true(
+			joined:find("Expected indentation to use tabs", 1, true) ~= nil,
+			"log should contain the annotated error line"
+		)
+	end,
+
+	["job_log fetches a single job's log without a job-name header"] = function()
+		local lines_result, err_result
+		T.wait_async(function(done)
+			gh_actions.job_log(12345, 9002, nil, function(err, lines)
+				err_result, lines_result = err, lines
+				done()
+			end)
+		end)
+		T.assert_true(err_result == nil, "job_log should not error: " .. tostring(err_result))
+		local joined = table.concat(lines_result, "\n")
+		T.assert_true(joined:find("\27", 1, true) == nil, "job_log output must be ANSI-stripped")
+		T.assert_true(
+			joined:find("Lint check", 1, true) ~= nil,
+			"job_log should header by step"
+		)
+		T.assert_true(
+			joined:find("lint /", 1, true) == nil,
+			"job_log should not repeat the (already-known) job name in headers"
+		)
+	end,
+
+	["list passes workflow/status/event/actor filters as gh flags"] = function()
+		with_temp_gh_log(function(log_path)
+			T.wait_async(function(done)
+				gh_actions.list({
+					workflow = "CI", status = "failure",
+					event = "pull_request", actor = "octocat",
+				}, nil, function(_, _)
+					done()
+				end)
+			end)
+			local saw = false
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("run list", 1, true)
+					and line:find("--workflow CI", 1, true)
+					and line:find("--status failure", 1, true)
+					and line:find("--event pull_request", 1, true)
+					and line:find("--user octocat", 1, true)
+				then
+					saw = true
+				end
+			end
+			T.assert_true(saw, "list should pass all four filters through to gh")
+		end)
+	end,
+
+	-- ── Log viewer (panel) ────────────────────────────────────────────
+
+	["l opens the full run log, ANSI-stripped, from the list"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		focus_run_by_title("CI: push to main")
+		actions_panel.view_log_under_cursor()
+		T.drain_jobs(4000)
+
+		T.assert_equals(actions_panel.state.view, "log", "l should switch to the log view")
+		local rendered = rendered_panel_text()
+		T.assert_true(rendered:find("\27", 1, true) == nil, "rendered log must be ANSI-stripped")
+		T.assert_contains(rendered, "PASS test_one", "log view should show run output")
+
+		actions_panel.close()
+	end,
+
+	["l opens a job-scoped log from the detail view's job cursor"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		focus_run_by_title("CI: push to main")
+		actions_panel.open_detail_under_cursor()
+		T.drain_jobs(4000)
+
+		local bufnr = actions_panel.state.bufnr
+		local job_line = T.buf_find_line(bufnr, "lint")
+		T.assert_true(job_line ~= nil, "detail view should list the lint job")
+		vim.api.nvim_set_current_win(actions_panel.state.winid)
+		vim.api.nvim_win_set_cursor(actions_panel.state.winid, { job_line, 0 })
+
+		with_temp_gh_log(function(log_path)
+			actions_panel.view_log_under_cursor()
+			T.drain_jobs(4000)
+			local saw = false
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("run view 12345 --job 9002 --log", 1, true) then
+					saw = true
+				end
+			end
+			T.assert_true(saw, "job-scoped log should call gh with --job 9002 --log")
+		end)
+
+		actions_panel.close()
+	end,
+
+	["E jumps the cursor to the first error line in the log view"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		focus_run_by_title("CI: push to main")
+		actions_panel.view_log_under_cursor()
+		T.drain_jobs(4000)
+
+		actions_panel.jump_to_first_error()
+		local winid = actions_panel.state.winid
+		local line = vim.api.nvim_win_get_cursor(winid)[1]
+		local text = vim.api.nvim_buf_get_lines(
+			actions_panel.state.bufnr, line - 1, line, false
+		)[1]
+		T.assert_contains(
+			text, "Expected indentation to use tabs",
+			"E should land the cursor on the first error line"
+		)
+
+		actions_panel.back()
+		T.assert_equals(
+			actions_panel.state.view, "list",
+			"back from a run-level log opened from the list should return to the list"
+		)
+
+		actions_panel.close()
+	end,
+
+	-- ── Rerun / rerun-failed / rerun-job / cancel (confirm gate) ────────
+
+	["rerun declines without calling gh, confirms with exact argv"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: PR #42")
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(false, function()
+				actions_panel.rerun_under_cursor()
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "run rerun 12346") == nil,
+				"declining confirm must not call gh run rerun"
+			)
+		end)
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(true, function()
+				actions_panel.rerun_under_cursor()
+				T.drain_jobs(3000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "run rerun 12346") ~= nil,
+				"accepting confirm should call `gh run rerun 12346`"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["rerun-failed sends --failed"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: PR #42")
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(true, function()
+				actions_panel.rerun_failed_under_cursor()
+				T.drain_jobs(3000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "run rerun 12346 --failed") ~= nil,
+				"F should call `gh run rerun 12346 --failed`"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["rerun-job targets the job under the cursor in detail view"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+		actions_panel.open_detail_under_cursor()
+		T.drain_jobs(4000)
+
+		local bufnr = actions_panel.state.bufnr
+		local job_line = T.buf_find_line(bufnr, "test")
+		T.assert_true(job_line ~= nil, "detail view should list the test job")
+		vim.api.nvim_set_current_win(actions_panel.state.winid)
+		vim.api.nvim_win_set_cursor(actions_panel.state.winid, { job_line, 0 })
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(true, function()
+				actions_panel.rerun_job_under_cursor()
+				T.drain_jobs(3000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "run rerun 12345 --job 9001") ~= nil,
+				"J should call `gh run rerun 12345 --job 9001`"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["cancel sends the exact argv once confirmed"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: PR #42")
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(true, function()
+				actions_panel.cancel_under_cursor()
+				T.drain_jobs(3000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "run cancel 12346") ~= nil,
+				"C should call `gh run cancel 12346`"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	["a mutation cannot be triggered twice while one is in flight"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: PR #42")
+
+		local call_count = 0
+		with_temporary_patches({
+			{
+				table = gh_actions,
+				key = "rerun",
+				-- Never invokes cb: simulates an in-flight mutation.
+				value = function(_, _, _)
+					call_count = call_count + 1
+				end,
+			},
+		}, function()
+			with_confirm_answer(true, function()
+				actions_panel.rerun_under_cursor()
+				actions_panel.rerun_under_cursor()
+			end)
+		end)
+
+		T.assert_equals(
+			call_count, 1,
+			"a second rerun attempt while one is in flight must not call gh again"
+		)
+
+		actions_panel.close()
+	end,
+
+	-- ── Watch (bounded polling) ───────────────────────────────────────
+
+	["watch polls on an interval and stops on terminal run state"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		-- Patched before opening detail too: the fixture run is already
+		-- "completed", and start_watch() refuses to watch a finished run.
+		local poll_calls = 0
+		local statuses = { "in_progress", "in_progress", "in_progress", "completed" }
+		with_temporary_patches({
+			{ table = cfg, key = "actions", value = { watch_interval = 15 } },
+			{
+				table = gh_actions,
+				key = "view",
+				value = function(run_id, _, cb)
+					poll_calls = poll_calls + 1
+					local status = statuses[math.min(poll_calls, #statuses)]
+					cb(nil, {
+						id = run_id, name = "CI", branch = "main", status = status,
+						conclusion = status == "completed" and "success" or "",
+						event = "push", created_at = "", updated_at = "",
+						url = "https://example.test/run/" .. tostring(run_id),
+						display_title = "CI: push to main", jobs = {},
+					})
+				end,
+			},
+		}, function()
+			actions_panel.open_detail_under_cursor()
+			T.drain_jobs(3000)
+			actions_panel.toggle_watch()
+
+			T.wait_until(function()
+				return not actions_panel.state.watch.active
+			end, "watch should stop once the run reaches a terminal state", 2000)
+
+			local calls_at_terminal = poll_calls
+			vim.wait(120, function() return false end, 20)
+			T.assert_equals(
+				poll_calls, calls_at_terminal,
+				"watch must stop polling once the run has completed"
+			)
+		end)
+
+		T.assert_false(
+			actions_panel.state.watch.active,
+			"watch state should be inactive after reaching a terminal status"
+		)
+
+		actions_panel.close()
+	end,
+
+	["watch stops polling when the panel closes"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		focus_run_by_title("CI: push to main")
+
+		local poll_calls = 0
+		with_temporary_patches({
+			{ table = cfg, key = "actions", value = { watch_interval = 15 } },
+			{
+				table = gh_actions,
+				key = "view",
+				-- Always in_progress: this run must never reach a terminal
+				-- state on its own, so only close() can stop the polling.
+				value = function(run_id, _, cb)
+					poll_calls = poll_calls + 1
+					cb(nil, {
+						id = run_id, name = "CI", branch = "main",
+						status = "in_progress", conclusion = "",
+						event = "push", created_at = "", updated_at = "",
+						url = "", display_title = "CI: push to main", jobs = {},
+					})
+				end,
+			},
+		}, function()
+			actions_panel.open_detail_under_cursor()
+			T.drain_jobs(3000)
+			actions_panel.toggle_watch()
+			T.wait_until(function()
+				return poll_calls >= 2
+			end, "watch should poll at least once after the detail open's own fetch", 2000)
+
+			actions_panel.close()
+			local calls_at_close = poll_calls
+			vim.wait(120, function() return false end, 20)
+			T.assert_equals(
+				poll_calls, calls_at_close,
+				"watch must not keep polling after the panel closes"
+			)
+		end)
+	end,
+
+	-- ── Filters, branch scope, pagination (panel) ───────────────────────
+
+	["the filter menu sets a filter and refetches with it"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		local original_select, original_prompt = vim.ui.select, input.prompt
+		vim.ui.select = function(items, _, on_choice)
+			for _, item in ipairs(items) do
+				if item.key == "workflow" then
+					on_choice(item)
+					return
+				end
+			end
+		end
+		input.prompt = function(_, on_confirm)
+			on_confirm("CI")
+		end
+
+		local ok, err = T.pcall_message(function()
+			with_temp_gh_log(function(log_path)
+				actions_panel.open_filter_menu()
+				T.drain_jobs(3000)
+				local saw = false
+				for _, line in ipairs(T.read_file(log_path)) do
+					if line:find("run list", 1, true) and line:find("--workflow CI", 1, true) then
+						saw = true
+					end
+				end
+				T.assert_true(saw, "choosing the workflow filter should refetch with --workflow CI")
+			end)
+		end)
+
+		vim.ui.select = original_select
+		input.prompt = original_prompt
+		T.assert_true(ok, "filter menu test should not error: " .. (err or ""))
+		T.assert_equals(
+			actions_panel.state.filters.workflow, "CI",
+			"filter state should record the chosen workflow"
+		)
+
+		actions_panel.close()
+	end,
+
+	["toggling branch scope drops --branch from the list request"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		with_temp_gh_log(function(log_path)
+			actions_panel.toggle_branch_scope()
+			T.drain_jobs(3000)
+			local saw_branch_flag = false
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("run list", 1, true) and line:find("%-%-branch") then
+					saw_branch_flag = true
+				end
+			end
+			T.assert_false(saw_branch_flag, "the all-branches scope must not pass --branch")
+		end)
+
+		T.assert_true(
+			actions_panel.state.filters.all_branches,
+			"toggling branch scope should flip all_branches on"
+		)
+
+		actions_panel.close()
+	end,
+
+	["load more increases the list --limit and refetches"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		T.assert_equals(actions_panel.state.limit, 20, "default limit should start at 20")
+
+		with_temp_gh_log(function(log_path)
+			actions_panel.load_more()
+			T.drain_jobs(3000)
+			local saw_new_limit = false
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("run list", 1, true) and line:find("--limit 40", 1, true) then
+					saw_new_limit = true
+				end
+			end
+			T.assert_true(saw_new_limit, "L should refetch with --limit 40")
+		end)
+
+		T.assert_equals(
+			actions_panel.state.limit, 40,
+			"limit should have increased by one page step"
+		)
+
+		actions_panel.close()
+	end,
+
+	["reopening the panel paints the cached list before the live fetch lands"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+		actions_panel.close()
+
+		with_temporary_patches({
+			{ table = git_branch, key = "current", value = sync_branch },
+			{
+				table = gh_actions,
+				key = "list",
+				-- Never resolves: proves the first paint came from the cache,
+				-- not from this (permanently pending) live fetch.
+				value = function(_, _, _) end,
+			},
+		}, function()
+			actions_panel.open(cfg)
+			local rendered = rendered_panel_text()
+			T.assert_contains(
+				rendered, "CI: push to main",
+				"reopening should paint the cached list before the live fetch resolves"
+			)
+		end)
+
+		actions_panel.close()
+	end,
+
+	-- ── Workflow list + dispatch ─────────────────────────────────────────
+
+	["W lists workflows; dispatch is confirm-gated"] = function()
+		actions_panel.close()
+		actions_panel.open(cfg)
+		T.drain_jobs(3000)
+
+		actions_panel.open_workflows()
+		T.drain_jobs(3000)
+		T.assert_equals(actions_panel.state.view, "workflows", "W should open the workflows view")
+
+		local bufnr = actions_panel.state.bufnr
+		T.assert_true(T.buf_find_line(bufnr, "CI") ~= nil, "workflows view should list CI")
+		local target_line = T.buf_find_line(bufnr, "CI")
+		vim.api.nvim_set_current_win(actions_panel.state.winid)
+		vim.api.nvim_win_set_cursor(actions_panel.state.winid, { target_line, 0 })
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(false, function()
+				actions_panel.dispatch_under_cursor()
+				T.drain_jobs(2000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "workflow run") == nil,
+				"declining confirm must not dispatch the workflow"
+			)
+		end)
+
+		with_temp_gh_log(function(log_path)
+			with_confirm_answer(true, function()
+				actions_panel.dispatch_under_cursor()
+				T.drain_jobs(2000)
+			end)
+			T.assert_true(
+				T.find_line(T.read_file(log_path), "workflow run") ~= nil,
+				"accepting confirm should dispatch the workflow"
+			)
+		end)
+
+		actions_panel.back()
+		T.assert_equals(actions_panel.state.view, "list", "back should return to the run list")
+
+		actions_panel.close()
 	end,
 })
 
