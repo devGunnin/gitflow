@@ -152,11 +152,21 @@ panel.register_surface({
 	keymaps = KEYMAPS,
 })
 
+---The registry with the user's `panel_keybindings.conflict_resolver` applied.
+---Binding, the winbar and the `c?` overlay all read this, so an override can
+---never move a key without moving what advertises it.
+---@return GitflowPanelKeymap[]
+local function keymaps()
+	return panel.surface_keymaps(
+		"conflict_resolver", M.state.cfg or require("gitflow.config").get()
+	)
+end
+
 ---The `c?` overlay, generated from the registry — the winbar shows the common
 ---keys, this shows all of them.
 function M.open_help()
 	local rows = {}
-	for _, entry in ipairs(KEYMAPS) do
+	for _, entry in ipairs(keymaps()) do
 		if entry.desc then
 			rows[#rows + 1] = {
 				key = entry.key, desc = entry.desc, destructive = entry.destructive,
@@ -177,7 +187,7 @@ end
 ---@return string
 local function hint_chrome()
 	local parts = {}
-	for _, entry in ipairs(KEYMAPS) do
+	for _, entry in ipairs(keymaps()) do
 		if entry.desc and entry.hint ~= false then
 			parts[#parts + 1] = ("%%#GitflowHintKey#%s%%#GitflowHintText# %s"):format(
 				entry.key, entry.desc
@@ -644,8 +654,9 @@ end
 
 ---@param bufnr integer
 local function set_keymaps(bufnr)
-	for _, entry in ipairs(KEYMAPS) do
-		for _, key in ipairs(panel.bound_keys(entry)) do
+	panel.warn_overrides("conflict_resolver", M.state.cfg)
+	for _, entry in ipairs(keymaps()) do
+		for _, key in ipairs(entry.bind == false and {} or panel.bound_keys(entry)) do
 			vim.keymap.set("n", key, function()
 				entry.run(key)
 			end, { buffer = bufnr, silent = true, nowait = true })
@@ -677,6 +688,8 @@ local function open_single_pane(path, lines, callbacks)
 	pcall(vim.api.nvim_set_option_value, "wrap", false, { win = merged_winid })
 	pcall(vim.api.nvim_set_option_value, "cursorline", true, { win = merged_winid })
 
+	-- Before the binds: they resolve `panel_keybindings` against it.
+	M.state.cfg = callbacks.cfg
 	set_keymaps(merged_bufnr)
 
 	-- Plain `:q`, `<C-w>c` or a layout change must not drop hand-edited hunks.
@@ -692,7 +705,6 @@ local function open_single_pane(path, lines, callbacks)
 	generation = generation + 1
 	M.state.active = true
 	M.state.path = path
-	M.state.cfg = callbacks.cfg
 	M.state.prev_winid = prev_winid
 	M.state.prev_tabid = prev_tabid
 	M.state.tabid = tabid

@@ -25,7 +25,8 @@ local help = require("gitflow.ui.help")
 ---@field hint boolean|nil  false to bind without advertising
 ---@field bind boolean|nil  false to advertise a key another entry already binds
 ---@field essential boolean|nil  a primary verb or the way out: kept when hints elide
----@field destructive boolean|nil  irreversible: the first hint dropped when they elide
+---@field destructive boolean|nil  irreversible: dropped first among the elidable
+---@field always boolean|nil  never elided, whatever the width (`?`)
 
 ---@class GitflowPanelSpec
 ---@field name string  buffer/window registry name
@@ -100,22 +101,126 @@ local function overrides_for(cfg, name)
 	return panels[name]
 end
 
+---The keys a replacement binds. A value naming several keys ("p/r/e/s/f")
+---re-keys a multi-key entry without collapsing it to one; a value with no
+---separator is a single key, and so is a value whose split would produce an
+---empty part, which is how bare `/` stays remappable.
+---@param replacement string
+---@return string[]
+local function replacement_keys(replacement)
+	if not replacement:find("/", 1, true) then
+		return { replacement }
+	end
+	local keys = {}
+	for part in (replacement .. "/"):gmatch("([^/]*)/") do
+		if part == "" then
+			return { replacement }
+		end
+		keys[#keys + 1] = part
+	end
+	return keys
+end
+
+---The modes an entry binds in.
+---@param entry GitflowPanelKeymap
+---@return string[]
+local function entry_modes(entry)
+	if type(entry.mode) == "table" then
+		return entry.mode
+	end
+	return { entry.mode or "n" }
+end
+
+---@param a string[]
+---@param b string[]
+---@return boolean
+local function intersects(a, b)
+	for _, left in ipairs(a) do
+		for _, right in ipairs(b) do
+			if left == right then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+---Whether two entries can ever be bound in the same buffer at once. A panel
+---binds its whole registry, so only a `views` filter (the actions panel's
+---per-view maps) keeps two entries off the same buffer.
+---@param a GitflowPanelKeymap
+---@param b GitflowPanelKeymap
+---@return boolean
+local function views_overlap(a, b)
+	if not a.views or not b.views then
+		return true
+	end
+	return intersects(a.views, b.views)
+end
+
+---Keys two entries of a resolved registry would both bind — one of them
+---would silently win, taking the other verb off the surface while the hints
+---still advertise both.
+---@param entries GitflowPanelKeymap[]
+---@return string[]  human-readable descriptions, one per shadowed key
+local function shadowed_keys(entries)
+	local out = {}
+	for i = 1, #entries do
+		local first = entries[i]
+		for j = i + 1, #entries do
+			local second = entries[j]
+			if first.bind ~= false and second.bind ~= false
+				and views_overlap(first, second)
+				and intersects(entry_modes(first), entry_modes(second)) then
+				for _, left in ipairs(M.bound_keys(first)) do
+					for _, right in ipairs(M.bound_keys(second)) do
+						if left == right then
+							out[#out + 1] = ("'%s' would bind both %s and %s"):format(
+								left, first.desc or first.key, second.desc or second.key
+							)
+						end
+					end
+				end
+			end
+		end
+	end
+	return out
+end
+
 ---Apply `panel_keybindings` overrides to a registry.
 ---
----An override replaces the whole entry's key set with the one key given, so a
----pair or range entry (`s/u`, `1-9`) remapped this way binds exactly that key
----and advertises it under that label. `false` drops the entry: unbound, and
----absent from the hints and the `?` overlay, which is what an opt-out has to
----mean for a key to be genuinely free.
+---An override replaces the entry's key set with the keys its value names, so
+---a pair or range entry (`s/u`, `p/w/e/s/f`) can be re-keyed whole or
+---collapsed to one key, whichever the value says. `false` drops the entry:
+---unbound, and absent from the hints and the `?` overlay, which is what an
+---opt-out has to mean for a key to be genuinely free.
+---
+---An override set that would shadow a key the surface already binds is
+---REFUSED whole — the defaults come back and the caller reports why. Applying
+---it would take a verb off the surface while the hints still advertised it,
+---and half-applying it would leave keys the user cannot reason about.
 ---@param keymaps GitflowPanelKeymap[]
 ---@param cfg GitflowConfig|nil
 ---@param name string
----@return GitflowPanelKeymap[]
+---@return GitflowPanelKeymap[] resolved, string[] problems
 function M.resolve_keymaps(keymaps, cfg, name)
 	local overrides = overrides_for(cfg, name)
 	if next(overrides) == nil then
-		return keymaps
+		return keymaps, {}
 	end
+
+	local problems = {}
+	local declared = {}
+	for _, entry in ipairs(keymaps) do
+		declared[entry.key] = true
+	end
+	for _, key in ipairs(vim.tbl_keys(overrides)) do
+		if not declared[key] then
+			problems[#problems + 1] =
+				("panel_keybindings.%s has no key '%s'"):format(name, key)
+		end
+	end
+	table.sort(problems)
 
 	local out = {}
 	for _, entry in ipairs(keymaps) do
@@ -125,11 +230,51 @@ function M.resolve_keymaps(keymaps, cfg, name)
 		elseif override ~= false then
 			local copy = vim.tbl_extend("force", {}, entry)
 			copy.key = override
-			copy.keys = { override }
+			copy.keys = replacement_keys(override)
 			out[#out + 1] = copy
 		end
 	end
-	return out
+
+	local shadows = shadowed_keys(out)
+	if #shadows == 0 then
+		return out, problems
+	end
+	table.sort(shadows)
+	for _, shadow in ipairs(shadows) do
+		problems[#problems + 1] = ("panel_keybindings.%s ignored: %s"):format(
+			name, shadow
+		)
+	end
+	return keymaps, problems
+end
+
+---A registered surface's keymaps with the user's overrides applied.
+---@param name string
+---@param cfg GitflowConfig|nil
+---@return GitflowPanelKeymap[]
+function M.surface_keymaps(name, cfg)
+	local surface = surfaces[name]
+	if not surface then
+		return {}
+	end
+	return (M.resolve_keymaps(surface.keymaps, cfg, name))
+end
+
+---Report a surface's `panel_keybindings` problems. Called once where the
+---surface binds its keys, not from resolution, which every hint and overlay
+---repeats: a silent no-op would let a typo — or a refused override — look
+---like a key that simply declines to move.
+---@param name string
+---@param cfg GitflowConfig|nil
+function M.warn_overrides(name, cfg)
+	local surface = surfaces[name]
+	if not surface then
+		return
+	end
+	local _, problems = M.resolve_keymaps(surface.keymaps, cfg, name)
+	for _, problem in ipairs(problems) do
+		require("gitflow.utils").notify("gitflow: " .. problem, vim.log.levels.WARN)
+	end
 end
 
 ---@class GitflowPanel
@@ -148,6 +293,9 @@ local function help_entry(self)
 	return {
 		key = "?",
 		desc = "help",
+		-- The affordance that reveals every other key: elide it and the panel
+		-- documents itself only to users who already know it is there.
+		always = true,
 		run = function()
 			local cfg = self.cfg or require("gitflow.config").get()
 			help.open(cfg, {
@@ -164,16 +312,6 @@ end
 function M.new(spec)
 	assert(type(spec.name) == "string" and spec.name ~= "", "panel needs a name")
 	assert(type(spec.title) == "string" and spec.title ~= "", "panel needs a title")
-	for _, entry in ipairs(spec.keymaps or {}) do
-		-- The two hint tiers are opposite ends of the drop order.
-		assert(
-			not (entry.essential and entry.destructive),
-			("panel %s: %s cannot be both essential and destructive"):format(
-				spec.name, tostring(entry.key)
-			)
-		)
-	end
-
 	local state = spec.state or {}
 	state.bufnr = nil
 	state.winid = nil
@@ -291,7 +429,7 @@ end
 ---override can never move a key without moving what advertises it.
 ---@return GitflowPanelKeymap[]
 function Panel:entries()
-	return M.resolve_keymaps(self.keymaps, self.cfg, self.name)
+	return (M.resolve_keymaps(self.keymaps, self.cfg, self.name))
 end
 
 function Panel:hints(view)
@@ -302,6 +440,7 @@ function Panel:hints(view)
 				entry.key, entry.desc,
 				essential = entry.essential,
 				destructive = entry.destructive,
+				always = entry.always,
 			}
 		end
 	end
@@ -323,12 +462,19 @@ end
 
 ---Reduce `hints` to what fits `width`.
 ---
----Drop order: `destructive` verbs first — the keys you least want a narrow
----bar to invite a fat finger onto — then the remaining conveniences from the
----end. An `essential` (a primary verb, or the way out) survives both passes,
----so what a cramped surface advertises is what the panel is FOR. Never drops
----below one entry, so a surface too narrow for the essentials alone overflows
----rather than hiding one of them.
+---Drop order, each pass working from the end until the rest fits:
+---  1. `destructive` conveniences — the keys you least want a narrow bar to
+---     invite a fat finger onto;
+---  2. the remaining conveniences;
+---  3. `essential` verbs BETWEEN the first and the last, so a cramped surface
+---     keeps what the panel is FOR and the way out of it;
+---  4. everything else that is not `always`, earliest first — the way out is
+---     declared last in every registry, so it stands longest.
+---`always` (`?`) is in no pass: it is the affordance that reveals every other
+---key, so it outlives all of them. `essential` and `destructive` are
+---independent — a verb can be primary AND irreversible (rebase `X execute`,
+---conflict `X abort`); it is kept for its tier and drawn in the destructive
+---colour. Never drops below one entry.
 ---@param hints table[]
 ---@param width integer|nil  nil for unlimited
 ---@param width_of fun(shown: table[], truncated: boolean): integer
@@ -354,15 +500,20 @@ local function fit_hints(hints, width, width_of)
 
 	local count = #hints
 
-	---Drop matching hints from the end until the rest fits.
-	---@param droppable fun(hint: table): boolean
+	---Drop matching hints until the rest fits.
+	---@param droppable fun(hint: table, index: integer): boolean
+	---@param from_front boolean|nil  drop the earliest first, not the last
 	---@return table[]|nil  the fitting list, or nil if it never fit
-	local function drop_pass(droppable)
-		for index = #hints, 1, -1 do
+	local function drop_pass(droppable, from_front)
+		local first, last, step = #hints, 1, -1
+		if from_front then
+			first, last, step = 1, #hints, 1
+		end
+		for index = first, last, step do
 			if count <= 1 then
 				return nil
 			end
-			if keep[index] and droppable(hints[index]) then
+			if keep[index] and droppable(hints[index], index) then
 				keep[index] = false
 				count = count - 1
 				local candidate = shown()
@@ -374,11 +525,36 @@ local function fit_hints(hints, width, width_of)
 		return nil
 	end
 
-	local fitted = drop_pass(function(hint)
-		return hint.destructive == true
-	end) or drop_pass(function(hint)
-		return not hint.essential
-	end)
+	local function keepable(hint)
+		return hint.essential == true or hint.always == true
+	end
+	-- The outermost essentials: the panel's primary verb and its way out.
+	local first_essential, last_essential
+	for index, hint in ipairs(hints) do
+		if hint.essential and not hint.always then
+			first_essential = first_essential or index
+			last_essential = index
+		end
+	end
+	local function interior_essential(hint, index)
+		return hint.essential == true and not hint.always
+			and index ~= first_essential and index ~= last_essential
+	end
+
+	local fitted
+	for _, pass in ipairs({
+		{ function(hint) return hint.destructive == true and not keepable(hint) end },
+		{ function(hint) return not keepable(hint) end },
+		{ interior_essential },
+		-- Front first: the way out is declared last in every registry, so
+		-- eating primary verbs from the top leaves it standing longest.
+		{ function(hint) return hint.always ~= true end, true },
+	}) do
+		fitted = drop_pass(pass[1], pass[2])
+		if fitted then
+			break
+		end
+	end
 	if fitted then
 		return fitted, true
 	end
@@ -505,32 +681,9 @@ function M.bound_keys(entry)
 	return entry.keys or { entry.key }
 end
 
----Report `panel_keybindings` entries that name a key this panel does not
----have. Checked here rather than in `config.validate` because panels register
----their registries on demand, long after `setup()`; a silent no-op would let a
----typo look like a binding that simply refuses to move.
-function Panel:warn_unknown_overrides()
-	local overrides = overrides_for(self.cfg, self.name)
-	if next(overrides) == nil then
-		return
-	end
-	local declared = {}
-	for _, entry in ipairs(self.keymaps) do
-		declared[entry.key] = true
-	end
-	for key in pairs(overrides) do
-		if not declared[key] then
-			require("gitflow.utils").notify(
-				("gitflow: panel_keybindings.%s has no key '%s'"):format(self.name, key),
-				vim.log.levels.WARN
-			)
-		end
-	end
-end
-
 ---@param bufnr integer
 function Panel:bind_keymaps(bufnr)
-	self:warn_unknown_overrides()
+	M.warn_overrides(self.name, self.cfg)
 	for _, entry in ipairs(self:entries()) do
 		for _, key in ipairs(entry.bind == false and {} or M.bound_keys(entry)) do
 			vim.keymap.set(entry.mode or "n", key, function()

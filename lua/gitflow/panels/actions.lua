@@ -204,6 +204,16 @@ panel.register_surface({
 	keymaps = KEYMAPS,
 })
 
+---The registry with the user's `panel_keybindings.actions` applied. The
+---per-view binds, the hint bar, the float footer and the `?` overlay all read
+---this, so an override can never move a key without moving what advertises it.
+---@return GitflowPanelKeymap[]
+local function keymaps()
+	return panel.surface_keymaps(
+		"actions", M.state.cfg or require("gitflow.config").get()
+	)
+end
+
 ---@param entry GitflowPanelKeymap
 ---@param view string
 ---@return boolean
@@ -221,7 +231,7 @@ end
 ---@return table[]
 local function hints_for(view)
 	local out = {}
-	for _, entry in ipairs(KEYMAPS) do
+	for _, entry in ipairs(keymaps()) do
 		if entry.desc and in_view(entry, view) then
 			out[#out + 1] = { entry.key, entry.desc }
 		end
@@ -360,14 +370,19 @@ local function apply_view_keymaps()
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	for _, entry in ipairs(KEYMAPS) do
-		pcall(vim.keymap.del, "n", entry.key, { buffer = bufnr })
+	local resolved = keymaps()
+	for _, entry in ipairs(resolved) do
+		for _, key in ipairs(panel.bound_keys(entry)) do
+			pcall(vim.keymap.del, "n", key, { buffer = bufnr })
+		end
 	end
-	for _, entry in ipairs(KEYMAPS) do
+	for _, entry in ipairs(resolved) do
 		if in_view(entry, M.state.view) then
-			vim.keymap.set("n", entry.key, entry.run, {
-				buffer = bufnr, silent = true, nowait = true,
-			})
+			for _, key in ipairs(panel.bound_keys(entry)) do
+				vim.keymap.set("n", key, function()
+					entry.run(key)
+				end, { buffer = bufnr, silent = true, nowait = true })
+			end
 		end
 	end
 end
@@ -998,6 +1013,8 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
+	-- Once per open, not per view switch: apply_view_keymaps runs on every one.
+	panel.warn_overrides("actions", cfg)
 	M.state.view = "list"
 	M.state.detail_run = nil
 	M.state.workflows = nil

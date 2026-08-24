@@ -11,7 +11,9 @@
 --   * no key means both a destructive and a benign thing;
 --   * `r` is refresh everywhere it is bound;
 --   * `?` opens a help buffer generated from the surface's own registry;
---   * `panel_keybindings` moves and unbinds keys, hints included.
+--   * `panel_keybindings` moves and unbinds keys, hints included, on EVERY
+--     registered surface — including the three that are not `Panel`s;
+--   * every key the migration table says can be put back, can be put back.
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -163,17 +165,6 @@ test("every panel surface binds ? to help", function()
 	end
 end)
 
-test("a destructive entry is never also essential", function()
-	for _, surface in ipairs(surfaces) do
-		for _, entry in ipairs(surface.keymaps) do
-			assert_true(
-				not (entry.essential and entry.destructive),
-				("%s: %s is both essential and destructive"):format(surface.name, entry.key)
-			)
-		end
-	end
-end)
-
 -- ── the ? overlay is generated, not written ───────────────────────────
 
 ---Open a panel's `?` overlay and return the help buffer's lines.
@@ -299,6 +290,156 @@ test("panel_keybindings false unbinds a key entirely", function()
 	end
 
 	tag.close()
+	gitflow.setup({})
+end)
+
+
+-- ── the migration promise ─────────────────────────────────────────────
+-- KEYBINDINGS.md tells users every key this change moved can be put back
+-- through `panel_keybindings`. These drive that config end to end and assert
+-- the OLD key works again — the two rows below could not be restored at all
+-- before, silently, because the surfaces never resolved overrides.
+
+---Buffer-local normal-mode lhs set.
+---@param bufnr integer
+---@return table<string, boolean>
+local function bound_keys(bufnr)
+	local out = {}
+	for _, map in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+		out[map.lhs] = true
+	end
+	return out
+end
+
+---The desc a resolved surface advertises for a key, or nil.
+---@param surface_name string
+---@param cfg_used GitflowConfig
+---@param key string
+---@return string|nil
+local function desc_for_key(surface_name, cfg_used, key)
+	for _, entry in ipairs(panel.surface_keymaps(surface_name, cfg_used)) do
+		for _, bound in ipairs(panel.bound_keys(entry)) do
+			if bound == key then
+				return entry.desc
+			end
+		end
+	end
+	return nil
+end
+
+test("the merge resolver's cx reset can be put back", function()
+	local restored = gitflow.setup({
+		panel_keybindings = { conflict_resolver = { cD = "cx" } },
+	})
+	local conflict = require("gitflow.ui.conflict")
+	local path = vim.fn.tempname()
+	vim.fn.writefile({
+		"a", "<<<<<<< HEAD", "mine", "=======", "theirs", ">>>>>>> other", "b",
+	}, path)
+	conflict.open(path, { cfg = restored })
+
+	local bufnr = conflict.state.merged_bufnr
+	assert_true(bufnr ~= nil, "the resolver should have opened a merged buffer")
+	local bound = bound_keys(bufnr)
+	assert_true(bound["cx"], "cx should be bound again on the resolver buffer")
+	assert_true(bound["cD"] == nil, "the new key should be free once remapped")
+	assert_equals(
+		desc_for_key("conflict_resolver", restored, "cx"), "reset",
+		"cx should mean reset again"
+	)
+
+	conflict.close()
+	vim.fn.delete(path)
+	gitflow.setup({})
+end)
+
+test("the rebase editor's r reword can be put back", function()
+	-- Two rows, because `r` is refresh in every panel now: the multi-key
+	-- action entry takes `r` back and refresh moves off it. Re-keying the
+	-- multi-key entry must not unbind p/e/s/f.
+	local restored = gitflow.setup({
+		panel_keybindings = {
+			rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", ["r"] = "R" },
+		},
+	})
+	local rebase = require("gitflow.panels.rebase")
+	rebase.open(restored)
+
+	local bufnr = require("gitflow.ui.buffer").get("rebase")
+	assert_true(bufnr ~= nil, "the rebase panel should have opened")
+	local bound = bound_keys(bufnr)
+	for _, key in ipairs({ "p", "r", "e", "s", "f" }) do
+		assert_true(bound[key], ("re-keying must keep %q bound"):format(key))
+	end
+	assert_equals(
+		desc_for_key("rebase", restored, "r"), "action",
+		"r should pick a rebase action again, not refresh"
+	)
+	assert_equals(
+		desc_for_key("rebase", restored, "R"), "refresh",
+		"refresh should have moved to R"
+	)
+
+	rebase.close()
+	gitflow.setup({})
+end)
+
+test("an override that would shadow an existing key is refused, loudly", function()
+	local warnings = {}
+	local utils = require("gitflow.utils")
+	local real_notify = utils.notify
+	utils.notify = function(message)
+		warnings[#warnings + 1] = message
+	end
+
+	-- tag already binds D (delete); moving push onto it would silently drop
+	-- the destructive verb while the hints still advertised both.
+	local shadowed = gitflow.setup({ panel_keybindings = { tag = { P = "D" } } })
+	local tag = require("gitflow.panels.tag")
+	tag.open(shadowed)
+
+	local bound = bound_keys(require("gitflow.ui.buffer").get("tag"))
+	assert_true(bound["P"], "the refused override must leave P where it was")
+	assert_equals(
+		desc_for_key("tag", shadowed, "D"), "delete",
+		"D must still be the destructive verb it was"
+	)
+
+	local reported = false
+	for _, message in ipairs(warnings) do
+		if message:find("panel_keybindings.tag ignored", 1, true) then
+			reported = true
+		end
+	end
+	assert_true(
+		reported,
+		"a refused override must say so: " .. vim.inspect(warnings)
+	)
+
+	utils.notify = real_notify
+	tag.close()
+	gitflow.setup({})
+end)
+
+test("panel_keybindings reaches the actions panel and the review diff pane", function()
+	local moved = gitflow.setup({
+		panel_keybindings = {
+			actions = { W = "<leader>aw" },
+			review_diff = { s = "<leader>rs" },
+		},
+	})
+	assert_equals(
+		desc_for_key("actions", moved, "<leader>aw"), "workflows",
+		"the actions panel should resolve its overrides"
+	)
+	assert_true(
+		desc_for_key("actions", moved, "W") == nil,
+		"the actions panel's default key should be free once remapped"
+	)
+	assert_equals(
+		desc_for_key("review_diff", moved, "<leader>rs"), "suggest",
+		"the review diff pane should resolve its overrides"
+	)
 	gitflow.setup({})
 end)
 

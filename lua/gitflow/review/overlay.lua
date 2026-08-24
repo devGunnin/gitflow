@@ -29,6 +29,12 @@ panel.register_surface({
 	keymaps = DIFF_KEYMAPS,
 })
 
+--- The keys currently bound in the diff pane, with `panel_keybindings`
+--- applied. Held rather than re-resolved so teardown removes exactly what
+--- setup installed, even if the config changes mid-review (#366).
+---@type GitflowPanelKeymap[]
+local bound_keymaps = {}
+
 --- Guards the recursive BufWinEnter fired by open_file's own `:edit`.
 local applying = false
 
@@ -113,7 +119,12 @@ end
 ---@param bufnr integer
 local function bind_review_keys(bufnr)
 	local opts = { buffer = bufnr, silent = true, nowait = true }
-	for _, entry in ipairs(DIFF_KEYMAPS) do
+	if #bound_keymaps == 0 then
+		local cfg = state.cfg or require("gitflow.config").get()
+		panel.warn_overrides("review_diff", cfg)
+		bound_keymaps = panel.surface_keymaps("review_diff", cfg)
+	end
+	for _, entry in ipairs(bound_keymaps) do
 		for _, key in ipairs(panel.bound_keys(entry)) do
 			vim.keymap.set(entry.mode or "n", key, function()
 				entry.run(key)
@@ -126,7 +137,7 @@ end
 local function clear_review_keymaps()
 	for _, bufnr in ipairs(state.annotated_buffers) do
 		if vim.api.nvim_buf_is_valid(bufnr) then
-			for _, entry in ipairs(DIFF_KEYMAPS) do
+			for _, entry in ipairs(bound_keymaps) do
 				for _, key in ipairs(panel.bound_keys(entry)) do
 					pcall(vim.keymap.del, entry.mode or "n", key,
 						{ buffer = bufnr })
@@ -134,6 +145,7 @@ local function clear_review_keymaps()
 			end
 		end
 	end
+	bound_keymaps = {}
 end
 
 local function clear_all_annotations()
