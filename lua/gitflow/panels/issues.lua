@@ -948,7 +948,12 @@ end
 
 ---Run a confirm-gated, single-flight mutation. Declining fires no `gh` call
 ---at all; a second press while one is in flight is refused rather than queued.
----@param opts { confirm_message: string, in_progress_message: string, done_message: string, call: fun(cb: fun(err: string|nil)) }
+---@class GitflowGhMutation
+---@field confirm_message string  names exactly what will happen
+---@field in_progress_message string
+---@field done_message string
+---@field call fun(cb: fun(err: string|nil))
+---@param opts GitflowGhMutation
 local function perform_mutation(opts)
 	if M.state.busy then
 		utils.notify(

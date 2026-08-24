@@ -242,20 +242,33 @@ GitHub ~
     :Gitflow issue view <number>        View an issue
     :Gitflow issue create               Create a new issue
     :Gitflow issue comment <number>     Comment on an issue
-    :Gitflow issue close <number>       Close an issue
+    :Gitflow issue close <number> [completed|not_planned]
+                                        Close an issue, with a reason
     :Gitflow issue reopen <number>      Reopen an issue
     :Gitflow issue edit <number> [opts] Edit issue attributes
+                                        (title=, body=, milestone=,
+                                        add=, remove=, add_assignees=,
+                                        remove_assignees=)
     :Gitflow pr list                    List pull requests
     :Gitflow pr view <number>           View a pull request
     :Gitflow pr create                  Create a new pull request
     :Gitflow pr comment <number>        Comment on a PR
-    :Gitflow pr merge <number>          Merge a PR
+    :Gitflow pr merge <number> [merge|squash|rebase]
+                     [--delete-branch] [--auto]
+                                        Merge a PR, optionally deleting
+                                        its branch or queueing auto-merge
     :Gitflow pr checkout <number>       Check out a PR branch
     :Gitflow pr close <number>          Close a PR
+    :Gitflow pr reopen <number>         Reopen a PR
+    :Gitflow pr ready <number> [--undo] Mark a PR ready for review, or
+                                        (--undo) back to a draft
     :Gitflow pr review <number>         Open review panel for a PR
     :Gitflow pr submit-review <number>  Submit pending review
     :Gitflow pr respond <number>        Respond to a review thread
-    :Gitflow pr edit <number> [opts]    Edit PR attributes
+    :Gitflow pr edit <number> [opts]    Edit PR attributes (title=,
+                                        body=, add=, remove=,
+                                        add_assignees=, remove_assignees=,
+                                        reviewers=, remove_reviewers=)
     :Gitflow label list                 List repository labels
     :Gitflow label create               Create a new label
     :Gitflow label delete <name>        Delete a label
@@ -521,14 +534,28 @@ Cross-panel inconsistencies ~
        first, default choice Cancel) / refresh (branch list, conflict
        list) / reply to comment thread (review view) / rerun a workflow
        run (actions panel, destructive, confirms first, default choice
-       Cancel).
+       Cancel) / reopen the issue (issue list) / edit reviewers (PR list).
+    M: set the milestone (issue list) / enable or cancel auto-merge (PR
+       list, destructive, confirms first).
+    D: delete a saved view (issue list) / merge and delete the branch (PR
+       list, destructive, confirms first).
+    d: delete the comment under cursor (issue detail view, destructive) /
+       toggle draft (PR list) / delete a label (label panel).
     "Back to list": b (issue list, PR list) or <BS> (actions panel, now a
        general "back one level": log view -> its parent, workflow list ->
        run list, run detail -> run list).
     No panel uses <Esc> for this.
 
-    All three destructive cases above default their confirmation prompt
-    to Cancel.
+    Every destructive case above defaults its confirmation prompt to the
+    safe answer, and names exactly what it will do — which PR, which
+    strategy, which branch gets deleted. Declining sends nothing to
+    GitHub; a second press while one is in flight is refused, not queued.
+
+    The PR panel renders the PR's CI checks from `statusCheckRollup`: a
+    per-state count on each list card, every check named with its state
+    in the detail view. Issue cards carry a cue for any open PR that
+    closes them (a "Closes #<n>" keyword in the PR body, or the
+    <n>-slug branch name the issue panel's B generates).
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*

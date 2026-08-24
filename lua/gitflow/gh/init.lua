@@ -87,7 +87,9 @@ local FAILURE_HINTS = {
 	missing = "Install the GitHub CLI (https://cli.github.com) and make sure `gh` is on your PATH.",
 	auth = "Run `gh auth login` to authenticate, then retry.",
 	network = "Could not reach GitHub — check your connection or https://www.githubstatus.com.",
-	rate_limit = "GitHub rate limit reached for this token. Wait for the window to reset — `gh api rate_limit` shows when — then retry; avoid rapid repeated refreshes until it does.",
+	rate_limit = "GitHub rate limit reached for this token. Wait for the window"
+		.. " to reset — `gh api rate_limit` shows when — then retry; avoid rapid"
+		.. " repeated refreshes until it does.",
 	permission = "Your token lacks the required permission. `gh auth status` lists its scopes; `gh auth refresh -s <scope>` adds one.",
 	-- GitHub answers 404 for private resources too, so "absent" and
 	-- "invisible to you" are indistinguishable and stay deliberately merged.
