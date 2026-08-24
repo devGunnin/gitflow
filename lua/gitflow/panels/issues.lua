@@ -5,6 +5,7 @@ local panel = require("gitflow.ui.panel")
 local form = require("gitflow.ui.form")
 local gh_issues = require("gitflow.gh.issues")
 local gh_labels = require("gitflow.gh.labels")
+local gh_prs = require("gitflow.gh.prs")
 local label_completion = require("gitflow.completion.labels")
 local assignee_completion = require("gitflow.completion.assignees")
 local label_picker = require("gitflow.ui.label_picker")
@@ -27,13 +28,22 @@ local icons = require("gitflow.icons")
 ---@field collapsed table<string, boolean>  collapsed group ids
 ---@field line_groups table<integer, string>  header line -> group key
 ---@field line_entries table<integer, table>
+---@field line_comments table<integer, table>  detail line -> comment
 ---@field mode "list"|"view"
 ---@field active_issue_number integer|nil
+---@field active_issue table|nil  the issue the detail view is painted from
+---@field view_cwd string|nil  cwd the detail view was fetched under
+---@field links table<string, string[]>  issue number -> PR numbers closing it
+---@field links_key string|nil  scope the link map was derived under
+---@field busy string|nil  in-flight mutation, single-flight guard
 
 local M = {}
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
 local DEFAULT_FETCH_LIMIT = 300
+-- Open PRs scanned for the linked-PR cue. One bounded call, and far above any
+-- realistic open-PR count, so the cue is never silently partial.
+local LINKED_PR_LIMIT = 500
 -- Create form's label picker: high enough to be the whole list on any sane
 -- repo, and the fill is reported rather than silently truncating.
 local LABEL_PICK_LIMIT = 1000
@@ -50,13 +60,21 @@ M.state = {
 	collapsed = {},
 	line_entries = {},
 	line_groups = {},
+	line_comments = {},
 	mode = "list",
 	active_issue_number = nil,
+	active_issue = nil,
+	view_cwd = nil,
+	links = {},
+	links_key = nil,
+	busy = nil,
 }
 
 -- Forward-declared: the "b" (back) keymap below closes over it before its
 -- definition later in the file.
 local render_derived
+-- Forward-declared: M.refresh calls it before its definition below.
+local refresh_links
 
 ---Scope the cache is only valid under: `gh` resolves the repo from the cwd,
 ---and the server-side query decides which issues it holds. (The client-side
@@ -93,7 +111,7 @@ local P = panel.new({
 	filetype = "markdown",
 	loading = "Loading issues…",
 	state = M.state,
-	entry_maps = { "line_entries", "line_groups" },
+	entry_maps = { "line_entries", "line_groups", "line_comments" },
 	keymaps = {
 		{ key = "<CR>", desc = "view", views = { "list" }, essential = true,
 			run = function()
@@ -111,14 +129,32 @@ local P = panel.new({
 		{ key = "x", desc = "close", destructive = true, run = function()
 			M.close_under_cursor()
 		end },
+		{ key = "R", desc = "reopen", run = function()
+			M.reopen_under_cursor()
+		end },
 		{ key = "L", desc = "labels", run = function()
 			M.edit_labels_under_cursor()
 		end },
 		{ key = "A", desc = "assign", run = function()
 			M.edit_assignees_under_cursor()
 		end },
+		{ key = "M", desc = "milestone", run = function()
+			M.set_milestone_under_cursor()
+		end },
+		{ key = "e", desc = "edit comment", views = { "view" }, run = function()
+			M.edit_comment_under_cursor()
+		end },
+		{ key = "d", desc = "del comment", views = { "view" }, destructive = true,
+			run = function()
+				M.delete_comment_under_cursor()
+			end },
 		{ key = "f", desc = "filter", views = { "list" }, run = function()
 			M.open_filter_menu()
+		end },
+		-- Not `/`: this is a read-only markdown buffer users search with `/`
+		-- and `n` (same reasoning as o/O/D over v/V, #428). Q = query.
+		{ key = "Q", desc = "search", views = { "list" }, run = function()
+			M.search()
 		end },
 		{ key = "X", desc = "clear", views = { "list" }, run = function()
 			M.clear_filters()
@@ -232,6 +268,33 @@ local function milestone_text(issue)
 	return title
 end
 
+---Linked-PR cue (#425): the PRs whose closing keywords (or gitflow branch
+---name) point at this issue. Empty until the secondary lookup lands, and
+---empty forever in a repo where nothing links back — the card just stays
+---quiet rather than showing a placeholder.
+---@param issue table
+---@return table[]
+local function linked_pr_chunks(issue)
+	-- Derived from another repo's PRs, the cue would point at numbers that do
+	-- not exist here — same scope rule the row cache follows.
+	if M.state.links_key ~= cache_key() then
+		return {}
+	end
+	local numbers = M.state.links[tostring(issue.number or "")]
+	if not numbers or #numbers == 0 then
+		return {}
+	end
+
+	local labels = {}
+	for _, number in ipairs(numbers) do
+		labels[#labels + 1] = "#" .. number
+	end
+	return {
+		{ components.separators.field .. icons.get("github", "pr_open") .. " ", "GitflowMeta" },
+		{ table.concat(labels, " "), "GitflowPROpen" },
+	}
+end
+
 ---@param text string
 ---@return string[]
 local function split_lines(text)
@@ -324,6 +387,9 @@ local function push_issue_card(B, issue, width, line_entries)
 	end
 	meta[#meta + 1] = { components.separators.field .. "milestone: ", "GitflowMetaKey" }
 	meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
+	for _, chunk in ipairs(linked_pr_chunks(issue)) do
+		meta[#meta + 1] = chunk
+	end
 	local meta_line = B:push(meta)
 
 	line_entries[title_line] = issue
@@ -387,6 +453,8 @@ local function render_list(groups, total)
 
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
+	M.state.active_issue = nil
+	M.state.view_cwd = nil
 	if P:paint(B) then
 		M.state.line_entries = line_entries
 		M.state.line_groups = line_groups
@@ -431,6 +499,11 @@ local function render_view(issue)
 	components.meta_row(B, "Milestone:", {
 		{ milestone_text(issue), "GitflowChip" },
 	})
+	local links = linked_pr_chunks(issue)
+	if #links > 0 then
+		-- Drop the leading field separator: a meta row supplies its own gap.
+		components.meta_row(B, "Linked PRs:", { links[#links] })
+	end
 	B:blank()
 
 	components.section(B, icons.get("ui", "comment"), "Body")
@@ -447,23 +520,26 @@ local function render_view(issue)
 	local comments = issue.comments or {}
 	local count = type(comments) == "table" and #comments or 0
 	components.section(B, icons.get("ui", "comment"), ("Comments (%d)"):format(count))
+	local line_comments = {}
 	if count == 0 then
 		components.empty(B, "(none)")
 	else
 		for _, comment in ipairs(comments) do
 			local author = comment.author
 				and components.maybe_text(comment.author.login) or "unknown"
-			B:push({
+			line_comments[B:push({
 				{ components.spacing.indent, nil },
 				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
 				{ author .. ":", "GitflowAuthor" },
-			})
+			})] = comment
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
 				components.empty(B, "(empty)")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					B:raw(components.spacing.indent .. components.spacing.gutter .. comment_line)
+					line_comments[
+						B:raw(components.spacing.indent .. components.spacing.gutter .. comment_line)
+					] = comment
 				end
 			end
 			B:blank()
@@ -474,9 +550,16 @@ local function render_view(issue)
 
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
-	P:paint(B)
-	-- No rows in the detail view: drop whatever the list left behind.
+	M.state.active_issue = issue
+	-- gh resolves the repo from the cwd; a verb must never fire against a
+	-- repo this detail did not come from.
+	M.state.view_cwd = vim.fn.getcwd()
+	local painted = P:paint(B)
+	-- The list's rows are gone; the comment map replaces them.
 	P:clear_entry_maps()
+	if painted then
+		M.state.line_comments = line_comments
+	end
 	P:refresh_footer("view")
 	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
@@ -545,6 +628,37 @@ function M.rerender()
 	render_derived()
 end
 
+---Linked-PR cue (#425): a second, deliberately non-blocking pass. The issue
+---rows are already on screen when this is issued, and a failure only costs
+---the cue — so it warns and leaves the cards bare rather than blanking a
+---panel that loaded fine.
+---@param request_id integer  generation the issue fetch was issued under
+---@param requested_key string  scope that fetch was issued under
+refresh_links = function(request_id, requested_key)
+	gh_prs.list_links({ state = "open", limit = LINKED_PR_LIMIT }, {}, function(err, prs)
+		if not P:is_active(request_id) or requested_key ~= cache_key() then
+			return
+		end
+		if err then
+			utils.notify(
+				("Linked-PR cues unavailable: %s"):format(err), vim.log.levels.WARN
+			)
+			return
+		end
+
+		local links = {}
+		for _, pr in ipairs(prs or {}) do
+			for _, number in ipairs(gh_prs.linked_issue_numbers(pr)) do
+				links[number] = links[number] or {}
+				table.insert(links[number], tostring(pr.number))
+			end
+		end
+		M.state.links = links
+		M.state.links_key = requested_key
+		render_derived()
+	end)
+end
+
 ---Refetch from GitHub and re-render.
 function M.refresh()
 	if not M.state.cfg then
@@ -585,6 +699,7 @@ function M.refresh()
 		M.state.cache = issues or {}
 		M.state.cache_key = requested_key
 		render_derived()
+		refresh_links(request_id, requested_key)
 	end)
 end
 
@@ -814,25 +929,64 @@ function M.suggested_branch_name(issue)
 	return ("%s-%s"):format(number, slug)
 end
 
----The issue the user is acting on, in either list or detail mode.
+---The issue a keypress acts on, resolved at press time — never a number
+---cached from an older paint. Returns nil when nothing is selected, or when
+---what is on screen belongs to a repo we have since left.
 ---@return table|nil
-local function selected_issue()
-	if M.state.mode ~= "view" then
-		return entry_under_cursor()
+local function target_issue()
+	if M.state.mode == "view" then
+		if M.state.view_cwd ~= vim.fn.getcwd() then
+			return nil
+		end
+		return M.state.active_issue
+	end
+	if not scoped_cache() then
+		return nil
+	end
+	return entry_under_cursor()
+end
+
+---Run a confirm-gated, single-flight mutation. Declining fires no `gh` call
+---at all; a second press while one is in flight is refused rather than queued.
+---@param opts { confirm_message: string, in_progress_message: string, done_message: string, call: fun(cb: fun(err: string|nil)) }
+local function perform_mutation(opts)
+	if M.state.busy then
+		utils.notify(
+			("Already busy: %s — wait for it to finish"):format(M.state.busy),
+			vim.log.levels.WARN
+		)
+		return
 	end
 
-	local number = M.state.active_issue_number
-	for _, issue in ipairs(M.state.cache or {}) do
-		if tonumber(issue.number) == number then
-			return issue
-		end
+	local confirmed = input.confirm(opts.confirm_message, {
+		choices = { "&Yes", "&No" },
+		default_choice = 2,
+	})
+	if not confirmed then
+		return
 	end
-	return nil
+
+	M.state.busy = opts.in_progress_message
+	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
+
+	opts.call(function(err)
+		M.state.busy = nil
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(opts.done_message, vim.log.levels.INFO)
+		if M.state.mode == "view" and M.state.active_issue_number then
+			M.open_view(M.state.active_issue_number)
+		else
+			M.refresh()
+		end
+	end)
 end
 
 ---Create a branch for the selected issue, prefilled with a suggested name.
 function M.create_branch_under_cursor()
-	local issue = selected_issue()
+	local issue = target_issue()
 	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
@@ -1233,20 +1387,12 @@ local function comment_on_issue(number)
 end
 
 function M.comment_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local issue = target_issue()
+	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
+	local number = issue.number
 	comment_on_issue(number)
 end
 
@@ -1314,64 +1460,239 @@ local function edit_issue(number)
 end
 
 function M.edit_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local issue = target_issue()
+	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
+	local number = issue.number
 	edit_issue(number)
 end
 
----@param number integer|string
-local function close_issue(number)
-	gh_issues.close(number, nil, {}, function(err)
+---Close an issue, recording why. GitHub distinguishes "completed" from "not
+---planned" and shows them with different glyphs, so the reason is asked for
+---rather than defaulted.
+function M.close_under_cursor()
+	local issue = target_issue()
+	if not issue then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+	local number = issue.number
+
+	local _, choice = input.confirm(
+		("Close issue #%s as:"):format(tostring(number)),
+		{ choices = { "&Completed", "&Not planned", "&Cancel" }, default_choice = 3 }
+	)
+	if choice ~= 1 and choice ~= 2 then
+		return
+	end
+	local reason = choice == 1 and "completed" or "not_planned"
+
+	perform_mutation({
+		confirm_message = ("Close issue #%s as %s?"):format(tostring(number), reason),
+		in_progress_message = ("Closing issue #%s"):format(tostring(number)),
+		done_message = ("Closed issue #%s as %s"):format(tostring(number), reason),
+		call = function(cb)
+			gh_issues.close(number, { reason = reason }, {}, cb)
+		end,
+	})
+end
+
+---The inverse of `x`: bring a closed issue back.
+function M.reopen_under_cursor()
+	local issue = target_issue()
+	if not issue then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+	local number = issue.number
+
+	perform_mutation({
+		confirm_message = ("Reopen issue #%s?"):format(tostring(number)),
+		in_progress_message = ("Reopening issue #%s"):format(tostring(number)),
+		done_message = ("Reopened issue #%s"):format(tostring(number)),
+		call = function(cb)
+			gh_issues.reopen(number, {}, cb)
+		end,
+	})
+end
+
+--- Offered by the milestone picker to clear the issue's milestone.
+local NO_MILESTONE = "(none)"
+
+---Assign the selected issue to a repository milestone, or clear it. The
+---milestone list comes from the repo, not from the fetched issues: a
+---milestone nothing is filed under yet must still be selectable.
+function M.set_milestone_under_cursor()
+	local issue = target_issue()
+	if not issue then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+	local number = issue.number
+
+	gh_issues.list_milestones({ state = "all" }, {}, function(err, milestones)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
-		utils.notify(("Closed issue #%s"):format(tostring(number)), vim.log.levels.INFO)
-		if M.state.mode == "view" then
-			M.open_view(number)
-		else
-			M.refresh()
+
+		local items = { { name = NO_MILESTONE, description = "clear the milestone" } }
+		for _, milestone in ipairs(milestones or {}) do
+			local title = vim.trim(tostring(milestone.title or ""))
+			if title ~= "" then
+				items[#items + 1] = {
+					name = title,
+					description = tostring(milestone.state or ""),
+				}
+			end
 		end
+		if #items == 1 then
+			utils.notify("This repository has no milestones", vim.log.levels.WARN)
+			return
+		end
+
+		local current = derive.milestone_title(issue)
+		list_picker.open({
+			title = ("Milestone for issue #%s"):format(tostring(number)),
+			items = items,
+			selected = current ~= "" and { current } or {},
+			multi_select = false,
+			on_submit = function(selected)
+				local chosen = selected[1]
+				if not chosen then
+					focus_panel()
+					return
+				end
+				focus_panel()
+				local clearing = chosen == NO_MILESTONE
+				perform_mutation({
+					confirm_message = clearing
+						and ("Clear the milestone on issue #%s?"):format(tostring(number))
+						or ("Set issue #%s to milestone '%s'?"):format(tostring(number), chosen),
+					in_progress_message = ("Updating milestone on issue #%s"):format(tostring(number)),
+					done_message = clearing
+						and ("Cleared the milestone on issue #%s"):format(tostring(number))
+						or ("Issue #%s is now in '%s'"):format(tostring(number), chosen),
+					call = function(cb)
+						gh_issues.edit(number, clearing
+							and { remove_milestone = true }
+							or { milestone = chosen }, {}, cb)
+					end,
+				})
+			end,
+			on_cancel = focus_panel,
+		})
 	end)
 end
 
-function M.close_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
+-- ── issue comments ──────────────────────────────────────────────────────
+
+---The comment under the cursor in the detail view, with the numeric id the
+---REST endpoints need. Reports what is missing rather than acting on a guess.
+---@return table|nil comment, integer|nil comment_id
+local function comment_under_cursor()
+	if M.state.mode ~= "view" then
+		utils.notify("Open an issue first", vim.log.levels.WARN)
+		return nil, nil
+	end
+	if M.state.view_cwd ~= vim.fn.getcwd() then
+		utils.notify("This issue was loaded in another repository", vim.log.levels.WARN)
+		return nil, nil
+	end
+	if not M.state.bufnr or vim.api.nvim_get_current_buf() ~= M.state.bufnr then
+		return nil, nil
+	end
+
+	local comment = M.state.line_comments[vim.api.nvim_win_get_cursor(0)[1]]
+	if not comment then
+		utils.notify("Move the cursor onto a comment", vim.log.levels.WARN)
+		return nil, nil
+	end
+
+	local comment_id = gh_issues.comment_rest_id(comment)
+	if not comment_id then
+		utils.notify(
+			"This comment carries no id GitHub can address — refresh (r) and retry",
+			vim.log.levels.ERROR
+		)
+		return nil, nil
+	end
+	return comment, comment_id
+end
+
+---Rewrite an existing comment, prefilled with its current body.
+function M.edit_comment_under_cursor()
+	local comment, comment_id = comment_under_cursor()
+	if not comment then
+		return
+	end
+
+	input.prompt({
+		multiline = true,
+		title = "Edit comment",
+		default = json_text(comment.body),
+	}, function(body)
+		local normalized = vim.trim(body or "")
+		if normalized == "" then
+			utils.notify("Comment cannot be empty", vim.log.levels.WARN)
 			return
 		end
-		number = entry.number
-	end
+		if normalized == vim.trim(json_text(comment.body)) then
+			utils.notify("Comment unchanged", vim.log.levels.INFO)
+			return
+		end
 
-	if not number then
-		utils.notify("No issue selected", vim.log.levels.WARN)
+		perform_mutation({
+			confirm_message = "Save this edit to the comment?",
+			in_progress_message = "Updating comment",
+			done_message = "Comment updated",
+			call = function(cb)
+				gh_issues.edit_comment(comment_id, normalized, {}, cb)
+			end,
+		})
+	end)
+end
+
+function M.delete_comment_under_cursor()
+	local comment, comment_id = comment_under_cursor()
+	if not comment then
 		return
 	end
 
-	local confirmed = input.confirm(("Close issue #%s?"):format(tostring(number)), {
-		choices = { "&Yes", "&No" },
-		default_choice = 2,
+	local author = comment.author
+		and components.maybe_text(comment.author.login) or "unknown"
+	perform_mutation({
+		confirm_message = ("Delete @%s's comment on issue #%s? This cannot be undone.")
+			:format(author, tostring(M.state.active_issue_number)),
+		in_progress_message = "Deleting comment",
+		done_message = "Comment deleted",
+		call = function(cb)
+			gh_issues.delete_comment(comment_id, {}, cb)
+		end,
 	})
-	if not confirmed then
-		return
-	end
+end
 
-	close_issue(number)
+---Set the server-side `--search` query (#386's missing half: `search` was
+---plumbed into the fetch but nothing ever set it). An empty answer clears it.
+function M.search()
+	input.prompt({
+		prompt = "Issue search (GitHub syntax): ",
+		default = M.state.fetch.search or "",
+	}, function(value)
+		local query = vim.trim(value or "")
+		M.state.fetch.search = query ~= "" and query or nil
+		-- The query is part of the cache scope, so this refetch cannot be
+		-- answered from rows the old query decided.
+		M.refresh()
+		focus_panel()
+		utils.notify(
+			query ~= "" and ("Searching issues: %s"):format(query)
+				or "Cleared the issue search",
+			vim.log.levels.INFO
+		)
+	end)
 end
 
 ---@param value string
@@ -1397,20 +1718,12 @@ local function parse_label_patch(value)
 end
 
 function M.edit_labels_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local issue = target_issue()
+	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
+	local number = issue.number
 
 	input.prompt({
 		prompt = "Labels (+bug,-wip,docs): ",
@@ -1465,20 +1778,12 @@ local function parse_assignee_patch(value)
 end
 
 function M.edit_assignees_under_cursor()
-	local number = M.state.active_issue_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No issue selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local issue = target_issue()
+	if not issue then
 		utils.notify("No issue selected", vim.log.levels.WARN)
 		return
 	end
+	local number = issue.number
 
 	input.prompt({
 		prompt = "Assignees (+user,-user,user): ",
@@ -1517,8 +1822,12 @@ function M.close()
 	P:close()
 	M.state.line_entries = {}
 	M.state.line_groups = {}
+	M.state.line_comments = {}
 	M.state.mode = "list"
 	M.state.active_issue_number = nil
+	M.state.active_issue = nil
+	M.state.view_cwd = nil
+	M.state.busy = nil
 end
 
 ---@return boolean
