@@ -515,7 +515,9 @@ end
 
 ---Build the chunks for a footer / hint bar from { key, label } pairs.
 ---Returns a chunk list suitable for builder:push, styling keys and labels
----distinctly with a dim separator between entries.
+---distinctly with a dim separator between entries. A pair marked
+---`destructive` gets the danger colour the `?` overlay uses, so a primary
+---verb that is also irreversible reads as one on the bar it is kept in.
 ---@param pairs table[]  list of { key, label } (or { [1]=key, [2]=label })
 ---@param opts table|nil  { leading=string, sep=string }
 ---@return table[]  chunk list
@@ -533,7 +535,9 @@ function M.hint_chunks(pairs, opts)
 			chunks[#chunks + 1] = { sep, "GitflowHintSep" }
 		end
 		if key then
-			chunks[#chunks + 1] = { key, "GitflowHintKey" }
+			chunks[#chunks + 1] = {
+				key, pair.destructive and "GitflowRemoved" or "GitflowHintKey",
+			}
 		end
 		if label then
 			chunks[#chunks + 1] = { " " .. label, "GitflowHintText" }

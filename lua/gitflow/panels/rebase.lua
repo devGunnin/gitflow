@@ -93,11 +93,10 @@ local P = panel.new({
 					M.move_up()
 				end
 			end },
-		-- Destructive, not essential: executing rewrites history, and the two
-		-- tiers are exclusive. It drops first from a cramped hint bar; `?`
-		-- always lists it.
+		-- The panel's primary verb AND irreversible: kept at every width,
+		-- drawn in the destructive colour, still confirm-gated.
 		{ key = "X", desc = "execute", views = { "todo", "normal" },
-			destructive = true, run = function()
+			essential = true, destructive = true, run = function()
 				M.execute()
 			end },
 		{ key = "i", desc = "interactive", views = { "normal" }, run = function()

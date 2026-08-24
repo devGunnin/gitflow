@@ -6,8 +6,8 @@
 --   * open -> refresh -> close leaves no buffer, window or registry entry;
 --   * a callback from a superseded request is dropped, never painted;
 --   * the split hint bar advertises exactly the keys the panel bound, and the
---     float footer advertises the same set (elided to fit: essentials kept,
---     destructive verbs dropped first);
+--     float footer advertises the same set (elided to fit: `?` always kept,
+--     then the outermost essentials, destructive conveniences dropped first);
 --   * at the shipped default split width the bar still names what the panel
 --     is FOR, not just how to leave it;
 --   * open_float returning nil (terminal too small) leaves nothing half-open.
@@ -151,7 +151,7 @@ for _, name in ipairs(PANEL_NAMES) do
 		end
 	end)
 
-	test(("%s: an overflowing footer elides but keeps essentials"):format(name), function()
+	test(("%s: an overflowing footer elides to fit"):format(name), function()
 		local hints = P:hints()
 		if #hints == 0 then
 			return
@@ -160,38 +160,43 @@ for _, name in ipairs(PANEL_NAMES) do
 		local width = 40
 		local narrow = P:footer(nil, width)
 
-		-- Essentials are never dropped, so the floor is the essentials-only
-		-- footer; anything above that must have been elided away.
-		local essential_only = {}
-		for _, hint in ipairs(hints) do
-			if hint.essential then
-				essential_only[#essential_only + 1] = hint[1] .. " " .. hint[2]
-			end
-		end
-		local floor_width = vim.fn.strdisplaywidth(
-			" " .. table.concat(essential_only, " \u{b7} ") .. " "
+		-- `?` outlives every other key, so the floor is `? help` alone and
+		-- anything wider than the float must have been elided away.
+		assert_true(
+			vim.fn.strdisplaywidth(narrow) <= width or #hints == 1,
+			("%s footer should fit the float it goes into: %q"):format(name, narrow)
 		)
 		assert_true(
-			vim.fn.strdisplaywidth(narrow) <= width
-				or #hints == 1
-				or floor_width > width,
-			("%s footer should fit the float it goes into"):format(name)
+			narrow:find("? help", 1, true) ~= nil,
+			("%s elided away the ? that reveals its other keys: %q"):format(
+				name, narrow
+			)
 		)
+		-- The way out is the last essential in every registry, and the last
+		-- verb elision gives up.
+		local exit_hint
 		for _, hint in ipairs(hints) do
 			if hint.essential then
-				assert_true(
-					narrow:find(hint[1] .. " " .. hint[2], 1, true) ~= nil,
-					("%s dropped the essential key %q when eliding"):format(
-						name, hint[1]
-					)
-				)
+				exit_hint = hint
 			end
-			-- A cramped surface must not end up advertising mainly the key
-			-- you least want fat-fingered.
-			if hint.destructive and vim.fn.strdisplaywidth(narrow) > width then
+		end
+		if exit_hint then
+			assert_true(
+				narrow:find(exit_hint[1] .. " " .. exit_hint[2], 1, true) ~= nil,
+				("%s elided away the way out (%q): %q"):format(
+					name, exit_hint[1], narrow
+				)
+			)
+		end
+
+		for _, hint in ipairs(hints) do
+			-- A cramped surface must not end up advertising the key you least
+			-- want fat-fingered — unless it is also what the panel is FOR,
+			-- which is kept and drawn as destructive instead.
+			if hint.destructive and not hint.essential then
 				assert_true(
 					narrow:find(hint[1] .. " " .. hint[2], 1, true) == nil,
-					("%s kept the destructive key %q on an overflowing footer")
+					("%s kept the destructive key %q on a cramped footer")
 						:format(name, hint[1])
 				)
 			end
@@ -201,9 +206,9 @@ end
 
 -- ── the split bar at the width a split user actually gets ─────────────
 -- The chrome this change exists to unify is read at `ui.split.size`, not at
--- an unlimited width. At that default the bar must fit, must still name the
--- panel's primary verbs, and must not have been reduced to its destructive
--- one plus the exit.
+-- an unlimited width. At that default the bar must fit, must still name what
+-- the panel is FOR and how to leave it, must advertise `?`, and must not have
+-- been reduced to its destructive verb plus the exit.
 
 local default_split_size = require("gitflow.config").defaults().ui.split.size
 local cfg_default_split = vim.tbl_deep_extend("force", vim.deepcopy(cfg), {
@@ -214,18 +219,18 @@ local cfg_default_split = vim.tbl_deep_extend("force", vim.deepcopy(cfg), {
 local DEFAULT_SPLIT_BARS = {
 	{
 		name = "status",
-		keep = { "s/u stage/unstage", "cc commit", "q close" },
+		keep = { "s/u stage/unstage", "q close", "? help" },
 		drop = { "X discard changes" },
 	},
 	{
 		name = "worktree",
-		keep = { "<CR> switch", "a add", "q close" },
+		keep = { "<CR> switch", "a add", "q close", "? help" },
 		drop = { "d/D remove" },
 	},
 	{
 		name = "branch",
 		view = "list",
-		keep = { "<CR> switch", "c create", "q close" },
+		keep = { "<CR> switch", "c create", "q close", "? help" },
 		drop = { "D force delete" },
 	},
 }
@@ -911,7 +916,7 @@ test("a range entry binds every key but advertises one label", function()
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("the footer never drops below one entry", function()
+test("the footer never drops below the ? that reveals the rest", function()
 	local P = panel.new({
 		name = "test_panel_base_narrow",
 		title = "Narrow",
@@ -921,7 +926,7 @@ test("the footer never drops below one entry", function()
 		},
 	})
 	local footer = P:footer(nil, 4)
-	assert_true(footer:find("a ", 1, true) ~= nil, "the first entry always survives")
+	assert_true(footer:find("? help", 1, true) ~= nil, "? always survives")
 	assert_true(
 		footer:find(render.glyphs.ellipsis, 1, true) ~= nil,
 		"an elided footer says so instead of clipping silently"
@@ -969,6 +974,71 @@ test("the split hint bar elides to fit its window", function()
 	end)
 	P:close()
 	assert_true(ok, tostring(err))
+end)
+
+
+-- ── the two tiers, at the widths a real terminal gives ────────────────
+-- `?` is the affordance that reveals every other key, so it is the last one
+-- elision gives up; before this it was the FIRST, absent from most panels at
+-- an ordinary float width. The widths below are the ones that measurement
+-- showed hiding it: 78 is a 100-column terminal at the default float width,
+-- 40 is the e2e split.
+
+test("? survives elision in every panel at every width", function()
+	local missing = {}
+	for _, width in ipairs({ 200, 96, 78, 62, 40 }) do
+		for _, name in ipairs(PANEL_NAMES) do
+			local P = panel_object("gitflow.panels." .. name)
+			local footer = P:footer(nil, width)
+			if #P:hints() > 0 and not footer:find("? help", 1, true) then
+				missing[#missing + 1] = ("%s at %d: %q"):format(name, width, footer)
+			end
+		end
+	end
+	assert_equals(
+		#missing, 0,
+		"panels that elided ? away:\n    " .. table.concat(missing, "\n    ")
+	)
+end)
+
+-- A verb can be the panel's primary one AND irreversible. Before this it
+-- could not: the two tiers were mutually exclusive, so rebase's `X execute`
+-- was tagged destructive and vanished from an ordinary 90-column float.
+test("a primary destructive verb survives at 90 and at 50 columns", function()
+	local rebase = panel_object("gitflow.panels.rebase")
+	for _, width in ipairs({ 90, 50 }) do
+		local footer = rebase:footer("todo", width)
+		assert_true(
+			footer:find("X execute", 1, true) ~= nil,
+			("rebase dropped its primary verb at %d columns: %q"):format(
+				width, footer
+			)
+		)
+		assert_true(
+			vim.fn.strdisplaywidth(footer) <= width,
+			("rebase footer overflows %d columns: %q"):format(width, footer)
+		)
+	end
+
+	-- The surface a user lands in under stress keeps its way out too.
+	local conflict = panel_object("gitflow.panels.conflict")
+	assert_true(
+		conflict:footer(nil, 90):find("X abort", 1, true) ~= nil,
+		"conflict dropped X abort at 90 columns"
+	)
+end)
+
+test("a destructive hint is drawn in the destructive colour", function()
+	local rebase = panel_object("gitflow.panels.rebase")
+	local chunks = render.hint_chunks(rebase:hints("todo"))
+	local marked = false
+	for _, chunk in ipairs(chunks) do
+		if chunk[1] == "X" then
+			assert_equals(chunk[2], "GitflowRemoved", "X execute should read as destructive")
+			marked = true
+		end
+	end
+	assert_true(marked, "the rebase bar should carry X execute")
 end)
 
 print(("=== Results: %d passed, %d failed ==="):format(passed, failed))

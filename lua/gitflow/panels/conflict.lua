@@ -55,9 +55,12 @@ local P = panel.new({
 		{ key = "C", desc = "continue", essential = true, run = function()
 			M.continue_operation()
 		end },
-		{ key = "X", desc = "abort", destructive = true, run = function()
-			M.abort_operation()
-		end },
+		-- The way out of a merge you cannot finish: kept at every width, and
+		-- drawn as the destructive verb it is.
+		{ key = "X", desc = "abort", essential = true, destructive = true,
+			run = function()
+				M.abort_operation()
+			end },
 		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
