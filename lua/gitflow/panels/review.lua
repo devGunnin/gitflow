@@ -893,7 +893,7 @@ local function render_file_list()
 	end
 	-- Header chrome.
 	hl(0, 0, -1, "GitflowTitle")
-	hl(1, 0, -1, "GitflowHeader")
+	hl(1, 0, -1, "GitflowTitle")
 	for line = header_lines, files_header_line - 2 do
 		hl(line, 0, -1, "GitflowReviewHint")
 	end

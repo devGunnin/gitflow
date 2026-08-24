@@ -6,8 +6,20 @@
 local config = require("gitflow.config")
 local highlights = require("gitflow.highlights")
 
-local DARK_ACCENT = tonumber("56B6C2", 16)
-local LIGHT_ACCENT = tonumber("0E7490", 16)
+local DARK_SEPARATOR = tonumber("3E4452", 16)
+local LIGHT_SEPARATOR = tonumber("C8CCD4", 16)
+
+---The accent gitflow should be showing: the colorscheme's Special foreground
+---when it defines one, else the background palette's fallback hex.
+---@param fallback string
+---@return integer|nil
+local function expected_accent(fallback)
+	local attrs = vim.api.nvim_get_hl(0, { name = "Special", link = false })
+	if type(attrs) == "table" and type(attrs.fg) == "number" then
+		return attrs.fg
+	end
+	return tonumber(fallback, 16)
+end
 
 ---@param group string
 ---@return integer|nil
@@ -53,17 +65,27 @@ T.run_suite("config_validation_spec", {
 		with_background("dark", function()
 			highlights.setup({})
 			T.assert_equals(
-				group_fg("GitflowBorder"),
-				DARK_ACCENT,
-				"dark background should use the dark accent"
+				group_fg("GitflowSeparator"),
+				DARK_SEPARATOR,
+				"dark background should use the dark chrome palette"
 			)
-
-			-- OptionSet fires here; without the autocmd the accent stays dark.
-			vim.o.background = "light"
 			T.assert_equals(
 				group_fg("GitflowBorder"),
-				LIGHT_ACCENT,
-				"background=light should recompute to the light accent"
+				expected_accent("56B6C2"),
+				"dark accent should follow the colorscheme's Special"
+			)
+
+			-- OptionSet fires here; without the autocmd the palette stays dark.
+			vim.o.background = "light"
+			T.assert_equals(
+				group_fg("GitflowSeparator"),
+				LIGHT_SEPARATOR,
+				"background=light should recompute to the light chrome palette"
+			)
+			T.assert_equals(
+				group_fg("GitflowBorder"),
+				expected_accent("0E7490"),
+				"light accent should follow the colorscheme's Special"
 			)
 		end)
 	end,

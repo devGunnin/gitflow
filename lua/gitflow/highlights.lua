@@ -30,15 +30,58 @@ M.PALETTE_LIGHT = {
 	diff_line_nr = "#999999",
 }
 
---- Active palette — set by setup() based on vim.o.background.
---- Defaults to dark palette until setup() is called.
+--- Active palette — set by setup() from vim.o.background, with the two accent
+--- tokens derived from the colorscheme where it defines them.
 ---@type table<string, string>
 M.PALETTE = vim.deepcopy(M.PALETTE_DARK)
 
+--- Graph lane colors. Six per background so a light theme does not get a
+--- dark theme's lanes stamped into it.
+---@type string[]
+M.GRAPH_LANES_DARK = {
+	"#98C379", "#E06C75", "#61AFEF", "#C678DD", "#E5C07B", "#7F848E",
+}
+---@type string[]
+M.GRAPH_LANES_LIGHT = {
+	"#50A14F", "#E45649", "#4078F2", "#A626A4", "#986801", "#A0A1A7",
+}
+
+--- The colorscheme groups the two accents are derived from. Everything else in
+--- the palette is chrome (rules, backdrops, hashes), not accent.
+local ACCENT_SOURCES = {
+	accent_primary = "Special",
+	accent_secondary = "Identifier",
+}
+
+---Read a colorscheme group's resolved foreground as a hex string.
+---@param group string
+---@return string|nil
+local function colorscheme_fg(group)
+	local ok, attrs = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+	if not ok or type(attrs) ~= "table" or type(attrs.fg) ~= "number" then
+		return nil
+	end
+	return ("#%06X"):format(attrs.fg)
+end
+
+---Build the active palette: the background's chrome plus accents taken from
+---the colorscheme, falling back to the hardcoded hexes when it defines none.
+---@param background_palette table<string, string>
+---@return table<string, string>
+local function derive_palette(background_palette)
+	local palette = vim.deepcopy(background_palette)
+	for key, source in pairs(ACCENT_SOURCES) do
+		palette[key] = colorscheme_fg(source) or background_palette[key]
+	end
+	return palette
+end
+
 --- Build default highlight groups from the given palette.
 ---@param palette table<string, string>
+---@param lanes string[]  graph lane colors for the active background
 ---@return table<string, table>
-local function build_default_groups(palette)
+local function build_default_groups(palette, lanes)
+	local title_attrs = { fg = palette.accent_primary, bold = true }
 	return {
 		-- Diff / git state
 		GitflowAdded = { link = "DiffAdd" },
@@ -109,8 +152,10 @@ local function build_default_groups(palette)
 		GitflowBlameInline = { link = "Comment" },
 		-- Window chrome — themed accent colors
 		GitflowBorder = { fg = palette.accent_primary },
-		GitflowTitle = { fg = palette.accent_primary, bold = true },
-		GitflowHeader = { fg = palette.accent_primary, bold = true },
+		GitflowTitle = vim.deepcopy(title_attrs),
+		-- Byte-identical alias of GitflowTitle, kept so existing user overrides
+		-- keep working. No gitflow code draws with it.
+		GitflowHeader = vim.deepcopy(title_attrs),
 		GitflowFooter = { fg = palette.accent_primary, italic = true },
 		GitflowSeparator = { fg = palette.separator_fg },
 		GitflowNormal = { link = "NormalFloat" },
@@ -175,12 +220,12 @@ local function build_default_groups(palette)
 		GitflowGraphNode = { fg = palette.accent_secondary, bold = true },
 		GitflowGraphBranch1 = { fg = palette.accent_primary },
 		GitflowGraphBranch2 = { fg = palette.accent_secondary },
-		GitflowGraphBranch3 = { fg = "#98C379" },
-		GitflowGraphBranch4 = { fg = "#E06C75" },
-		GitflowGraphBranch5 = { fg = "#61AFEF" },
-		GitflowGraphBranch6 = { fg = "#C678DD" },
-		GitflowGraphBranch7 = { fg = "#E5C07B" },
-		GitflowGraphBranch8 = { fg = "#7F848E" },
+		GitflowGraphBranch3 = { fg = lanes[1] },
+		GitflowGraphBranch4 = { fg = lanes[2] },
+		GitflowGraphBranch5 = { fg = lanes[3] },
+		GitflowGraphBranch6 = { fg = lanes[4] },
+		GitflowGraphBranch7 = { fg = lanes[5] },
+		GitflowGraphBranch8 = { fg = lanes[6] },
 		-- UI/UX overhaul — cards, chips, sections, hint bars, pickers, forms
 		GitflowNumber = { fg = palette.accent_secondary, bold = true },
 		GitflowMeta = { link = "Comment" },
@@ -226,7 +271,7 @@ local function build_default_groups(palette)
 end
 
 --- Current default groups — rebuilt by setup() for background-aware palettes.
-M.DEFAULT_GROUPS = build_default_groups(M.PALETTE_DARK)
+M.DEFAULT_GROUPS = build_default_groups(M.PALETTE_DARK, M.GRAPH_LANES_DARK)
 
 ---Create or retrieve a dynamic highlight group for a label hex color.
 ---@param hex_color string  6-digit hex (with or without leading #)
@@ -262,10 +307,11 @@ M.state = {
 ---Rebuild the palette from vim.o.background and apply every group.
 ---@param overrides table<string, table>
 local function apply_groups(overrides)
-	local palette = vim.o.background == "light"
-		and M.PALETTE_LIGHT or M.PALETTE_DARK
-	M.PALETTE = vim.deepcopy(palette)
-	M.DEFAULT_GROUPS = build_default_groups(palette)
+	local light = vim.o.background == "light"
+	M.PALETTE = derive_palette(light and M.PALETTE_LIGHT or M.PALETTE_DARK)
+	M.DEFAULT_GROUPS = build_default_groups(
+		M.PALETTE, light and M.GRAPH_LANES_LIGHT or M.GRAPH_LANES_DARK
+	)
 
 	for group, default_attrs in pairs(M.DEFAULT_GROUPS) do
 		local attrs = vim.deepcopy(default_attrs)

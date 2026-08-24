@@ -71,14 +71,53 @@ local DEFAULT = { "\u{f15b}", "#9aa7b0" }
 
 local registered = {}
 
+---Perceived luminance of an 0-255 RGB triple, 0..1.
+---@return number
+local function luminance(r, g, b)
+	return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+end
+
+---Brand colors are chosen for a dark terminal, so on a light background the
+---bright ones wash out against it. Scale luminance toward a readable band,
+---keeping the hue — the alternative is a fixed table that ignores the theme.
+---@param key string  6-digit hex, no leading '#'
+---@return string  6-digit hex, no leading '#'
+local function adapt_to_background(key)
+	local r = tonumber(key:sub(1, 2), 16)
+	local g = tonumber(key:sub(3, 4), 16)
+	local b = tonumber(key:sub(5, 6), 16)
+	if not (r and g and b) then
+		return key
+	end
+
+	local lum = luminance(r, g, b)
+	local scale
+	if vim.o.background == "light" then
+		scale = lum > 0.55 and (0.45 / lum) or nil
+	else
+		scale = lum < 0.30 and (0.40 / math.max(lum, 0.05)) or nil
+	end
+	if not scale then
+		return key
+	end
+
+	local function clamp(v)
+		return math.max(0, math.min(255, math.floor(v * scale + 0.5)))
+	end
+	return ("%02x%02x%02x"):format(clamp(r), clamp(g), clamp(b))
+end
+
 ---Ensure a highlight group exists for a hex color and return its name.
+---The background is part of the group name, so a background flip resolves to a
+---fresh group instead of reusing one computed for the old theme.
 ---@param hex string
 ---@return string
 local function color_group(hex)
 	local key = hex:gsub("#", ""):lower()
-	local group = "GitflowDevicon_" .. key
+	local background = vim.o.background == "light" and "light" or "dark"
+	local group = ("GitflowDevicon_%s_%s"):format(background, key)
 	if not registered[group] then
-		pcall(vim.api.nvim_set_hl, 0, group, { fg = "#" .. key })
+		pcall(vim.api.nvim_set_hl, 0, group, { fg = "#" .. adapt_to_background(key) })
 		registered[group] = true
 	end
 	return group

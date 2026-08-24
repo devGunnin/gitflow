@@ -915,6 +915,19 @@ function M.open(cfg, entries, on_select)
 		footer_pos = cfg.ui.float.footer_pos,
 	})
 
+	-- open_float returns nil when the terminal is too small for the frame.
+	-- Without this the palette would half-open: buffers and keymaps live, no
+	-- window to show them, and the option writes below would land on whatever
+	-- window happens to be current.
+	if not M.state.prompt_winid or not M.state.list_winid then
+		M.close()
+		utils.notify(
+			"Gitflow: terminal too small to open the command palette",
+			vim.log.levels.WARN
+		)
+		return
+	end
+
 	-- Set palette-specific NormalFloat highlight
 	set_palette_winhighlight(M.state.prompt_winid)
 	set_palette_winhighlight(M.state.list_winid)

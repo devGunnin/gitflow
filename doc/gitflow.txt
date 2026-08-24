@@ -120,6 +120,7 @@ ui ~
 
     Option              Type        Default     Description ~
     default_layout      string      "split"     "split" or "float"
+    separator_width     number      0           Rule width; 0 = adapt to window
     split.orientation   string      "vertical"  "vertical" or "horizontal"
     split.size          number      50          Column/row count
     float.width         number      0.8         Fraction or absolute columns
@@ -613,13 +614,18 @@ affordance: `GitflowLoadingText` styles in-progress labels, the
 `GitflowStateError*` family styles in-buffer error blocks, and the
 `GitflowEmpty*` family styles empty-state placeholders and their action hints.
 
+The two accent tokens (`accent_primary`, `accent_secondary`) are taken from
+the colorscheme's `Special` and `Identifier` foregrounds when it defines them,
+so gitflow inherits your theme instead of stamping its own teal into it. The
+hexes below are the fallback used when it does not.
+
 Accent-colored groups (dark-background defaults shown below; light mode uses
 `PALETTE_LIGHT` values from the table above):
 
     Group                       Default Attrs ~
     GitflowBorder               fg=#56B6C2
     GitflowTitle                fg=#56B6C2, bold
-    GitflowHeader               fg=#56B6C2, bold
+    GitflowHeader               fg=#56B6C2, bold  (alias of GitflowTitle)
     GitflowFooter               fg=#56B6C2, italic
     GitflowSeparator            fg=#3E4452
     GitflowFormLabel            fg=#56B6C2, bold

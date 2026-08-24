@@ -78,6 +78,7 @@ require("gitflow").setup({
   },
   ui = {
     default_layout = "split",   -- "split" or "float"
+    separator_width = 0,        -- fixed panel-rule width; 0 adapts to the window
     split = {
       orientation = "vertical", -- "vertical" or "horizontal"
       size = 50,

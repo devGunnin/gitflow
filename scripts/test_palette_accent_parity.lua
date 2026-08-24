@@ -281,10 +281,25 @@ assert_equals(
 	highlights.PALETTE_LIGHT.separator_fg,
 	"GitflowSeparator fg should use light separator after light setup"
 )
+-- The two accents are derived from the colorscheme (Special / Identifier) and
+-- fall back to the background palette's hexes, so assert the contract rather
+-- than a fixed hex.
+local function expected_accent(source, fallback)
+	local attrs = vim.api.nvim_get_hl(0, { name = source, link = false })
+	if type(attrs) == "table" and type(attrs.fg) == "number" then
+		return ("#%06X"):format(attrs.fg)
+	end
+	return fallback
+end
 assert_equals(
 	highlights.PALETTE.accent_primary,
-	highlights.PALETTE_LIGHT.accent_primary,
-	"PALETTE.accent_primary should match light palette after light setup"
+	expected_accent("Special", highlights.PALETTE_LIGHT.accent_primary),
+	"PALETTE.accent_primary should follow the colorscheme's Special in light"
+)
+assert_equals(
+	highlights.PALETTE.accent_secondary,
+	expected_accent("Identifier", highlights.PALETTE_LIGHT.accent_secondary),
+	"PALETTE.accent_secondary should follow the colorscheme's Identifier"
 )
 
 -- Verify actual applied highlight uses light palette
@@ -293,6 +308,13 @@ assert_equals(
 	sep_hl.fg,
 	tonumber(highlights.PALETTE_LIGHT.separator_fg:sub(2), 16),
 	"applied GitflowSeparator fg should use light palette value"
+)
+
+-- Graph lanes flip with the background like every other themed group.
+assert_equals(
+	highlights.DEFAULT_GROUPS.GitflowGraphBranch3.fg,
+	highlights.GRAPH_LANES_LIGHT[1],
+	"graph lane 3 should use the light lane palette in light background"
 )
 
 -- Switch back to dark and verify palette reverts
@@ -308,6 +330,18 @@ assert_equals(
 	highlights.DEFAULT_GROUPS.GitflowSeparator.fg,
 	highlights.PALETTE_DARK.separator_fg,
 	"GitflowSeparator fg should revert to dark separator after dark setup"
+)
+assert_equals(
+	highlights.DEFAULT_GROUPS.GitflowGraphBranch3.fg,
+	highlights.GRAPH_LANES_DARK[1],
+	"graph lane 3 should revert to the dark lane palette"
+)
+
+-- GitflowHeader is a back-compat alias of GitflowTitle: one style, one source.
+assert_equals(
+	vim.inspect(highlights.DEFAULT_GROUPS.GitflowHeader),
+	vim.inspect(highlights.DEFAULT_GROUPS.GitflowTitle),
+	"GitflowHeader should be identical to GitflowTitle"
 )
 
 -- User overrides should still take precedence over palette
