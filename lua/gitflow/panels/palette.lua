@@ -3,6 +3,7 @@ local components = require("gitflow.ui.components")
 local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
+local matcher = require("gitflow.ui.matcher")
 
 ---@class GitflowPaletteEntry
 ---@field name string
@@ -82,46 +83,6 @@ local NUMBERED_ORDER = {
 	"stash",
 }
 
----@param text string
----@return string
-local function normalize(text)
-	return (text or ""):lower()
-end
-
----@param haystack string
----@param needle string
----@return integer|nil
-local function fuzzy_score(haystack, needle)
-	if needle == "" then
-		return 0
-	end
-
-	local search = normalize(haystack)
-	local query = normalize(needle)
-	local offset = 1
-	local score = 0
-	local streak = 0
-
-	for index = 1, #query do
-		local char = query:sub(index, index)
-		local found = search:find(char, offset, true)
-		if not found then
-			return nil
-		end
-
-		if found == offset then
-			streak = streak + 1
-			score = score + 10 + streak
-		else
-			streak = 0
-			score = score + math.max(1, 6 - (found - offset))
-		end
-		offset = found + 1
-	end
-
-	return score
-end
-
 ---@param entry GitflowPaletteEntry
 ---@return string
 local function searchable_text(entry)
@@ -136,7 +97,7 @@ function M.filter_entries(entries, query)
 	local trimmed_query = vim.trim(query or "")
 
 	for _, entry in ipairs(entries or {}) do
-		local score = fuzzy_score(searchable_text(entry), trimmed_query)
+		local score = matcher.fuzzy_score(searchable_text(entry), trimmed_query)
 		if score ~= nil then
 			filtered[#filtered + 1] = {
 				name = entry.name,
