@@ -61,7 +61,7 @@ local utils = require("gitflow.utils")
 local PANEL_NAMES = {
 	"status", "log", "branch", "blame", "stash", "tag", "reflog", "reset",
 	"revert", "cherry_pick", "rebase", "conflict", "worktree", "labels",
-	"notifications", "prs", "issues",
+	"notifications", "diff", "diffview", "prs", "issues",
 }
 
 ---Find the panel object a module built, by walking the upvalues of one of its
@@ -411,6 +411,14 @@ local STALE_GUARD_PANELS = {
 	{ name = "prs", module = "gitflow.gh.prs", fn = "list" },
 	{ name = "issues", module = "gitflow.gh.issues", fn = "list" },
 	{
+		name = "diff",
+		module = "gitflow.git.diff",
+		fn = "get",
+		prepare = function(mod)
+			mod.state.request = {}
+		end,
+	},
+	{
 		name = "blame",
 		module = "gitflow.git.blame",
 		fn = "run",
@@ -440,19 +448,29 @@ local STALE_GUARD_PANELS = {
 	},
 }
 
+--- Panels this harness cannot drive, and where their guard is proven instead.
+--- Never a way to skip a panel quietly: each name here names its coverage.
+local STALE_GUARD_ELSEWHERE = {
+	-- Reads memory synchronously: nothing to supersede.
+	notifications = "no async chain",
+	-- Builds its tabpage from inside the response callback, so it has no
+	-- panel buffer to compare while a request is in flight and its guard is
+	-- the raw generation rather than `is_active`. Driven end to end by
+	-- tests/e2e/diffview_spec.lua ("racing opens leave exactly one tab",
+	-- "a response arriving after close does not open a tab").
+	diffview = "tests/e2e/diffview_spec.lua",
+}
+
 test("every guard-carrying panel has a stale-guard case", function()
 	local covered = {}
 	for _, case in ipairs(STALE_GUARD_PANELS) do
 		covered[case.name] = true
 	end
 	for _, name in ipairs(PANEL_NAMES) do
-		-- notifications reads memory synchronously: nothing to supersede.
-		if name ~= "notifications" then
-			assert_true(
-				covered[name],
-				("%s consults the stale guard but no case drives it"):format(name)
-			)
-		end
+		assert_true(
+			covered[name] or STALE_GUARD_ELSEWHERE[name] ~= nil,
+			("%s consults the stale guard but no case drives it"):format(name)
+		)
 	end
 end)
 

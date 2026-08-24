@@ -12,7 +12,6 @@ local cfg = _G.TestConfig
 
 local gh_prs = require("gitflow.gh.prs")
 local input = require("gitflow.ui.input")
-local utils = require("gitflow.utils")
 local review_panel = require("gitflow.panels.review")
 local cache = require("gitflow.review.cache")
 local inline = require("gitflow.review.inline")
@@ -129,13 +128,13 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			vim.api.nvim_tabpage_is_valid(review_panel.state.tabpage),
 			"a new tabpage should be created")
 		T.assert_true(
-			vim.api.nvim_win_is_valid(review_panel.state.file_list_winid),
+			vim.api.nvim_win_is_valid(review_panel.state.winid),
 			"file list window should exist")
 		T.assert_true(
 			vim.api.nvim_win_is_valid(review_panel.state.diff_winid),
 			"diff window should exist")
 		T.assert_true(
-			vim.api.nvim_buf_is_valid(review_panel.state.file_list_bufnr),
+			vim.api.nvim_buf_is_valid(review_panel.state.bufnr),
 			"file list buffer should exist")
 		T.assert_true(#vim.api.nvim_list_tabpages() > initial_tabs,
 			"opening review mode should add a tabpage")
@@ -151,7 +150,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		local lines = T.buf_lines(bufnr)
 		local combined = table.concat(lines, "\n")
 
@@ -169,7 +168,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		open_review(42)
 		T.drain_jobs(5000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_keymaps(bufnr, {
 			"<CR>", "o", "S", "r", "q", "]f", "[f",
 			"<Tab>", "za", "zM", "zR",
@@ -187,7 +186,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		local combined = table.concat(T.buf_lines(bufnr), "\n")
 
 		-- A directory row is shown (compacted) with a fold arrow + trailing /.
@@ -201,8 +200,8 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_contains(combined, "highlights.lua",
 			"leaf file basename should be shown")
 		T.assert_true(
-			review_panel.state._dir_line_map ~= nil
-				and next(review_panel.state._dir_line_map) ~= nil,
+			review_panel.state.dir_line_map ~= nil
+				and next(review_panel.state.dir_line_map) ~= nil,
 			"a directory line map should be populated for folding")
 
 		cleanup_panels()
@@ -215,7 +214,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 
 		-- Inject a draft so the collapsed folder should advertise it. Anchor
 		-- it to config.lua so the Drafts section (which lists the draft's
@@ -812,15 +811,15 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		review_panel.open_file("lua/gitflow/highlights.lua")
 		T.drain_jobs(1000)
 
-		local lines = T.buf_lines(review_panel.state.file_list_bufnr)
+		local lines = T.buf_lines(review_panel.state.bufnr)
 		local combined = table.concat(lines, "\n")
 		T.assert_contains(combined, "Drafts (2)",
 			"file-list should show a Drafts section with the count")
 		T.assert_contains(combined, "✗1 off-diff",
 			"header should report the off-diff draft count")
 		T.assert_true(
-			review_panel.state._draft_line_map ~= nil
-				and next(review_panel.state._draft_line_map) ~= nil,
+			review_panel.state.draft_line_map ~= nil
+				and next(review_panel.state.draft_line_map) ~= nil,
 			"a draft line map should be populated")
 
 		cleanup_panels()
@@ -1026,6 +1025,84 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["close_with_guard stops promising disk when the last save failed"] = function()
+		open_review(42)
+		T.drain_jobs(5000)
+
+		-- Exactly the state an unwritable data dir leaves behind: drafts in
+		-- memory, nothing of them on disk.
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				body = "Draft",
+				new_line = 13,
+			},
+		}
+		review_panel.state.draft_save_error =
+			"could not open /nope/42.json for writing: Not a directory"
+
+		local confirm_message = nil
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					confirm_message = msg
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(confirm_message ~= nil,
+			"close_with_guard should still prompt")
+		T.assert_false(
+			confirm_message:find("kept on disk", 1, true) ~= nil,
+			"the prompt must not claim drafts are on disk after a failed save")
+		T.assert_contains(confirm_message, "FAILED",
+			"it should say the save failed")
+		T.assert_contains(confirm_message, "Not a directory",
+			"and carry the reason")
+
+		cleanup_panels()
+	end,
+
+	["close_with_guard still warns when the last draft was deleted mid-failure"] = function()
+		open_review(42)
+		T.drain_jobs(5000)
+
+		-- Deleting the last draft while the data dir is unwritable leaves
+		-- nothing in memory and a stale copy on disk that comes back.
+		review_panel.state.pending_comments = {}
+		review_panel.state.draft_save_error =
+			"could not open /nope/42.json for writing: Not a directory"
+
+		local confirm_message = nil
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					confirm_message = msg
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(confirm_message ~= nil,
+			"a failed save must still prompt with no drafts in memory")
+		T.assert_contains(confirm_message, "FAILED",
+			"it should say the save failed")
+		T.assert_contains(confirm_message, "Not a directory",
+			"and carry the reason")
+
+		cleanup_panels()
+	end,
+
 	-- ── Toggle command path ────────────────────────────────────────────
 
 	["toggle on an open review closes it"] = function()
@@ -1143,7 +1220,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		local function file_list_text()
 			return table.concat(
-				T.buf_lines(review_panel.state.file_list_bufnr), "\n")
+				T.buf_lines(review_panel.state.bufnr), "\n")
 		end
 
 		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
@@ -1216,7 +1293,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		-- Abnormal exit: the user closes a review window by hand (:q) instead
 		-- of pressing q in the file list.
-		pcall(vim.api.nvim_win_close, review_panel.state.file_list_winid, true)
+		pcall(vim.api.nvim_win_close, review_panel.state.winid, true)
 		T.wait_until(function()
 			return not review_panel.is_open()
 		end, "review mode should end when its layout is dismantled")
@@ -1469,7 +1546,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		local overview = (vim.g.mapleader or "\\") .. "c"
 		T.assert_keymaps(review_panel.state.active_bufnr,
 			{ "]C", "[C", overview })
-		T.assert_keymaps(review_panel.state.file_list_bufnr,
+		T.assert_keymaps(review_panel.state.bufnr,
 			{ "]C", "[C", overview })
 
 		cleanup_panels()
@@ -1615,16 +1692,16 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		-- Put the cursor on the config.lua *file* row (not the Drafts row).
 		local file_row
-		for line, idx in pairs(review_panel.state._file_line_map or {}) do
+		for line, idx in pairs(review_panel.state.file_line_map or {}) do
 			if review_panel.state.files[idx]
 				and review_panel.state.files[idx].path == "lua/gitflow/config.lua" then
 				file_row = line
 			end
 		end
 		T.assert_true(file_row ~= nil, "config.lua file row should be mapped")
-		vim.api.nvim_set_current_win(review_panel.state.file_list_winid)
+		vim.api.nvim_set_current_win(review_panel.state.winid)
 		vim.api.nvim_win_set_cursor(
-			review_panel.state.file_list_winid, { file_row, 0 })
+			review_panel.state.winid, { file_row, 0 })
 
 		with_temporary_patches({
 			{ table = input, key = "prompt",
@@ -1951,6 +2028,100 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 				"a prose comment must not render as a suggestion")
 			T.assert_true(row.text:find("suggested change", 1, true) == nil,
 				"a prose comment must not claim to be a suggestion")
+		end
+	end,
+
+	-- The slug lookup is a network round-trip, and a review opened from
+	-- another repo inside that window used to join it and be handed the first
+	-- repo's slug — hydrating one repo's unsent drafts into another repo's
+	-- review, submittable onto its PR.
+	["a review opened from another repo restores its own drafts"] = function()
+		local gh = require("gitflow.gh")
+		local real_run = gh.run
+		local SLUG_A, SLUG_B = "owner_repo_a", "owner_repo_b"
+
+		local function seed(pr_number, slug, body)
+			cache.save(pr_number, {
+				pr_number = pr_number,
+				comments = { {
+					id = 1,
+					path = "lua/gitflow/highlights.lua",
+					body = body,
+					new_line = 13,
+					created_at = "2026-01-01T00:00:00Z",
+				} },
+			}, slug)
+		end
+
+		-- Both repos have unsent drafts on PR 22; only repo B's belong in the
+		-- review opened from repo B.
+		cache.invalidate_repo_slug()
+		seed(22, SLUG_A, "repo A draft")
+		seed(22, SLUG_B, "repo B draft")
+
+		local original_cwd = vim.fn.getcwd()
+		local repo_b = vim.fn.tempname()
+		vim.fn.mkdir(repo_b, "p")
+
+		local held = {}
+		local ok, err = pcall(function()
+			with_temporary_patches({
+				{
+					table = gh,
+					key = "run",
+					value = function(args, opts, cb)
+						if args[1] == "repo" and args[2] == "view" then
+							held[#held + 1] = { cwd = vim.fn.getcwd(), cb = cb }
+							return
+						end
+						return real_run(args, opts, cb)
+					end,
+				},
+			}, function()
+				review_panel.open(cfg, 11)
+				T.drain_jobs(200)
+				vim.cmd.cd(repo_b)
+				review_panel.open(cfg, 22)
+				T.drain_jobs(200)
+
+				-- Answer each lookup with the repo it was actually launched
+				-- from. A shared lookup has only the first, and hands the
+				-- second review repo A's answer.
+				local slugs = { "owner/repo_a\n", "owner/repo_b\n" }
+				for index, lookup in ipairs(held) do
+					lookup.cb({ code = 0, stdout = slugs[index], stderr = "" })
+				end
+				T.drain_jobs(2000)
+			end)
+
+			T.assert_equals(review_panel.state.pr_number, 22,
+				"the second review is the open one")
+			local bodies = {}
+			for _, pc in ipairs(review_panel.state.pending_comments) do
+				bodies[#bodies + 1] = pc.body
+			end
+			T.assert_equals(table.concat(bodies, ", "), "repo B draft",
+				"it must restore its own repo's unsent comments, not another repo's")
+			T.assert_equals(review_panel.state.repo_slug, SLUG_B,
+				"and be named by its own repo")
+			T.assert_equals(#held, 2,
+				"each repo's slug needs its own lookup, not a shared one")
+			T.assert_true(held[1].cwd ~= held[2].cwd,
+				"and the two came from different working dirs")
+		end)
+
+		vim.cmd.cd(original_cwd)
+		pcall(vim.fn.delete, repo_b, "rf")
+		cache.clear(22, SLUG_A)
+		cache.clear(22, SLUG_B)
+		for _, slug in ipairs({ SLUG_A, SLUG_B }) do
+			pcall(vim.fn.delete,
+				("%s/gitflow/review/%s"):format(vim.fn.stdpath("data"), slug), "d")
+		end
+		cache.invalidate_repo_slug()
+		cleanup_panels()
+		if not ok then
+			error(err, 0)
 		end
 	end,
 
