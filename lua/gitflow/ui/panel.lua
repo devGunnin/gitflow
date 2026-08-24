@@ -191,7 +191,15 @@ function M.new(spec)
 		state = state,
 	}, Panel)
 
-	instance.keymaps[#instance.keymaps + 1] = help_entry(instance)
+	local declares_help = false
+	for _, entry in ipairs(instance.keymaps) do
+		if entry.key == "?" then
+			declares_help = true
+		end
+	end
+	if not declares_help then
+		instance.keymaps[#instance.keymaps + 1] = help_entry(instance)
+	end
 	M.register_surface({
 		name = instance.name,
 		title = instance.title,

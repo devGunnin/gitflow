@@ -21,6 +21,14 @@ local state = rstate.state
 --- close, so setup and teardown can never drift (#366).
 local DIFF_KEYMAPS = keymaps.for_surface("diff")
 
+-- The diff pane is a key surface in its own right (the file list is a Panel
+-- and registers itself), so `?` and the cross-panel collision spec can see it.
+panel.register_surface({
+	name = "review_diff",
+	title = "Gitflow Review — diff pane",
+	keymaps = DIFF_KEYMAPS,
+})
+
 --- Guards the recursive BufWinEnter fired by open_file's own `:edit`.
 local applying = false
 

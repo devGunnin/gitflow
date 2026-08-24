@@ -5,6 +5,8 @@ local gh_actions = require("gitflow.gh.actions")
 local git_branch = require("gitflow.git.branch")
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
+local help = require("gitflow.ui.help")
 local icons = require("gitflow.icons")
 
 ---@class GitflowActionsFilters
@@ -78,35 +80,6 @@ local MAX_LOG_LINES = 20000
 -- forever.
 local WATCH_MAX_ERRORS = 3
 
--- Buffer-local hint pairs, one set per view. Keep the *_FOOTER strings below
--- in sync by hand — same convention as tag.lua's float footer.
-local LIST_HINTS = {
-	{ "<CR>", "detail" }, { "l", "log" }, { "f", "filter" }, { "b", "branch" },
-	{ "L", "more" }, { "W", "workflows" }, { "R", "rerun" }, { "F", "failed" },
-	{ "C", "cancel" }, { "o", "open" }, { "r", "refresh" }, { "q", "close" },
-}
-local DETAIL_HINTS = {
-	{ "<BS>", "back" }, { "l", "log" }, { "R", "rerun" }, { "F", "failed" },
-	{ "J", "job" }, { "C", "cancel" }, { "w", "watch" }, { "o", "open" },
-	{ "r", "refresh" }, { "q", "close" },
-}
-local LOG_HINTS = {
-	{ "<BS>", "back" }, { "]e", "jump error" }, { "r", "refresh" }, { "q", "close" },
-}
-local WORKFLOWS_HINTS = {
-	{ "<CR>", "dispatch" }, { "<BS>", "back" }, { "r", "refresh" }, { "q", "close" },
-}
-
-local ACTIONS_LIST_FOOTER =
-	" <CR> detail · l log · f filter · b branch · L more · W workflows"
-	.. " · R rerun · F failed · C cancel · o open · r refresh · q close "
-local ACTIONS_DETAIL_FOOTER =
-	" <BS> back · l log · R rerun · F failed · J job · C cancel"
-	.. " · w watch · o open · r refresh · q close "
-local ACTIONS_LOG_FOOTER = " <BS> back · ]e jump error · r refresh · q close "
-local ACTIONS_WORKFLOWS_FOOTER =
-	" <CR> dispatch · <BS> back · r refresh · q close "
-
 ---@return GitflowActionsFilters
 local function default_filters()
 	return {
@@ -160,16 +133,133 @@ local function list_cache_key()
 	}, "\0")
 end
 
+local ALL_VIEWS = { "list", "detail", "log", "workflows" }
+local LIST_DETAIL = { "list", "detail" }
+
+local function noop() end
+
+-- Buffer-local maps, declared per view. A *motion* key a view does not use
+-- is left UNMAPPED there, so vim's own motion keeps working — the log view
+-- is a plain text buffer where l/w/b/L must move the cursor, and a panel
+-- action there would only warn that it does not apply. R/C/J/o are not
+-- motions: unmapped, they reach vim's Replace/Change/Join/open-line and
+-- raise E21 against the nomodifiable buffer, so every view maps them to a
+-- no-op instead.
+--
+-- This list is the panel's only key registry: the hint bar, the float footer
+-- and the `?` overlay are all generated from it. Entries without a `desc`
+-- are bound but never advertised. Order is reading order for the hints.
+---@type GitflowPanelKeymap[]
+local KEYMAPS = {
+	{ key = "<CR>", desc = "detail", essential = true, views = { "list" },
+		run = function() M.open_detail_under_cursor() end },
+	{ key = "<CR>", desc = "dispatch", essential = true, views = { "workflows" },
+		run = function() M.dispatch_under_cursor() end },
+	-- Bound in the detail view too, but the hint bar there leads with `<BS>`.
+	{ key = "<CR>", views = { "detail" },
+		run = function() M.open_detail_under_cursor() end },
+	{ key = "<BS>", desc = "back", essential = true,
+		views = { "detail", "log", "workflows" },
+		run = function() M.back() end },
+	{ key = "l", desc = "log", views = LIST_DETAIL,
+		run = function() M.view_log_under_cursor() end },
+	{ key = "f", desc = "filter", views = { "list" },
+		run = function() M.open_filter_menu() end },
+	{ key = "b", desc = "branch", views = { "list" },
+		run = function() M.toggle_branch_scope() end },
+	{ key = "L", desc = "more", views = { "list" },
+		run = function() M.load_more() end },
+	{ key = "W", desc = "workflows", views = { "list" },
+		run = function() M.open_workflows() end },
+	{ key = "R", desc = "rerun", views = LIST_DETAIL,
+		run = function() M.rerun_under_cursor() end },
+	{ key = "R", views = { "log", "workflows" }, run = noop },
+	{ key = "F", desc = "failed", views = LIST_DETAIL,
+		run = function() M.rerun_failed_under_cursor() end },
+	{ key = "J", desc = "job", views = { "detail" },
+		run = function() M.rerun_job_under_cursor() end },
+	{ key = "J", views = { "list", "log", "workflows" }, run = noop },
+	{ key = "C", desc = "cancel", views = LIST_DETAIL,
+		run = function() M.cancel_under_cursor() end },
+	{ key = "C", views = { "log", "workflows" }, run = noop },
+	{ key = "w", desc = "watch", views = { "detail" },
+		run = function() M.toggle_watch() end },
+	-- Not `E`: the log view must not shadow a motion.
+	{ key = "]e", desc = "jump error", views = { "log" },
+		run = function() M.jump_to_first_error() end },
+	{ key = "o", desc = "open", views = LIST_DETAIL,
+		run = function() M.open_in_browser() end },
+	{ key = "o", views = { "log", "workflows" }, run = noop },
+	{ key = "r", desc = "refresh", views = ALL_VIEWS,
+		run = function() M.refresh() end },
+	{ key = "q", desc = "close", essential = true, views = ALL_VIEWS,
+		run = function() M.close() end },
+	{ key = "?", desc = "help", views = ALL_VIEWS,
+		run = function() M.open_help() end },
+}
+
+panel.register_surface({
+	name = "actions",
+	title = "Gitflow Actions",
+	keymaps = KEYMAPS,
+})
+
+---@param entry GitflowPanelKeymap
+---@param view string
+---@return boolean
+local function in_view(entry, view)
+	for _, candidate in ipairs(entry.views) do
+		if candidate == view then
+			return true
+		end
+	end
+	return false
+end
+
+---The advertised `{ key, desc }` pairs for a view, in declaration order.
+---@param view string
+---@return table[]
+local function hints_for(view)
+	local out = {}
+	for _, entry in ipairs(KEYMAPS) do
+		if entry.desc and in_view(entry, view) then
+			out[#out + 1] = { entry.key, entry.desc }
+		end
+	end
+	return out
+end
+
+---@param view string
+---@return string
+local function footer_for(view)
+	local parts = {}
+	for _, hint in ipairs(hints_for(view)) do
+		parts[#parts + 1] = hint[1] .. " " .. hint[2]
+	end
+	return " " .. table.concat(parts, " " .. ui_render.glyphs.bullet .. " ") .. " "
+end
+
+---The `?` overlay: every view's keys, so the panel documents all of itself
+---rather than only where the user happens to be standing.
+function M.open_help()
+	local sections = {}
+	for _, view in ipairs(ALL_VIEWS) do
+		local rows = {}
+		for _, hint in ipairs(hints_for(view)) do
+			rows[#rows + 1] = { key = hint[1], desc = hint[2] }
+		end
+		sections[#sections + 1] = { label = view, rows = rows }
+	end
+	help.open(M.state.cfg or require("gitflow.config").get(), {
+		title = "Gitflow Actions",
+		sections = sections,
+		note = "Remap these: panel_keybindings.actions",
+	})
+end
+
 ---@return string
 local function current_footer()
-	if M.state.view == "detail" then
-		return ACTIONS_DETAIL_FOOTER
-	elseif M.state.view == "log" then
-		return ACTIONS_LOG_FOOTER
-	elseif M.state.view == "workflows" then
-		return ACTIONS_WORKFLOWS_FOOTER
-	end
-	return ACTIONS_LIST_FOOTER
+	return footer_for(M.state.view)
 end
 
 local function update_float_footer()
@@ -263,43 +353,6 @@ local function stop_watch()
 	watch.errors = 0
 end
 
-local ALL_VIEWS = { list = true, detail = true, log = true, workflows = true }
-local LIST_DETAIL = { list = true, detail = true }
-
-local function noop() end
-
--- Buffer-local maps, declared per view. A *motion* key a view does not use
--- is left UNMAPPED there, so vim's own motion keeps working — the log view
--- is a plain text buffer where l/w/b/L must move the cursor, and a panel
--- action there would only warn that it does not apply. R/C/J/o are not
--- motions: unmapped, they reach vim's Replace/Change/Join/open-line and
--- raise E21 against the nomodifiable buffer, so every view maps them to a
--- no-op instead.
-local KEYMAPS = {
-	{ key = "<CR>", views = LIST_DETAIL, run = function() M.open_detail_under_cursor() end },
-	{ key = "<CR>", views = { workflows = true }, run = function() M.dispatch_under_cursor() end },
-	{ key = "<BS>", views = { detail = true, log = true, workflows = true }, run = function() M.back() end },
-	{ key = "o", views = LIST_DETAIL, run = function() M.open_in_browser() end },
-	{ key = "o", views = { log = true, workflows = true }, run = noop },
-	{ key = "r", views = ALL_VIEWS, run = function() M.refresh() end },
-	{ key = "q", views = ALL_VIEWS, run = function() M.close() end },
-	{ key = "l", views = LIST_DETAIL, run = function() M.view_log_under_cursor() end },
-	{ key = "f", views = { list = true }, run = function() M.open_filter_menu() end },
-	{ key = "b", views = { list = true }, run = function() M.toggle_branch_scope() end },
-	{ key = "L", views = { list = true }, run = function() M.load_more() end },
-	{ key = "W", views = { list = true }, run = function() M.open_workflows() end },
-	{ key = "R", views = LIST_DETAIL, run = function() M.rerun_under_cursor() end },
-	{ key = "R", views = { log = true, workflows = true }, run = noop },
-	{ key = "F", views = LIST_DETAIL, run = function() M.rerun_failed_under_cursor() end },
-	{ key = "J", views = { detail = true }, run = function() M.rerun_job_under_cursor() end },
-	{ key = "J", views = { list = true, log = true, workflows = true }, run = noop },
-	{ key = "C", views = LIST_DETAIL, run = function() M.cancel_under_cursor() end },
-	{ key = "C", views = { log = true, workflows = true }, run = noop },
-	{ key = "w", views = { detail = true }, run = function() M.toggle_watch() end },
-	-- Not `E`: the log view must not shadow a motion.
-	{ key = "]e", views = { log = true }, run = function() M.jump_to_first_error() end },
-}
-
 ---Re-map the panel buffer for the current view: drop every panel key, then
 ---set back only the ones this view uses.
 local function apply_view_keymaps()
@@ -311,7 +364,7 @@ local function apply_view_keymaps()
 		pcall(vim.keymap.del, "n", entry.key, { buffer = bufnr })
 	end
 	for _, entry in ipairs(KEYMAPS) do
-		if entry.views[M.state.view] then
+		if in_view(entry, M.state.view) then
 			vim.keymap.set("n", entry.key, entry.run, {
 				buffer = bufnr, silent = true, nowait = true,
 			})
@@ -528,7 +581,7 @@ local function render_list(runs, current_branch, cache_scope_key)
 		B:blank()
 	end
 
-	components.split_hint_bar(B, render_opts, LIST_HINTS)
+	components.split_hint_bar(B, render_opts, hints_for("list"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	list_cache.key = cache_scope_key or list_cache_key()
@@ -651,7 +704,7 @@ local function render_detail(run)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, DETAIL_HINTS)
+	components.split_hint_bar(B, render_opts, hints_for("detail"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.detail_line_entries = job_line_entries
@@ -705,7 +758,7 @@ local function render_log()
 		M.state.log.content_start = content_start
 	end
 
-	components.split_hint_bar(B, render_opts, LOG_HINTS)
+	components.split_hint_bar(B, render_opts, hints_for("log"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
@@ -745,7 +798,7 @@ local function render_workflows(workflows)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, WORKFLOWS_HINTS)
+	components.split_hint_bar(B, render_opts, hints_for("workflows"))
 	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.workflows = workflows
@@ -893,7 +946,7 @@ local function fetch_workflows()
 		if err then
 			render_error(
 				"Gitflow Actions — Workflows",
-				"Failed to load workflows", err, WORKFLOWS_HINTS
+				"Failed to load workflows", err, hints_for("workflows")
 			)
 			return
 		end
@@ -982,7 +1035,7 @@ function M.refresh()
 				utils.notify(err, vim.log.levels.ERROR)
 				render_error(
 					"Gitflow Actions",
-					"Failed to load run detail", err, DETAIL_HINTS
+					"Failed to load run detail", err, hints_for("detail")
 				)
 				return
 			end
@@ -1036,7 +1089,7 @@ function M.refresh()
 					utils.notify(err, vim.log.levels.ERROR)
 					render_error(
 						"Gitflow Actions",
-						"Failed to load workflow runs", err, LIST_HINTS
+						"Failed to load workflow runs", err, hints_for("list")
 					)
 					return
 				end
@@ -1072,7 +1125,7 @@ function M.open_detail_under_cursor()
 			utils.notify(err, vim.log.levels.ERROR)
 			render_error(
 				"Gitflow Actions",
-				"Failed to load run detail", err, DETAIL_HINTS
+				"Failed to load run detail", err, hints_for("detail")
 			)
 			return
 		end
