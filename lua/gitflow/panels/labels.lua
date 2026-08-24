@@ -12,6 +12,7 @@ local icons = require("gitflow.icons")
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
 ---@field cache table[]|nil  raw labels from the last successful fetch
+---@field cache_key string|nil  scope the cache was filled under
 ---@field page integer  1-based page into `cache`
 ---@field line_entries table<integer, table>
 
@@ -26,9 +27,30 @@ local PAGE_SIZE = 30
 M.state = {
 	cfg = nil,
 	cache = nil,
+	cache_key = nil,
 	page = 1,
 	line_entries = {},
 }
+
+---Scope the cache is only valid under: `gh` resolves the repo from the cwd.
+---@return string
+local function cache_key()
+	return vim.fn.getcwd()
+end
+
+---The cache, but only when it was filled under the current scope. Unkeyed it
+---painted another repo's labels as `d`-deletable rows, so a mismatch drops it.
+---@return table[]|nil
+local function scoped_cache()
+	if not M.state.cache then
+		return nil
+	end
+	if M.state.cache_key ~= cache_key() then
+		M.state.cache, M.state.cache_key = nil, nil
+		return nil
+	end
+	return M.state.cache
+end
 
 local P = panel.new({
 	name = "labels",
@@ -40,13 +62,15 @@ local P = panel.new({
 		{ key = "c", desc = "create", essential = true, run = function()
 			M.create_interactive()
 		end },
-		{ key = "d", desc = "delete", run = function()
+		{ key = "d", desc = "delete", destructive = true, run = function()
 			M.delete_under_cursor()
 		end },
-		{ key = "n", desc = "next page", run = function()
+		-- Not n/p: n is vim's search-next in a buffer users search with `/`.
+		-- Tiered below the core verbs so a narrow bar elides pages, not delete.
+		{ key = "<C-n>", desc = "next page", run = function()
 			M.next_page()
 		end },
-		{ key = "p", desc = "prev page", run = function()
+		{ key = "<C-p>", desc = "prev page", run = function()
 			M.prev_page()
 		end },
 		{ key = "r", desc = "refresh", run = function()
@@ -89,6 +113,12 @@ local function render_list(labels)
 		{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
 		{ ("%d label%s"):format(#labels, #labels == 1 and "" or "s"), "GitflowSectionTitle" },
 	}
+	if #labels >= FETCH_LIMIT then
+		-- `gh label list` has no cursor pagination: say the count is a cap,
+		-- never report a truncated fetch as the repo's total.
+		summary[#summary + 1] = { components.separators.field .. "capped at ", "GitflowMetaKey" }
+		summary[#summary + 1] = { tostring(FETCH_LIMIT), "GitflowMeta" }
+	end
 	if total_pages > 1 then
 		summary[#summary + 1] = { components.separators.field .. "page ", "GitflowMetaKey" }
 		summary[#summary + 1] = { ("%d/%d"):format(page, total_pages), "GitflowMeta" }
@@ -144,6 +174,9 @@ local function render_list(labels)
 
 	if P:paint(B) then
 		M.state.line_entries = line_entries
+	else
+		-- A failed paint must not leave the previous rows resolvable.
+		P:clear_entry_maps()
 	end
 end
 
@@ -165,8 +198,9 @@ function M.open(cfg)
 		return
 	end
 	-- Instant paint from what we already have (if any), then reconcile below.
-	if M.state.cache then
-		render_list(M.state.cache)
+	local cached = scoped_cache()
+	if cached then
+		render_list(cached)
 	end
 	M.refresh()
 end
@@ -177,7 +211,10 @@ function M.refresh()
 	end
 
 	local request_id = P:next_request()
-	if not M.state.cache then
+	-- The scope this fetch is issued under: a cwd change while it is in flight
+	-- must not stamp its rows as belonging to the new repo.
+	local requested_key = cache_key()
+	if not scoped_cache() then
 		P:render_loading("Loading labels…")
 	end
 	gh_labels.list({ limit = FETCH_LIMIT }, {}, function(err, labels)
@@ -186,15 +223,18 @@ function M.refresh()
 		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
-			if not M.state.cache then
-				P:render_error("Failed to load labels", {
-					detail = err,
-					hint = "r retries",
-				})
-			end
+			-- Drop the cache and paint the failure even when rows are on
+			-- screen: stale rows left actionable resolve `d` against a fetch
+			-- that failed.
+			M.state.cache, M.state.cache_key = nil, nil
+			P:render_error("Failed to load labels", {
+				detail = err,
+				hint = "r retries",
+			})
 			return
 		end
 		M.state.cache = labels or {}
+		M.state.cache_key = requested_key
 		M.state.page = 1
 		render_list(M.state.cache)
 	end)
@@ -202,26 +242,28 @@ end
 
 ---Advance to the next page of the cached list.
 function M.next_page()
-	if not M.state.cache then
+	local cached = scoped_cache()
+	if not cached then
 		return
 	end
-	local _, _, total_pages = paginate(M.state.cache, M.state.page)
+	local _, _, total_pages = paginate(cached, M.state.page)
 	if M.state.page >= total_pages then
 		utils.notify("No more labels", vim.log.levels.WARN)
 		return
 	end
 	M.state.page = M.state.page + 1
-	render_list(M.state.cache)
+	render_list(cached)
 end
 
 ---Return to the previous page of the cached list.
 function M.prev_page()
-	if not M.state.cache or M.state.page <= 1 then
+	local cached = scoped_cache()
+	if not cached or M.state.page <= 1 then
 		utils.notify("Already on the first page", vim.log.levels.WARN)
 		return
 	end
 	M.state.page = M.state.page - 1
-	render_list(M.state.cache)
+	render_list(cached)
 end
 
 function M.create_interactive()

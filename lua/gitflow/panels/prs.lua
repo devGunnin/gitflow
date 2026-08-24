@@ -20,6 +20,7 @@ local icons = require("gitflow.icons")
 ---@field cfg GitflowConfig|nil
 ---@field filters table
 ---@field cache table[]|nil  raw PRs from the last successful fetch
+---@field cache_key string|nil  scope the cache was filled under
 ---@field page integer  1-based page into `cache`, list mode only
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
@@ -37,6 +38,7 @@ M.state = {
 	cfg = nil,
 	filters = {},
 	cache = nil,
+	cache_key = nil,
 	page = 1,
 	line_entries = {},
 	mode = "list",
@@ -46,6 +48,34 @@ M.state = {
 -- Forward-declared: the "b" (back) keymap below closes over it before its
 -- definition later in the file.
 local render_list
+
+---Scope the cache is only valid under: `gh` resolves the repo from the cwd,
+---and the filters decide what the rows mean.
+---@return string
+local function cache_key()
+	local filters = M.state.filters
+	return table.concat({
+		vim.fn.getcwd(),
+		filters.state or "",
+		filters.base or "",
+		filters.head or "",
+		tostring(filters.limit or ""),
+	}, "\0")
+end
+
+---The cache, but only when it was filled under the current scope. Unkeyed it
+---painted another repo's PRs as actionable rows, so a mismatch drops it.
+---@return table[]|nil
+local function scoped_cache()
+	if not M.state.cache then
+		return nil
+	end
+	if M.state.cache_key ~= cache_key() then
+		M.state.cache, M.state.cache_key = nil, nil
+		return nil
+	end
+	return M.state.cache
+end
 
 local P = panel.new({
 	name = "prs",
@@ -60,12 +90,6 @@ local P = panel.new({
 			end },
 		{ key = "c", desc = "create", views = { "list" }, run = function()
 			M.create_interactive()
-		end },
-		{ key = "n", desc = "next page", views = { "list" }, run = function()
-			M.next_page()
-		end },
-		{ key = "p", desc = "prev page", views = { "list" }, run = function()
-			M.prev_page()
 		end },
 		{ key = "C", desc = "comment", hint = false, run = function()
 			M.comment_under_cursor()
@@ -85,8 +109,16 @@ local P = panel.new({
 		{ key = "A", desc = "assign", run = function()
 			M.edit_assignees_under_cursor()
 		end },
-		{ key = "x", desc = "close PR", run = function()
+		{ key = "x", desc = "close PR", destructive = true, run = function()
 			M.close_pr_under_cursor()
+		end },
+		-- Not n/p: n is vim's search-next in a buffer users search with `/`.
+		-- Tiered below the core verbs so a narrow bar elides pages, not merge.
+		{ key = "<C-n>", desc = "next page", views = { "list" }, run = function()
+			M.next_page()
+		end },
+		{ key = "<C-p>", desc = "prev page", views = { "list" }, run = function()
+			M.prev_page()
 		end },
 		{ key = "r", desc = "refresh", run = function()
 			if M.state.mode == "view" and M.state.active_pr_number then
@@ -100,10 +132,15 @@ local P = panel.new({
 				if M.state.mode ~= "view" then
 					return
 				end
+				-- Leave view mode before the fetch: if the list load fails,
+				-- `r` must retry the list, not reopen the detail.
+				M.state.mode = "list"
+				M.state.active_pr_number = nil
 				-- Instant paint from cache (if any), then reconcile in the
 				-- background — same cached-first-paint contract as M.open.
-				if M.state.cache then
-					render_list(M.state.cache)
+				local cached = scoped_cache()
+				if cached then
+					render_list(cached)
 				end
 				M.refresh()
 			end },
@@ -308,6 +345,9 @@ render_list = function(prs)
 	M.state.active_pr_number = nil
 	if P:paint(B) then
 		M.state.line_entries = line_entries
+	else
+		-- Never leave the new mode paired with the old map.
+		P:clear_entry_maps()
 	end
 	P:refresh_footer("list")
 
@@ -448,7 +488,8 @@ local function render_view(pr, review_comments)
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
 	P:paint(B)
-	M.state.line_entries = {}
+	-- No rows in the detail view: drop whatever the list left behind.
+	P:clear_entry_maps()
 	P:refresh_footer("view")
 	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
@@ -482,8 +523,9 @@ function M.open(cfg, filters)
 		return
 	end
 	-- Instant paint from what we already have (if any), then reconcile below.
-	if M.state.cache then
-		render_list(M.state.cache)
+	local cached = scoped_cache()
+	if cached then
+		render_list(cached)
 	end
 	M.refresh()
 end
@@ -494,7 +536,10 @@ function M.refresh()
 	end
 
 	local request_id = P:next_request()
-	if not M.state.cache then
+	-- The scope this fetch is issued under: a cwd or filter change while it is
+	-- in flight must not stamp its rows as belonging to the new scope.
+	local requested_key = cache_key()
+	if not scoped_cache() then
 		P:render_loading("Loading pull requests…")
 	end
 	gh_prs.list(M.state.filters, {}, function(err, prs)
@@ -503,16 +548,19 @@ function M.refresh()
 		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
-			if not M.state.cache then
-				P:render_error("Failed to load pull requests", {
-					detail = err,
-					hint = "r retries",
-					view = "list",
-				})
-			end
+			-- Drop the cache and paint the failure even when rows are on
+			-- screen: stale rows left actionable resolve verbs against a
+			-- fetch that failed.
+			M.state.cache, M.state.cache_key = nil, nil
+			P:render_error("Failed to load pull requests", {
+				detail = err,
+				hint = "r retries",
+				view = "list",
+			})
 			return
 		end
 		M.state.cache = prs or {}
+		M.state.cache_key = requested_key
 		M.state.page = 1
 		render_list(M.state.cache)
 	end)
@@ -566,21 +614,23 @@ end
 
 ---Advance to the next page of the cached list. List mode only.
 function M.next_page()
-	if M.state.mode ~= "list" or not M.state.cache then
+	local cached = M.state.mode == "list" and scoped_cache() or nil
+	if not cached then
 		return
 	end
-	local _, _, total_pages = paginate(M.state.cache, M.state.page)
+	local _, _, total_pages = paginate(cached, M.state.page)
 	if M.state.page >= total_pages then
 		utils.notify("No more pull requests", vim.log.levels.WARN)
 		return
 	end
 	M.state.page = M.state.page + 1
-	render_list(M.state.cache)
+	render_list(cached)
 end
 
 ---Return to the previous page of the cached list. List mode only.
 function M.prev_page()
-	if M.state.mode ~= "list" or not M.state.cache then
+	local cached = M.state.mode == "list" and scoped_cache() or nil
+	if not cached then
 		return
 	end
 	if M.state.page <= 1 then
@@ -588,7 +638,7 @@ function M.prev_page()
 		return
 	end
 	M.state.page = M.state.page - 1
-	render_list(M.state.cache)
+	render_list(cached)
 end
 
 local function parse_csv_input(value)

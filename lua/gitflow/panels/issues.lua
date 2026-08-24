@@ -20,6 +20,7 @@ local icons = require("gitflow.icons")
 ---@field cfg GitflowConfig|nil
 ---@field fetch table  server-side query for the cached fetch
 ---@field cache table[]|nil  raw issues from the last fetch
+---@field cache_key string|nil  scope the cache was filled under
 ---@field filters table  client-side predicate applied to the cache
 ---@field sort table  { key, direction }, kept across refreshes in a session
 ---@field group_by "none"|"milestone"|"assignee"|"label"
@@ -39,6 +40,7 @@ M.state = {
 	cfg = nil,
 	fetch = { state = "all", limit = DEFAULT_FETCH_LIMIT },
 	cache = nil,
+	cache_key = nil,
 	filters = {},
 	sort = { key = "updated", direction = "desc" },
 	group_by = "none",
@@ -52,6 +54,35 @@ M.state = {
 -- Forward-declared: the "b" (back) keymap below closes over it before its
 -- definition later in the file.
 local render_derived
+
+---Scope the cache is only valid under: `gh` resolves the repo from the cwd,
+---and the server-side query decides which issues it holds. (The client-side
+---filters re-derive from the same cache, so they are not part of the key.)
+---@return string
+local function cache_key()
+	local fetch = M.state.fetch or {}
+	return table.concat({
+		vim.fn.getcwd(),
+		fetch.state or "",
+		tostring(fetch.limit or ""),
+		fetch.search or "",
+		fetch.assignee or "",
+	}, "\0")
+end
+
+---The cache, but only when it was filled under the current scope. Unkeyed it
+---painted another repo's issues as actionable rows, so a mismatch drops it.
+---@return table[]|nil
+local function scoped_cache()
+	if not M.state.cache then
+		return nil
+	end
+	if M.state.cache_key ~= cache_key() then
+		M.state.cache, M.state.cache_key = nil, nil
+		return nil
+	end
+	return M.state.cache
+end
 
 local P = panel.new({
 	name = "issues",
@@ -74,7 +105,7 @@ local P = panel.new({
 		{ key = "E", desc = "edit", run = function()
 			M.edit_under_cursor()
 		end },
-		{ key = "x", desc = "close", run = function()
+		{ key = "x", desc = "close", destructive = true, run = function()
 			M.close_under_cursor()
 		end },
 		{ key = "L", desc = "labels", run = function()
@@ -127,9 +158,13 @@ local P = panel.new({
 			if M.state.mode ~= "view" then
 				return
 			end
+			-- Leave view mode before the fetch: if the list load fails, `r`
+			-- must retry the list, not reopen the detail.
+			M.state.mode = "list"
+			M.state.active_issue_number = nil
 			-- Instant paint from cache (if any), then reconcile in the
 			-- background — same cached-first-paint contract as M.open.
-			if M.state.cache then
+			if scoped_cache() then
 				render_derived()
 			end
 			M.refresh()
@@ -352,6 +387,9 @@ local function render_list(groups, total)
 	if P:paint(B) then
 		M.state.line_entries = line_entries
 		M.state.line_groups = line_groups
+	else
+		-- Never leave the new mode paired with the old maps.
+		P:clear_entry_maps()
 	end
 	P:refresh_footer("list")
 
@@ -434,8 +472,8 @@ local function render_view(issue)
 	M.state.mode = "view"
 	M.state.active_issue_number = tonumber(issue.number)
 	P:paint(B)
-	M.state.line_entries = {}
-	M.state.line_groups = {}
+	-- No rows in the detail view: drop whatever the list left behind.
+	P:clear_entry_maps()
 	P:refresh_footer("view")
 	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
@@ -455,7 +493,7 @@ end
 
 ---Run the full derivation — filter, sort, group — and render it.
 render_derived = function()
-	local issues = derive.apply(M.state.cache or {}, M.state.filters, M.state.sort)
+	local issues = derive.apply(scoped_cache() or {}, M.state.filters, M.state.sort)
 	render_list(derive.group(issues, M.state.group_by), #issues)
 end
 
@@ -488,7 +526,7 @@ function M.open(cfg, filters)
 		return
 	end
 	-- Instant paint from what we already have (if any), then reconcile below.
-	if M.state.cache then
+	if scoped_cache() then
 		render_derived()
 	end
 	M.refresh()
@@ -497,7 +535,7 @@ end
 ---Re-render from the cache. Filter, sort, and grouping changes go through
 ---here so they cost no `gh` call.
 function M.rerender()
-	if not M.state.cache then
+	if not scoped_cache() then
 		M.refresh()
 		return
 	end
@@ -511,7 +549,10 @@ function M.refresh()
 	end
 
 	local request_id = P:next_request()
-	if not M.state.cache then
+	-- The scope this fetch is issued under: a cwd or query change while it is
+	-- in flight must not stamp its rows as belonging to the new scope.
+	local requested_key = cache_key()
+	if not scoped_cache() then
 		P:render_loading("Loading issues…")
 	end
 	gh_issues.list(M.state.fetch, {}, function(err, issues)
@@ -520,16 +561,19 @@ function M.refresh()
 		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
-			if not M.state.cache then
-				P:render_error("Failed to load issues", {
-					detail = err,
-					hint = "r retries",
-					view = "list",
-				})
-			end
+			-- Drop the cache and paint the failure even when rows are on
+			-- screen: stale rows left actionable resolve verbs against a
+			-- fetch that failed.
+			M.state.cache, M.state.cache_key = nil, nil
+			P:render_error("Failed to load issues", {
+				detail = err,
+				hint = "r retries",
+				view = "list",
+			})
 			return
 		end
 		M.state.cache = issues or {}
+		M.state.cache_key = requested_key
 		render_derived()
 	end)
 end
