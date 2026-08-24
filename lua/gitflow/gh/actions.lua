@@ -176,7 +176,7 @@ local function parse_failed_log_snippets(log_output)
 		local job_name, step_name, message = line:match(
 			"^([^\t]+)\t([^\t]+)\t(.+)$"
 		)
-		local candidate = normalize_snippet(message or "")
+		local candidate = normalize_snippet(M.clean_log_message(message or ""))
 		if job_name and step_name and candidate ~= "" then
 			local job_key = normalize_key(job_name)
 			local step_key = normalize_key(step_name)
@@ -201,7 +201,7 @@ local function parse_failed_log_snippets(log_output)
 			or lowered:find("fail", 1, true)
 			or lowered:find("exception", 1, true)
 		then
-			local fallback = normalize_snippet(line)
+			local fallback = normalize_snippet(M.clean_log_message(line))
 			if fallback ~= "" and not snippets.fallback then
 				snippets.fallback = fallback
 			end
@@ -420,18 +420,38 @@ function M.is_terminal_status(status)
 	return status == "completed"
 end
 
----Strip ANSI SGR/cursor escapes and OSC-8 hyperlink wrappers from raw `gh`
----log text so a log buffer shows plain readable lines.
+---Strip ANSI escapes from raw `gh` log text so a log buffer shows plain
+---readable lines: OSC sequences (hyperlinks, title sets) with either
+---terminator, and CSI sequences including private-parameter forms.
 ---@param text string
 ---@return string
 function M.strip_ansi(text)
 	text = text or ""
-	-- OSC 8 hyperlinks: ESC ] 8 ; params ; uri BEL ... ESC ] 8 ; ; BEL
-	text = text:gsub("\27%]8;[^\7]*\7", "")
-	-- CSI sequences: ESC [ ... <letter> (colors, cursor movement, erase).
-	text = text:gsub("\27%[[%d;]*[A-Za-z]", "")
+	-- OSC: ESC ] ... terminated by BEL or ST (ESC backslash). The class
+	-- stops at ESC/BEL so a malformed sequence can't eat the whole line.
+	text = text:gsub("\27%][^\7\27]*\7", "")
+	text = text:gsub("\27%][^\7\27]*\27\\", "")
+	-- CSI: ESC [ private/parameter bytes, intermediates, one final byte.
+	-- Covers SGR, ESC[?25l/h (cursor hide/show, every progress bar) and
+	-- ESC[>4;2m, none of which the digits-only class matched.
+	text = text:gsub("\27%[[\48-\63]*[\32-\47]*[\64-\126]", "")
 	-- Any remaining lone escape byte.
 	text = text:gsub("\27", "")
+	return text
+end
+
+-- Real `gh run view --log` prefixes every message with the raw log's
+-- ISO-8601 timestamp, and the first line of a job additionally carries a
+-- UTF-8 BOM. Neither belongs in a rendered log line.
+local LOG_TIMESTAMP_PATTERN = "^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d%.?%d*Z ?"
+
+---Clean one raw log message column: ANSI escapes, BOM, leading timestamp.
+---@param message string
+---@return string
+function M.clean_log_message(message)
+	local text = M.strip_ansi(message or "")
+	text = text:gsub("^\239\187\191", "")
+	text = text:gsub(LOG_TIMESTAMP_PATTERN, "")
 	return text
 end
 
@@ -467,7 +487,7 @@ local function format_log_lines(log_output, opts)
 				.. string.rep("─", math.max(0, 70 - #header))
 			last_job, last_step = job, step
 		end
-		lines[#lines + 1] = M.strip_ansi(message)
+		lines[#lines + 1] = M.clean_log_message(message)
 	end
 
 	return lines
