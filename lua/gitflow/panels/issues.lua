@@ -1372,6 +1372,17 @@ function M.comment_under_cursor()
 	comment_on_issue(number)
 end
 
+---`vim.json.decode` turns a JSON `null` into the truthy `vim.NIL`; treat that
+---(and Lua `nil`) as empty so it never prefills as a userdata address.
+---@param v any
+---@return string
+local function json_text(v)
+	if v == nil or v == vim.NIL then
+		return ""
+	end
+	return tostring(v)
+end
+
 ---Fetch the issue fresh (list cache carries no body) and open an edit form
 ---prefilled with its current title/body.
 ---@param number integer|string
@@ -1385,19 +1396,20 @@ local function edit_issue(number)
 
 		form.open({
 			title = ("Edit Issue #%s"):format(tostring(number)),
-			draft_key = ("issue:%s:edit"):format(tostring(number)),
+			-- No draft_key: a stashed draft would outrank the fresh `gh issue
+			-- view` fetch on reopen and could write a stale body back remotely.
 			fields = {
 				{
 					name = "Title",
 					key = "title",
 					required = true,
-					default = tostring(issue.title or ""),
+					default = json_text(issue.title),
 				},
 				{
 					name = "Body",
 					key = "body",
 					multiline = true,
-					default = tostring(issue.body or ""),
+					default = json_text(issue.body),
 					placeholder = "Describe the issue… (Markdown supported)",
 				},
 			},

@@ -835,6 +835,17 @@ T.run_suite("issues_panel_spec", {
 			gh_call_count("issue edit 1") == 1,
 			"gh issue edit should be called for issue 1: " .. vim.inspect(gh_calls())
 		)
+
+		-- The submitted args must carry the fetched title/body, not just any
+		-- edit call — this is what actually proves the prefill worked.
+		T.assert_true(
+			gh_call_count("--title Setup CI pipeline") == 1,
+			"gh issue edit should receive the fetched title: " .. vim.inspect(gh_calls())
+		)
+		T.assert_true(
+			gh_call_count("--body We need to configure GitHub Actions for automated testing.") == 1,
+			"gh issue edit should receive the fetched body: " .. vim.inspect(gh_calls())
+		)
 	end,
 
 	-- ── #381 branch from an issue ──────────────────────────────────────
