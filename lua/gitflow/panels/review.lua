@@ -83,7 +83,7 @@ local function build_tabpage()
 	vim.api.nvim_win_set_buf(winid, bufnr)
 	vim.api.nvim_win_set_width(winid, file_list.WIDTH)
 	tighten_file_list_window(winid)
-	file_list.attach(bufnr, winid)
+	file_list.attach(bufnr, winid, M.state.cfg)
 
 	-- Right pane is whatever window is left over (the "diff" pane).
 	vim.cmd("wincmd l")

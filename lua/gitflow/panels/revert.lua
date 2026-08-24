@@ -34,7 +34,7 @@ local P = panel.new({
 	loading = "Loading commits…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "revert", run = function()
+		{ key = "<CR>", desc = "revert", essential = true, run = function()
 			M.select_under_cursor()
 		end },
 		{ key = "1-9", keys = POSITION_KEYS, desc = "by position",
@@ -44,7 +44,7 @@ local P = panel.new({
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

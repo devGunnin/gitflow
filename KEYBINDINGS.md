@@ -5,30 +5,31 @@ are defaults and can be overridden through `setup()`.
 
 ## Known Conflicts
 
-Gitflow's global keybindings (see below) are ordinary normal-mode mappings
-installed in every buffer, so they can shadow a plugin or LSP mapping you
-already rely on:
+Gitflow's global keybindings are ordinary normal-mode mappings installed in
+every buffer. As of v2 none of them claims a bare `g` sequence that Neovim
+itself defines — `gc` (comment operator), `gr` (0.11's LSP prefix), `gs`, `gD`,
+`gP`, `gV`, `gT`, `gF`, `gI` and `gN` are all left alone. See
+[Migration](#migration-from-the-pre-v2-keymaps) for where each of those moved.
 
-- **`gc` vs vim-commentary.** Gitflow binds `gc` to `commit`. vim-commentary
-  (and similar comment plugins) use `gc` as a comment operator (`gcc`,
-  `gc{motion}`, visual `gc`). Whichever plugin calls `setup()`/loads last wins
-  the mapping. Remap gitflow's commit action to free `gc`:
-  ```lua
-  require("gitflow").setup({ keybindings = { commit = "<leader>gc" } })
-  ```
-- **`gd` vs LSP go-to-definition — not actually a conflict.** Gitflow's diff
-  command is bound to `gD` (capital D), not `gd`; there is no default gitflow
-  mapping on lowercase `gd`, so it does not collide with the common LSP
-  `gd` = go-to-definition convention out of the box.
-- If your LSP setup binds the common `gr` = references convention (bare,
-  not `<leader>`-prefixed), note gitflow uses bare `gr` for `refresh`. Remap
-  one side if both are active:
-  ```lua
-  require("gitflow").setup({ keybindings = { refresh = "<leader>gz" } })
-  ```
+The bare mappings that remain — `gl` `gS` `gZ` `gX` `gB` `gW` `gC` `gA` — shadow
+no built-in command, but a plugin may still want them (`gl` for gitsigns, `gS`
+for splitjoin). Move or drop any of them:
 
-See [Overriding Keybindings](#overriding-keybindings) below for the general
-remap mechanism.
+```lua
+require("gitflow").setup({
+  keybindings = {
+    log   = "<leader>gl",   -- move it
+    stash = false,          -- or leave the key alone entirely
+  },
+})
+```
+
+`keybindings = false` installs none of the global mappings at all; see
+[Opting out](#opting-out).
+
+Inside a panel, `?` opens a scrollable list of that panel's keys, generated
+from the bindings themselves. `:Gitflow help` does the same for the
+`:Gitflow` subcommands and the global mappings your config installs.
 
 ## Global
 
@@ -37,42 +38,44 @@ Normal-mode mappings available in any buffer. Configured via
 
 | Key | Action | Config Key |
 | --- | --- | --- |
-| `<leader>gh` | Show help / usage | `help` |
+| `<leader>gh` | Show help / usage (scrollable buffer) | `help` |
 | `<leader>go` | Open main panel | `open` |
-| `gr` | Refresh current panel | `refresh` |
+| `<leader>gz` | Refresh current panel | `refresh` |
 | `<leader>gq` | Close all Gitflow panels | `close` |
-| `gs` | Open status panel | `status` |
-| `gc` | Commit | `commit` |
+| `<leader>gs` | Open status panel | `status` |
+| `<leader>gc` | Commit | `commit` |
 | `<leader>gP` | Push | `push` |
 | `<leader>gp` | Pull | `pull` |
 | `<leader>gf` | Fetch | `fetch` |
-| `gD` | Open diff view | `diff` |
+| `<leader>gd` | Open diff view | `diff` |
 | `gl` | Open log panel | `log` |
 | `gS` | Open stash list | `stash` |
 | `gZ` | Stash push (with prompt) | `stash_push` |
 | `gX` | Stash pop | `stash_pop` |
 | `<leader>gb` | Open branch list | `branch` |
 | `gW` | Open worktree panel | `worktree` |
+| `gB` | Toggle blame panel | `blame` |
 | `<leader>gB` | Toggle inline blame on current line | `blame_inline` |
 | `<leader>gi` | Open issue list | `issue` |
 | `<leader>gr` | Open PR list | `pr` |
 | `<leader>gL` | Open label list | `label` |
 | `<leader>gR` | Open reset panel | `reset` |
 | `<leader>gm` | Open conflict panel | `conflict` |
-| `gP` | Open command palette | `palette` |
-| `gV` | Open revert panel | `revert` |
-| `gT` | Open tag list | `tag` |
-| `gB` | Toggle blame panel | `blame` |
-| `gF` | Open reflog panel | `reflog` |
+| `<leader>gx` | Open command palette | `palette` |
+| `<leader>gv` | Open revert panel | `revert` |
+| `<leader>gt` | Open tag list | `tag` |
+| `<leader>gF` | Open reflog panel | `reflog` |
 | `gC` | Open cherry-pick panel | `cherry_pick` |
-| `gI` | Open rebase panel (normal, `i` for interactive) | `rebase_interactive` |
+| `<leader>gI` | Open rebase panel (normal, `i` for interactive) | `rebase_interactive` |
 | `gA` | Open GitHub Actions panel | `actions` |
-| `gN` | Open notification center | `notifications` |
+| `<leader>gn` | Open notification center | `notifications` |
 | `<leader>gG` | Toggle PR review mode (tabpage with file list + inline diff) | `pr_review` |
 
 ## Status Panel
 
 Buffer-local bindings active in the status panel (`:Gitflow status`).
+
+<!-- keys: status -->
 
 | Key | Action |
 | --- | --- |
@@ -85,8 +88,9 @@ Buffer-local bindings active in the status panel (`:Gitflow status`).
 | `dd` | Review diff for file under cursor (opens the diff review viewer) |
 | `cx` | Open conflict resolution for file |
 | `p` | Push |
-| `X` | Revert uncommitted changes in file |
+| `X` | Discard uncommitted changes in file (confirms first) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 `s` / `u` also work in visual line mode (`V` to select rows, then `s` or `u`)
@@ -96,11 +100,14 @@ to stage/unstage several files at once.
 
 Buffer-local bindings active in diff buffers (`:Gitflow diff`).
 
+<!-- keys: diff -->
+
 | Key | Action |
 | --- | --- |
 | `r` | Refresh diff |
 | `]f` / `[f` | Next / previous file |
 | `]c` / `[c` | Next / previous hunk |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Diff Review Viewer
@@ -111,14 +118,17 @@ file-list pane on the left and a per-file diff on the right. It opens for
 and for `<CR>` / range-review in the [Log View](#log-view) (a single commit,
 or a marked commit range) — no direct `:Gitflow` command opens it.
 
+<!-- keys: diffview -->
+
 ### File list pane
 
 | Key | Action |
 | --- | --- |
-| `<CR>` / `o` | Open the file under cursor in the right pane |
+| `<CR>` / `o` / `<2-LeftMouse>` | Open the file under cursor in the right pane |
 | `]f` / `[f` | Next / previous file |
 | `]c` / `[c` | Next / previous hunk |
 | `r` | Refresh |
+| `?` | Key help for this viewer |
 | `q` | Close |
 
 ### Diff pane
@@ -133,24 +143,29 @@ or a marked commit range) — no direct `:Gitflow` command opens it.
 
 Buffer-local bindings active in the branch panel (`:Gitflow branch`).
 
+<!-- keys: branch -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Switch to branch under cursor |
 | `c` | Create new branch |
-| `d` | Delete branch |
-| `D` | Force delete branch |
-| `m` | Merge branch into current |
+| `d` | Delete branch (confirms first) |
+| `D` | Force delete branch (confirms first) |
+| `m` | Merge branch into current (confirms first) |
 | `u` | Update branch to its upstream (fast-forward, no checkout) |
-| `r` | Rename branch |
-| `R` | Refresh branch list (with fetch) |
+| `e` | Rename branch (`git branch -m`) |
 | `f` | Fetch remote branches |
 | `.` | Jump to the current branch (list view only) |
 | `G` | Toggle list / graph view |
+| `r` | Refresh branch list (with fetch) |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Log View
 
 Buffer-local bindings active in the log panel (`:Gitflow log`).
+
+<!-- keys: log -->
 
 | Key | Action |
 | --- | --- |
@@ -158,37 +173,46 @@ Buffer-local bindings active in the log panel (`:Gitflow log`).
 | `V` | Mark the commit under cursor as a range start (`<CR>` on another commit reviews the combined range); `V` on the same commit clears it |
 | `<Esc>` | Cancel a pending range selection |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Reset Panel
 
 Buffer-local bindings active in the reset panel (`:Gitflow reset`).
 
+<!-- keys: reset -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Select commit under cursor (prompts soft/hard) |
-| `1`-`9` | Select commit by position (prompts soft/hard) |
-| `S` | Soft reset to commit under cursor |
-| `H` | Hard reset to commit under cursor |
+| `1-9` | Select commit by position (prompts soft/hard) |
+| `S` | Soft reset to commit under cursor — keeps every change, so not a destructive verb (confirms first) |
+| `H` | Hard reset to commit under cursor — **discards** everything after it (confirms first, defaults to Cancel) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Stash Panel
 
 Buffer-local bindings active in the stash panel (`:Gitflow stash list`).
 
+<!-- keys: stash -->
+
 | Key | Action |
 | --- | --- |
-| `P` | Pop stash entry under cursor |
-| `D` | Drop stash entry under cursor |
 | `A` | Apply stash entry under cursor |
+| `P` | Pop stash entry under cursor |
+| `D` | Drop stash entry under cursor (confirms first) |
 | `S` | Stash with message prompt |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Issue List
 
 Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
+
+<!-- keys: issues -->
 
 ### List View
 
@@ -198,23 +222,24 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `c` | Create new issue |
 | `C` | Comment on issue |
 | `E` | Edit issue title/body |
-| `x` | Close issue (asks Completed / Not planned) |
+| `x` | Close issue (asks Completed / Not planned, then confirms) |
 | `R` | Reopen issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
 | `T` | Set or clear the milestone (picked from the repo's milestones) |
 | `f` | Open filter menu (state / labels / assignee / milestone) |
 | `Q` | Search issues (GitHub search syntax; empty clears it) |
-| `X` | Clear all filters |
+| `F` | Clear all filters |
 | `s` | Cycle sort key (updated → number → title → milestone) |
 | `S` | Toggle sort direction |
 | `G` | Cycle grouping (none → milestone → assignee → label) |
 | `<Tab>` | Fold / unfold the group under cursor (when grouped) |
 | `o` | Switch to a saved view |
 | `O` | Save current filters/sort as a named view |
-| `D` | Delete a saved view |
+| `D` | Delete a saved view (confirms first) |
 | `B` | Create a branch from the selected issue (prompts, prefilled name) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ### Detail View
@@ -227,27 +252,19 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `E` | Edit issue title/body |
 | `e` | Edit the comment under the cursor |
 | `d` | Delete the comment under the cursor (confirms first) |
-| `x` | Close issue (asks Completed / Not planned) |
+| `x` | Close issue (asks Completed / Not planned, then confirms) |
 | `R` | Reopen issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
 | `T` | Set or clear the milestone |
-| `f` | Open filter menu |
-| `X` | Clear all filters |
-| `s` | Cycle sort key |
-| `S` | Toggle sort direction |
-| `G` | Cycle grouping |
-| `o` | Switch to a saved view |
-| `O` | Save current filters/sort as a named view |
-| `D` | Delete a saved view |
-| `B` | Create a branch from this issue (prompts, prefilled name) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
-`f`/`X`/`s`/`S`/`G`/`o`/`O`/`D` act on the panel's shared filter/sort/group/view
-state, so they take effect from either view but only become visible once you
-go back (`b`) to the list. `e`/`d` need a comment under the cursor, so they
-only do anything in the detail view.
+The list-only keys `Q`/`f`/`F`/`s`/`S`/`G`/`<Tab>`/`o`/`O`/`D`/`B` act on the
+panel's shared filter/sort/group/view state and are bound in the list view
+only; go back (`b`) to reach them. `e`/`d` need a comment under the cursor, so
+they are bound in the detail view only.
 
 An issue card shows a pull-request cue when an open PR *looks like* it closes
 it — inferred from the PR text, either a `Closes #<n>` keyword in the body or
@@ -257,6 +274,8 @@ so a keyword in prose or a code fence can produce one.
 ## PR List
 
 Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
+
+<!-- keys: prs -->
 
 ### List View
 
@@ -273,13 +292,14 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `D` | Merge PR **and delete its branch** (confirms, irreversible) |
 | `M` | Enable or cancel auto-merge (confirms, merges unattended once armed) |
 | `t` | Toggle draft / ready for review |
-| `x` | Close PR |
+| `x` | Close PR (confirms first) |
 | `O` | Reopen PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
 | `<C-n>` | Next page |
 | `<C-p>` | Previous page |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ### Detail View
@@ -287,7 +307,6 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | Key | Action |
 | --- | --- |
 | `b` | Back to list |
-| `c` | Create new PR |
 | `C` | Comment on PR |
 | `E` | Edit PR title/body |
 | `L` | Edit labels |
@@ -297,11 +316,12 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `D` | Merge PR **and delete its branch** (confirms, irreversible) |
 | `M` | Enable or cancel auto-merge (confirms) |
 | `t` | Toggle draft / ready for review |
-| `x` | Close PR |
+| `x` | Close PR (confirms first) |
 | `O` | Reopen PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 Both views show the PR's CI checks: the list card carries a per-state count
@@ -329,11 +349,13 @@ hunk markers).
 Toggle with `<leader>gG` (or `:Gitflow pr-review`). Switch between the
 file list and the editing area with the standard `<C-w>w` motion.
 
+<!-- keys: review_files -->
+
 ### File list pane
 
 | Key | Action |
 | --- | --- |
-| `<CR>` / `o` / `<Tab>` | Open the file under cursor in the right pane, or fold/unfold a folder row |
+| `<CR>` / `o` / `<Tab>` / `<2-LeftMouse>` | Open the file under cursor in the right pane, or fold/unfold a folder row |
 | `za` | Toggle the folder under the cursor |
 | `zR` | Unfold all folders |
 | `zM` | Fold all folders |
@@ -344,7 +366,11 @@ file list and the editing area with the standard `<C-w>w` motion.
 | `S` | Submit review — opens dropdown (comment / request changes / approve), then prompts for an optional body |
 | `<leader>c` | Comments overview — picker listing every comment thread in the PR, jump on select |
 | `<leader>d` | Toggle the diff overlay: PR changes ↔ the file as it is in the branch |
+| `x` | On a **Drafts** row: delete the draft under cursor (confirms first) |
+| `X` | Delete all off-diff drafts (confirms first) |
+| `e` | On a **Drafts** row: edit the draft; on a file row: edit a draft on that file |
 | `r` | Refresh PR metadata, diff, and threads |
+| `?` | Key help for review mode |
 | `q` | Close review mode (confirms if pending comments exist) |
 
 Files that carry review comments show a `[n]` badge (remote threads, from
@@ -353,10 +379,11 @@ those counts up, and the **Files** header shows the total (`[threads in
 files]`). Use `]C` / `[C` to walk straight through every comment.
 
 On a draft row in the **Drafts** section: `<CR>` jumps to the comment,
-`e` edits the draft body, `dd` (or `x`) deletes it, `X` deletes all off-diff
-drafts. `e` on a **file row** edits any draft on that file (file-level or
-line comment); if the file has more than one draft you're asked which to
-edit.
+`e` edits the draft body, `x` deletes it, `X` deletes all off-diff drafts.
+`e` on a **file row** edits any draft on that file (file-level or line
+comment); if the file has more than one draft you're asked which to edit.
+
+<!-- keys: review_diff -->
 
 ### Editing pane (per-file)
 
@@ -369,21 +396,19 @@ edit.
 | `]f` / `[f` | Next / previous file (without leaving the editing pane) |
 | `]c` / `[c` | Next / previous hunk |
 | `]C` / `[C` | Next / previous comment thread — opens the file and jumps to the line, crossing files as needed |
-| `<leader>t` | Fold / unfold the reply thread on the current line (threads with no replies are unaffected) |
+| `<CR>` / `<leader>t` | View, or fold / unfold, the reply thread on the current line (threads with no replies are unaffected) |
 | `<leader>c` | Comments overview — picker listing every comment thread in the PR, jump on select |
 | `<leader>e` | Edit the draft comment on the current line |
 | `<leader>x` | Delete the comment on the current line (draft, or remote if you authored it) |
 | `<leader>i` | Toggle inline comment body lines (collapsed vs. expanded) |
 | `<leader>d` | Toggle the diff overlay: PR changes ↔ the file as it is in the branch |
+| `?` | Key help for review mode |
 
 ### Thread popup
 
-Opened by `<CR>` on a commented line in the editing pane.
-
-| Key | Action |
-| --- | --- |
-| `R` | Reply to the thread (remote threads only) |
-| `q` / `<Esc>` | Close the popup |
+Opened by `<CR>` on a commented line in the editing pane. Its own keys, not
+part of either review key surface: `R` replies to the thread (remote threads
+only), `q` / `<Esc>` closes the popup.
 
 Pending comments are persisted to
 `stdpath('data')/gitflow/review/<repo>/<pr>.json` and rehydrated when
@@ -395,13 +420,15 @@ the same PR is reopened, so a crashed editor doesn't lose drafts.
 
 Buffer-local bindings in the conflict list (`:Gitflow conflicts`).
 
+<!-- keys: conflict -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Open the conflict resolver for the file under the cursor |
-| `r` | Refresh conflict list |
-| `R` | Refresh conflict list |
 | `C` | Continue active merge/rebase/cherry-pick |
-| `A` | Abort active operation |
+| `X` | Abort active operation (confirms first) |
+| `r` | Refresh conflict list |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ### Merge Conflict Resolver
@@ -409,6 +436,8 @@ Buffer-local bindings in the conflict list (`:Gitflow conflicts`).
 Buffer-local bindings in the single-pane conflict editor. Resolution actions
 are `c`-prefixed so plain vim motions (`o`, `a`, `e`, `b`, `t`, `r`, …) keep
 working while you hand-edit a hunk.
+
+<!-- keys: conflict_resolver -->
 
 | Key | Action |
 | --- | --- |
@@ -418,52 +447,64 @@ working while you hand-edit a hunk.
 | `cB` | Take BASE version for the hunk |
 | `ca` | Resolve all hunks (prompts for side) |
 | `ce` | Enter manual edit mode for hunk |
-| `cx` | Reset the file to its original conflicted state (undo all edits/choices) |
+| `cD` | Reset the file to its original conflicted state — discards all edits and hunk choices (confirms first) |
 | `cr` | Refresh from disk |
 | `]c` | Jump to next conflict hunk |
 | `[c` | Jump to previous conflict hunk |
+| `c?` | Key help for the resolver (`?` stays vim's reverse search — this pane is editable) |
 | `q` | Save & close conflict view |
 
 ## Label Panel
 
 Buffer-local bindings active in the label panel (`:Gitflow label list`).
 
+<!-- keys: labels -->
+
 | Key | Action |
 | --- | --- |
 | `c` | Create new label |
-| `d` | Delete label under cursor |
+| `d` | Delete label under cursor (confirms first) |
 | `<C-n>` | Next page |
 | `<C-p>` | Previous page |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Revert Panel
 
 Buffer-local bindings active in the revert panel (`:Gitflow revert`).
 
+<!-- keys: revert -->
+
 | Key | Action |
 | --- | --- |
-| `<CR>` | Revert commit under cursor |
-| `1-9` | Revert commit by position |
+| `<CR>` | Revert commit under cursor (confirms first) |
+| `1-9` | Revert commit by position (confirms first) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Tag Panel
 
 Buffer-local bindings active in the tag panel (`:Gitflow tag list`).
 
+<!-- keys: tag -->
+
 | Key | Action |
 | --- | --- |
 | `c` | Create tag |
-| `D` | Delete local tag |
-| `X` | Delete remote tag |
+| `D` | Delete local tag (confirms first) |
+| `X` | Delete remote tag (confirms first) |
 | `P` | Push tag to remote |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Worktree Panel
 
 Buffer-local bindings active in the worktree panel (`:Gitflow worktree`).
+
+<!-- keys: worktree -->
 
 | Key | Action |
 | --- | --- |
@@ -475,48 +516,61 @@ Buffer-local bindings active in the worktree panel (`:Gitflow worktree`).
 | `p` | Prune stale worktree entries |
 | `<CR>` | Switch to worktree under cursor (changes cwd) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Blame Panel
 
 Buffer-local bindings active in the blame panel (`:Gitflow blame`).
 
+<!-- keys: blame -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Open diff for commit under cursor |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Reflog Panel
 
 Buffer-local bindings active in the reflog panel (`:Gitflow reflog`).
 
+<!-- keys: reflog -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Checkout entry under cursor |
 | `1-9` | Select entry by position |
-| `R` | Reset to entry |
+| `H` | Reset to entry under cursor — soft, mixed or hard (confirms first, defaults to Cancel) |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Cherry-Pick Panel
 
 Buffer-local bindings active in the cherry-pick panel (`:Gitflow cherry-pick-panel`).
 
+<!-- keys: cherry_pick -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Cherry-pick commit under cursor |
-| `1-9` | Cherry-pick commit by position |
 | `b` | Pick source branch |
 | `B` | Cherry-pick into branch |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
+
+`1`-`9` also cherry-pick by position; they are bound but not advertised.
 
 ## Rebase Panel
 
 Buffer-local bindings active in the rebase panel (`:Gitflow rebase-interactive`).
 The panel opens on a base-branch picker, then a plain (non-interactive) rebase
 preview. Press `i` from the preview to switch to the interactive editor.
+
+<!-- keys: rebase -->
 
 Base picker:
 
@@ -529,10 +583,12 @@ Normal rebase preview:
 
 | Key | Action |
 | --- | --- |
-| `X` | Execute plain rebase onto base |
+| `X` | Execute plain rebase onto base (confirms first) |
 | `i` | Switch to interactive rebase |
 | `P` | Toggle diff preview for commit under cursor |
 | `b` | Change base branch |
+| `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 Interactive rebase editor:
@@ -541,17 +597,22 @@ Interactive rebase editor:
 | --- | --- |
 | `<CR>` | Cycle action for commit under cursor |
 | `p` | Set action to pick |
-| `r` | Set action to reword |
+| `w` | Set action to reword (not `r` — `r` is refresh in every panel) |
 | `e` | Set action to edit |
 | `s` | Set action to squash |
 | `f` | Set action to fixup |
 | `d` | Set action to drop |
 | `J` | Move commit down |
 | `K` | Move commit up |
-| `X` | Execute interactive rebase |
+| `X` | Execute interactive rebase (confirms first) |
 | `P` | Toggle diff preview for commit under cursor |
 | `b` | Change base branch |
+| `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
+
+Editing the plan touches nothing: `d` only marks a commit for dropping, `p`
+un-marks it, and the plan is applied only by `X`, which confirms.
 
 ## Actions Panel
 
@@ -562,6 +623,8 @@ apply to the run under cursor in the list, or the open run in detail view;
 Bindings are per view — a key a view does not use is not mapped there, so
 plain vim motions keep working. The log view is a text buffer and maps only
 `<BS>`, `]e`, `r` and `q`.
+
+<!-- keys: actions -->
 
 | Key | Action | Views |
 | --- | --- | --- |
@@ -580,6 +643,7 @@ plain vim motions keep working. The log view is a text buffer and maps only
 | `o` | Open in browser | list, detail |
 | `<BS>` | Back (log → its parent view, workflow list/detail → list) | detail, log, workflow list |
 | `r` | Refresh | all |
+| `?` | Key help for this panel | all |
 | `q` | Close | all |
 
 A very large log is capped at the last 20 000 lines, with the number of
@@ -590,6 +654,8 @@ editor while it paints.
 
 Buffer-local bindings active in the notifications panel (`:Gitflow notifications`).
 
+<!-- keys: notifications -->
+
 | Key | Action |
 | --- | --- |
 | `<CR>` | Open context |
@@ -599,11 +665,16 @@ Buffer-local bindings active in the notifications panel (`:Gitflow notifications
 | `0` | Show all |
 | `c` | Clear all |
 | `r` | Refresh |
+| `?` | Key help for this panel |
 | `q` | Close |
 
 ## Command Palette
 
-Bindings active in the command palette (`:Gitflow palette`).
+Bindings active in the command palette (`:Gitflow palette`). The palette is a
+text-entry surface, so `?` is a character you type here, not a help key — the
+footer of each pane carries its keys instead.
+
+<!-- keys: palette -->
 
 ### Prompt (Insert/Normal Mode)
 
@@ -613,7 +684,7 @@ Bindings active in the command palette (`:Gitflow palette`).
 | `<Esc>` | Close palette |
 | `<Down>` / `<C-n>` / `<Tab>` / `<C-j>` | Move selection down |
 | `<Up>` / `<C-p>` / `<S-Tab>` / `<C-k>` | Move selection up |
-| `1`-`9` | Run the numbered command directly (see the index shown next to the first 9 entries) |
+| `1-9` | Run the numbered command directly (see the index shown next to the first 9 entries) |
 
 ### List (Normal Mode)
 
@@ -622,57 +693,137 @@ Bindings active in the command palette (`:Gitflow palette`).
 | `<CR>` | Select highlighted command |
 | `j` / `<C-n>` | Move selection down |
 | `k` / `<C-p>` | Move selection up |
-| `1`-`9` | Run the numbered command directly |
+| `1-9` | Run the numbered command directly |
 | `q` / `<Esc>` | Close palette |
 
-## Cross-Panel Inconsistencies
+## Cross-Panel Key Rules
 
-Panel-local bindings are fixed per panel (see [Overriding
-Keybindings](#overriding-keybindings)), so the same key is free to mean
-something different in each one. This is a known, intentional tradeoff, not a
-bug — but it can catch you out if you jump between panels on muscle memory:
+Panel keys are buffer-local, so nothing in Neovim stops the same key meaning
+different things in different panels. Muscle memory does not know which buffer
+it is in, so gitflow constrains itself:
 
-- **`A`** — [abort the active merge/rebase/cherry-pick](#conflict-resolution)
-  (Conflict List, destructive, confirms first) / [unstage all
-  files](#status-panel) (Status Panel) / [apply the stash under
-  cursor](#stash-panel) (Stash Panel) / [edit assignees](#issue-list)
-  (Issue List, PR List).
-- **`R`** — [reset to the entry under cursor](#reflog-panel) (Reflog Panel,
-  destructive, confirms first, default choice is Cancel) / refresh (Branch
-  List, Conflict List — same as `r` there) / [reply to the comment thread on
-  the current line](#pr-review-mode) (PR Review Mode editing pane and thread
-  popup) / [reopen the issue](#issue-list) (Issue List) / [edit
-  reviewers](#pr-list) (PR List).
-- **`M`** — [enable or cancel auto-merge](#pr-list) (PR List, destructive,
-  confirms first); the issue milestone moved to `T` so `M` does not also mean a
-  benign action. `R` above is still split that way (reflog reset vs. reopen /
-  edit reviewers), so this is not yet true of every key. **`D`** — [delete a saved view](#issue-list)
-  (Issue List) / [merge and delete the branch](#pr-list) (PR List,
-  destructive, confirms first). **`d`** — always delete: [the comment under
-  the cursor](#issue-list) (Issue List detail view) / [a
-  label](#label-panel) (Label Panel); the PR draft toggle is `t`.
-- **`<C-n>` / `<C-p>`** — next / previous page (PR List, Label Panel) / move the
-  selection down / up (command palette, searchable pickers). Both mean "the
-  next one", on different things. In the PR and Label lists they also shadow
-  Neovim's own `CTRL-N` / `CTRL-P` cursor motions; `j` / `k` still move the
-  cursor there, and keeping `n` for `/` search-next matters more in a buffer
-  you search.
-- **"Back to list"** — `b` (Issue List, PR List) or `<BS>` (Actions Panel),
-  depending on the panel. There is no panel where `<Esc>` performs this;
-  `<Esc>` is used elsewhere for unrelated things (cancelling a log-panel range
-  selection, closing the command palette or a review thread popup).
+- **`r` refreshes, `q` closes, `?` opens this panel's key help.** In every
+  panel. The two exceptions are text-entry surfaces, where `?` is a character
+  you type: the merge resolver puts its help on `c?`, and the command palette
+  carries its keys in the footer of each pane.
+- **`?` is never elided.** A narrow panel drops hints to fit; `?` is the one
+  hint no width can take away, because it is what shows you the ones already
+  gone. Everything else can go, including a primary verb: the merge-conflict
+  list drops `X abort` around 62 usable columns, and `? help` is how you get
+  it back.
+- **No key is destructive in one panel and benign in another.** The destructive
+  verbs live on `d` `D` `x` `X` `H` `M`, plus the two prefixed ones — `cD` in
+  the merge resolver and `<leader>x` in the review diff pane — and none of
+  those is a harmless action anywhere. That is why the issue milestone is `T`
+  and the PR draft toggle is `t`: `M` and `d` are spoken for. `scripts/test_keymap_contract.lua` fails the
+  build if that stops being true, over every key, not just this list.
+- **Every destructive verb confirms**, and declining does nothing at all — no
+  partial write, no refresh, no side effect. Rebase's `d drop` is the one
+  deliberate exception: it edits a todo list you have not executed yet.
+  `scripts/test_confirm_gates.lua` drives three of the gates with the answer NO
+  and asserts the underlying git/gh call was never made; the rest of the audit
+  is by hand. The spec also lints descriptions for destructive wording, but
+  that is a wording floor, not a check of what the verb does: a destructive
+  verb described neutrally carries no flag and nothing catches it.
+- **The prompt defaults to Cancel** for anything that discards work.
 
-Both destructive cases above (`A` = abort, `R` = reset) show a confirmation
-prompt defaulting to Cancel, so an accidental press does not lose work.
+Keys that legitimately differ across panels are all benign: `A` is apply
+(stash) or assignees (PR/issue lists); `S` is submit, sort direction, stash
+push or soft reset; `P` is pop, push or preview; `o` is open, checkout or saved
+views. None of them can lose anything.
 
-This is a documentation note, not a proposal to change any binding — panel
-keybindings are not currently user-configurable (see below).
+`H` in the reflog and reset panels, and `M` on the PR panel, shadow vim's
+window motions in a scrollable list — a rule the actions panel keeps strictly.
+They are here because the destructive alphabet (`d` `D` `x` `X` `H` `M`) has to
+stay small enough to recognise, and because both are confirm-gated with the
+prompt defaulting to Cancel. Nothing on a motion key can lose work to one
+keystroke. Branch rename moved off `M` for the same reason.
+
+`<C-n>` / `<C-p>` page in the PR and Label lists and move the selection in
+pickers. Both mean "the next one", on different things. They shadow Neovim's
+own `CTRL-N` / `CTRL-P` there; `j` / `k` still move the cursor, and keeping `n`
+free for `/` search-next matters more in a buffer you search.
+
+"Back to list" is `b` (Issue List, PR List) or `<BS>` (Actions Panel). `<Esc>`
+never does it — it cancels a log-panel range selection, or closes the palette
+or a review thread popup.
+
+## Migration from the pre-v2 keymaps
+
+v2 is a **breaking change**. Every key below can be put back through
+configuration. The two behaviour changes at the end of the panel table — the
+new confirm prompts — cannot: there is no setting that turns a confirm off.
+
+### Global mappings
+
+Gitflow no longer claims any bare `g` sequence that Neovim itself defines.
+
+| Action | Old | New | Why |
+| --- | --- | --- | --- |
+| `refresh` | `gr` | `<leader>gz` | `gr` is Neovim 0.11's LSP prefix (`grn`/`gra`/`gri`/`grr`) |
+| `status` | `gs` | `<leader>gs` | `gs` sleeps |
+| `commit` | `gc` | `<leader>gc` | `gc` is the built-in comment operator |
+| `diff` | `gD` | `<leader>gd` | `gD` goes to declaration |
+| `palette` | `gP` | `<leader>gx` | `gP` pastes before |
+| `revert` | `gV` | `<leader>gv` | `gV` avoids reselecting |
+| `tag` | `gT` | `<leader>gt` | `gT` is previous tab |
+| `reflog` | `gF` | `<leader>gF` | `gF` edits the file under cursor at its line |
+| `rebase_interactive` | `gI` | `<leader>gI` | `gI` inserts at column 1 |
+| `notifications` | `gN` | `<leader>gn` | `gN` is a search-match text object |
+
+The bare mappings that remain (`gl` `gS` `gZ` `gX` `gB` `gW` `gC` `gA`) shadow
+no built-in command. Put any old key back:
+
+```lua
+require("gitflow").setup({ keybindings = { commit = "gc", refresh = "gr" } })
+```
+
+### Panel keys
+
+| Panel | Old | New |
+| --- | --- | --- |
+| Branch List | `r` rename | `e` rename — `r` is refresh, and `M` is a motion |
+| Branch List | `R` refresh (with fetch) | `r` refresh (with fetch) |
+| Conflict List | `A` abort | `X` abort — `A` is assignees/apply elsewhere |
+| Conflict List | `R` refresh alias | removed; `r` refreshes |
+| Merge Resolver | `cx` reset file | `cD` reset file — `cx` opens the resolver from the status panel |
+| Reflog Panel | `R` reset | `H` reset — matches the Reset Panel's hard reset |
+| Issue List | `X` clear filters | `F` clear filters — `X` is a destructive key |
+| Issue List | `D` inside `o`/`O`/`D` | `D` on its own, and it now confirms |
+| Rebase editor | `r` reword | `w` reword — `r` is refresh |
+| PR Review file list | `dd` / `x` delete draft | `x` delete draft — `dd` is diff in the status panel |
+| Every panel | `?` was vim's reverse search | `?` opens that panel's key help |
+
+Newly confirmed: deleting an already-merged branch (Branch List `d`), and
+deleting a saved issue view (Issue List `D`).
+
+Put a panel key back the way it was:
+
+```lua
+require("gitflow").setup({
+  panel_keybindings = {
+    conflict = { X = "A" },
+    reflog   = { H = "R" },
+    -- Three rows where the old key is now taken by refresh or by `?`. Move the
+    -- key that took it in the same table, or the whole panel's table is
+    -- refused: `branch = { e = "r" }` alone puts rename and refresh on `r`.
+    branch = { e = "r", r = "R" },
+    conflict_resolver = { cD = "cx" },
+    rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },
+    status = { ["?"] = false },  -- `?` back to reverse search
+  },
+})
+```
+
+`scripts/test_keymap_contract.lua` PRESSES every row of that table on the real
+panel buffer and asserts what the press did — not what the hint says.
 
 ## Overriding Keybindings
 
-Global keybindings are overridden by passing a `keybindings` table to
-`setup()`. Each key in the table corresponds to an action name (listed in
-the Config Key column of the Global table above).
+### Global
+
+Pass a `keybindings` table to `setup()`. Each entry is an action name (the
+Config Key column of the Global table above) and the mapping to install.
 
 ```lua
 require("gitflow").setup({
@@ -680,12 +831,80 @@ require("gitflow").setup({
     status  = "<leader>gs",   -- remap status panel
     commit  = "<leader>gc",   -- remap commit
     push    = "gp",           -- remap push
-    palette = "<leader>gx",   -- remap command palette
   },
 })
 ```
 
 Only the keybindings you specify are changed; all others keep their defaults.
 
-Panel-local keybindings (status, branch, diff, etc.) are not currently
-user-configurable and use the fixed mappings documented above.
+### Opting out
+
+Global mappings are ordinary normal-mode mappings installed in every buffer, so
+you can decline them. One action:
+
+```lua
+require("gitflow").setup({ keybindings = { commit = false } })
+```
+
+Or all of them. The `<Plug>` targets stay defined, so every action is still
+reachable from a key you choose:
+
+```lua
+require("gitflow").setup({ keybindings = false })
+vim.keymap.set("n", "<leader>c", "<Plug>(GitflowCommit)", { remap = true })
+```
+
+A duplicate mapping is a config error naming both actions; a disabled action
+claims no key, so it cannot collide.
+
+### Panel-local
+
+`panel_keybindings` is keyed by the panel's registry name, then by the default
+key label that panel advertises — exactly what `?` shows inside the panel and
+what the tables above document. The value is the replacement key, or `false` to
+unbind it.
+
+```lua
+require("gitflow").setup({
+  panel_keybindings = {
+    status = { X = "<leader>X" },   -- move "discard changes" out of reach
+    tag    = { D = false },         -- remove "delete tag" entirely
+  },
+})
+```
+
+The hint bar, the float footer and the `?` overlay all follow the override, so
+a panel never advertises a key it does not bind. This covers every surface in
+the list below, including the three that are not panels — the actions panel's
+per-view maps, the merge resolver and the review diff pane.
+
+A pair or range entry (`s/u`, `p/w/e/s/f`, `1-9`) can be re-keyed whole or
+collapsed. Name several keys with `/` to keep the set:
+
+```lua
+panel_keybindings = {
+  rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },  -- r rewords again
+}
+```
+
+A single key collapses the entry to that one key, keeping the FIRST of its
+actions and dropping the rest — sometimes what you want, and otherwise how four
+verbs quietly disappear, so say what you mean. Naming MORE keys than the entry
+binds is refused: the extra key would have no action behind it.
+
+Re-keying moves behaviour, not just the letter. `["p/w/e/s/f"] = "p/r/e/s/f"`
+makes `r` do what `w` did, position for position.
+
+Two guards, both loud:
+
+- A label that matches no key in that panel warns when the panel opens.
+- An override that would land on a key the panel already binds is **refused
+  whole** for that panel — every other override you wrote for it goes back too,
+  which the warning says. Otherwise one verb would silently win the key while
+  the hints kept advertising both. Move the other key in the same table (as
+  `r = "R"` does above) and both apply.
+
+Panel names: `status` `branch` `log` `blame` `stash` `tag` `reflog` `reset`
+`revert` `cherry_pick` `rebase` `conflict` `conflict_resolver` `worktree`
+`labels` `notifications` `diff` `diffview` `prs` `issues` `actions`
+`review_files` `review_diff` `palette`.

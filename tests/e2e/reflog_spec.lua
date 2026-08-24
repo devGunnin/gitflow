@@ -103,7 +103,7 @@ T.run_suite("E2E: Reflog Panel", {
 		local bufnr = ui.buffer.get("reflog")
 		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
 		T.assert_keymaps(bufnr, {
-			"q", "r", "R", "<CR>", "1", "2", "3", "4", "5",
+			"q", "r", "H", "?", "<CR>", "1", "2", "3", "4", "5",
 			"6", "7", "8", "9",
 		})
 
@@ -123,9 +123,21 @@ T.run_suite("E2E: Reflog Panel", {
 		local bufnr = ui.buffer.get("reflog")
 		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
 		local lines = T.buf_lines(bufnr)
+		-- `1-9 quick checkout` is a convenience and `H reset` is destructive,
+		-- so both elide at this width. Assert the whole fitted bar, not just
+		-- `q close`: that alone would pass against a hardcoded string.
+		local bar_line = T.find_line(lines, "q close")
 		T.assert_true(
-			T.find_line(lines, "quick checkout") ~= nil,
-			"reflog panel split layout should render its keybind hints"
+			bar_line ~= nil, "reflog split layout should render a hint bar"
+		)
+		local bar = lines[bar_line]
+		for _, hint in ipairs({ "<CR> checkout", "q close", "? help" }) do
+			T.assert_contains(bar, hint, "reflog hint bar should keep " .. hint)
+		end
+		T.assert_contains(bar, "\u{2026}", "an elided bar should say so")
+		T.assert_true(
+			not bar:find("H reset", 1, true),
+			"the destructive key should elide first: " .. bar
 		)
 
 		reflog_panel.close()
@@ -381,11 +393,14 @@ T.run_suite("E2E: Reflog Panel", {
 		)
 	end,
 
-	["gF keybinding wired to Plug(GitflowReflog)"] = function()
+	["<leader>gF keybinding wired to Plug(GitflowReflog)"] = function()
 		local maps = vim.api.nvim_get_keymap("n")
+		-- The default is `<leader>`-prefixed, and a map's lhs carries the real
+		-- leader character, not the placeholder.
+		local lhs = cfg.keybindings.reflog:gsub("<leader>", vim.g.mapleader or "\\")
 		local found = false
 		for _, map in ipairs(maps) do
-			if map.lhs == cfg.keybindings.reflog then
+			if map.lhs == lhs then
 				T.assert_contains(
 					map.rhs or "",
 					"GitflowReflog",

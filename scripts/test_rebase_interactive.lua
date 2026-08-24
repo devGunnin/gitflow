@@ -269,10 +269,10 @@ end)
 
 -- ─── Keybinding tests ───
 
-test("default rebase_interactive keybinding is gI", function()
+test("default rebase_interactive keybinding is <leader>gI", function()
 	assert_equals(
-		cfg.keybindings.rebase_interactive, "gI",
-		"default rebase_interactive keybinding should be gI"
+		cfg.keybindings.rebase_interactive, "<leader>gI",
+		"default rebase_interactive keybinding should be <leader>gI"
 	)
 end)
 
@@ -286,9 +286,9 @@ end)
 
 test("default rebase_interactive keymap maps to plug", function()
 	assert_mapping(
-		cfg.keybindings.rebase_interactive,
+		(cfg.keybindings.rebase_interactive:gsub("<leader>", vim.g.mapleader or "\\")),
 		"<Plug>(GitflowRebaseInteractive)",
-		"gI should map to <Plug>(GitflowRebaseInteractive)"
+		"<leader>gI should map to <Plug>(GitflowRebaseInteractive)"
 	)
 end)
 
@@ -1028,7 +1028,7 @@ end)
 test("config validation accepts rebase_interactive keybinding", function()
 	local config = require("gitflow.config")
 	local test_cfg = config.defaults()
-	test_cfg.keybindings.rebase_interactive = "gI"
+	test_cfg.keybindings.rebase_interactive = "<leader>gI"
 	local ok = pcall(config.validate, test_cfg)
 	assert_true(
 		ok,

@@ -231,10 +231,10 @@ end)
 
 -- ─── Keybinding tests ───
 
-test("default revert keybinding is gV", function()
+test("default revert keybinding is <leader>gv", function()
 	assert_equals(
-		cfg.keybindings.revert, "gV",
-		"default revert keybinding should be gV"
+		cfg.keybindings.revert, "<leader>gv",
+		"default revert keybinding should be <leader>gv"
 	)
 end)
 
@@ -248,9 +248,9 @@ end)
 
 test("default revert keymap maps to plug", function()
 	assert_mapping(
-		cfg.keybindings.revert,
+		(cfg.keybindings.revert:gsub("<leader>", vim.g.mapleader or "\\")),
 		"<Plug>(GitflowRevert)",
-		"gV should map to <Plug>(GitflowRevert)"
+		"<leader>gv should map to <Plug>(GitflowRevert)"
 	)
 end)
 
@@ -580,7 +580,7 @@ end)
 test("config validation accepts revert keybinding", function()
 	local config = require("gitflow.config")
 	local test_cfg = config.defaults()
-	test_cfg.keybindings.revert = "gV"
+	test_cfg.keybindings.revert = "<leader>gv"
 	local ok = pcall(config.validate, test_cfg)
 	assert_true(ok, "config validation should pass with revert keybinding")
 end)

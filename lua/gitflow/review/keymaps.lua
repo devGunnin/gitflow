@@ -122,8 +122,8 @@ local ENTRIES = {
 	{ surface = "list", group = "drafts", key = "<CR>", desc = "jump",
 		bind = false,
 		run = function() mod("file_list").open_under_cursor() end },
-	{ surface = "list", group = "drafts", key = "dd", keys = { "dd", "x" },
-		desc = "delete", destructive = true,
+	{ surface = "list", group = "drafts", key = "x", desc = "delete",
+		destructive = true,
 		run = function() mod("comments").delete_draft_under_cursor() end },
 	{ surface = "list", group = "drafts", key = "e", desc = "edit/file",
 		run = function() mod("comments").edit_draft_under_cursor() end },
@@ -134,6 +134,10 @@ local ENTRIES = {
 	-- ── session ────────────────────────────────────────────────────────
 	{ surface = "list", group = "session", key = "r", desc = "refresh",
 		run = function() mod("load").refresh() end },
+	-- The affordance that reveals every other key: never elided.
+	{ surface = "both", group = "session", key = "?", desc = "help",
+		always = true,
+		run = function() M.open_help() end },
 	{ surface = "list", group = "session", key = "q", desc = "close",
 		essential = true,
 		run = function()
@@ -170,10 +174,35 @@ function M.for_surface(surface)
 				views = entry.group and { entry.group } or nil,
 				essential = entry.essential,
 				destructive = entry.destructive,
+				always = entry.always,
 			}
 		end
 	end
 	return out
+end
+
+---The `?` overlay: the same legend the file list draws, in a buffer that
+---scrolls — review mode has more keys than any hint bar can hold.
+function M.open_help()
+	local sections = {}
+	for _, group in ipairs(M.GROUPS) do
+		local rows = {}
+		for _, hint in ipairs(M.hints_for_group(group.id)) do
+			rows[#rows + 1] = { key = hint[1], desc = hint[2] }
+		end
+		sections[#sections + 1] = { label = group.label, rows = rows }
+	end
+	local session = {}
+	for _, hint in ipairs(M.hints_for_group(M.SESSION_GROUP)) do
+		session[#session + 1] = { key = hint[1], desc = hint[2] }
+	end
+	sections[#sections + 1] = { label = "SESSION", rows = session }
+
+	require("gitflow.ui.help").open(require("gitflow.config").get(), {
+		title = "Gitflow Review",
+		sections = sections,
+		note = "Remap these: panel_keybindings.review_files / review_diff",
+	})
 end
 
 ---Advertised `{ key, desc }` pairs for one legend group, across both

@@ -33,7 +33,7 @@ local P = panel.new({
 	loading = "Loading commits…",
 	state = M.state,
 	keymaps = {
-		{ key = "<CR>", desc = "select", run = function()
+		{ key = "<CR>", desc = "select", essential = true, run = function()
 			M.select_under_cursor()
 		end },
 		{ key = "1-9", keys = JUMP_KEYS, desc = "jump", run = function(key)
@@ -42,13 +42,13 @@ local P = panel.new({
 		{ key = "S", desc = "soft reset", run = function()
 			M.reset_under_cursor("soft")
 		end },
-		{ key = "H", desc = "hard reset", run = function()
+		{ key = "H", desc = "hard reset", destructive = true, run = function()
 			M.reset_under_cursor("hard")
 		end },
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

@@ -43,10 +43,18 @@ M.state = {
 }
 
 ---@type table<string, string>  action key -> rebase action
+-- `r` is refresh in every gitflow panel, so reword takes `w` here rather
+-- than git's own todo mnemonic. The rest keep git's letters.
 local ACTION_KEYS = {
-	p = "pick", r = "reword", e = "edit",
+	p = "pick", w = "reword", e = "edit",
 	s = "squash", f = "fixup", d = "drop",
 }
+
+---@type table<string, boolean>
+local VALID_ACTIONS = {}
+for _, action in pairs(ACTION_KEYS) do
+	VALID_ACTIONS[action] = true
+end
 
 local P = panel.new({
 	name = "rebase",
@@ -72,9 +80,16 @@ local P = panel.new({
 			essential = true, run = function()
 				M.select_base_branch()
 			end },
-		{ key = "p/r/e/s/f/d", keys = { "p", "r", "e", "s", "f", "d" },
+		{ key = "p/w/e/s/f", keys = { "p", "w", "e", "s", "f" },
 			desc = "action", views = { "todo" }, run = function(key)
 				M.set_action(ACTION_KEYS[key])
+			end },
+		-- Split off `d` so the cross-panel rule holds: `d` is a delete verb
+		-- everywhere. No confirm — this only marks a row in a plan that `X
+		-- execute` confirms before it touches the repository, and `p` undoes it.
+		{ key = "d", desc = "drop", views = { "todo" }, destructive = true,
+			run = function()
+				M.set_action("drop")
 			end },
 		{ key = "J/K", keys = { "J", "K" }, desc = "move", views = { "todo" },
 			run = function(key)
@@ -84,8 +99,10 @@ local P = panel.new({
 					M.move_up()
 				end
 			end },
+		-- The panel's primary verb AND irreversible: kept at every width,
+		-- drawn in the destructive colour, still confirm-gated.
 		{ key = "X", desc = "execute", views = { "todo", "normal" },
-			essential = true, run = function()
+			essential = true, destructive = true, run = function()
 				M.execute()
 			end },
 		{ key = "i", desc = "interactive", views = { "normal" }, run = function()
@@ -97,6 +114,9 @@ local P = panel.new({
 			end },
 		{ key = "b", desc = "base", views = { "todo", "normal" }, run = function()
 			M.show_base_picker()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
 		end },
 		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
@@ -787,8 +807,10 @@ function M.cycle_action()
 end
 
 ---Set a specific action on the commit under the cursor.
----@param action string
+---@param action string  one of ACTION_KEYS' values
 function M.set_action(action)
+	-- A todo line the executor cannot read is worse than a refused keystroke.
+	assert(VALID_ACTIONS[action], ("unknown rebase action %q"):format(tostring(action)))
 	if M.state.stage ~= "todo" then
 		return
 	end

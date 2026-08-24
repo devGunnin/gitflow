@@ -44,7 +44,8 @@ local P = panel.new({
 			run = function()
 			M.create_branch()
 		end },
-		{ key = "d", desc = "delete", views = { "list" }, run = function()
+		{ key = "d", desc = "delete", views = { "list" }, destructive = true,
+			run = function()
 			M.delete_under_cursor(false)
 		end },
 		{ key = "D", desc = "force delete", views = { "list" }, destructive = true,
@@ -57,13 +58,15 @@ local P = panel.new({
 		{ key = "u", desc = "update", views = { "list" }, run = function()
 			M.update_under_cursor()
 		end },
-		{ key = "r", desc = "rename", views = { "list" }, run = function()
+		-- Not `M`: that is a vim motion, and the PR panel's merge family
+		-- claims it for auto-merge, which is destructive.
+		{ key = "e", desc = "rename", views = { "list" }, run = function()
 			M.rename_under_cursor()
 		end },
 		{ key = ".", desc = "current", views = { "list" }, run = function()
 			M.jump_to_current()
 		end },
-		{ key = "R", desc = "refresh", run = function()
+		{ key = "r", desc = "refresh", run = function()
 			M.refresh_with_fetch()
 		end },
 		{ key = "f", desc = "fetch", run = function()
@@ -549,7 +552,7 @@ function M.refresh()
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			P:render_error("Could not list branches", {
-				detail = err, hint = "R retries", view = "list",
+				detail = err, hint = "r retries", view = "list",
 			})
 			return
 		end
@@ -566,7 +569,7 @@ function M.refresh_graph()
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			P:render_error("Could not build the branch graph", {
-				detail = err, hint = "R retries", view = "graph",
+				detail = err, hint = "r retries", view = "graph",
 			})
 			return
 		end
@@ -585,7 +588,7 @@ local function fetch_then_refresh(show_success_message)
 			utils.notify(err, vim.log.levels.ERROR)
 			if P:is_open() then
 				P:render_error("Fetch failed", {
-					detail = err, hint = "R retries", view = M.state.view_mode,
+					detail = err, hint = "r retries", view = M.state.view_mode,
 				})
 			end
 			return
@@ -824,7 +827,13 @@ function M.delete_under_cursor(force)
 
 		local is_merged = merged and merged[entry.name] == true
 		if is_merged then
-			run_delete(false)
+			local confirmed = ui.input.confirm(
+				("Delete merged branch '%s'?"):format(entry.name),
+				{ choices = { "&Delete", "&Cancel" }, default_choice = 2 }
+			)
+			if confirmed then
+				run_delete(false)
+			end
 			return
 		end
 

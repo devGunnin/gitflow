@@ -36,7 +36,7 @@ local P = panel.new({
 	state = M.state,
 	entry_maps = { "line_context" },
 	keymaps = {
-		{ key = "<CR>", desc = "open", run = function()
+		{ key = "<CR>", desc = "open", essential = true, run = function()
 			M.open_context_under_cursor()
 		end },
 		{ key = "r", desc = "refresh", run = function()
@@ -58,7 +58,7 @@ local P = panel.new({
 		{ key = "0", desc = "all", run = function()
 			filter_to(nil)
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},

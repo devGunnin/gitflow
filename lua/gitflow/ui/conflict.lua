@@ -6,7 +6,7 @@
 --- resolution actions are c-prefixed so plain vim motions (o, a, e, b, t, r,
 --- i, …) keep working while you hand-edit a hunk:
 ---   co ours · ct theirs · cb both · cB base · ca all · ce edit
----   cx reset file to conflicted state · ]c/[c jump · cr refresh
+---   cD reset file to conflicted state · ]c/[c jump · cr refresh
 ---   q save & close
 
 local ui = require("gitflow.ui")
@@ -15,6 +15,8 @@ local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
+local panel = require("gitflow.ui.panel")
+local help = require("gitflow.ui.help")
 
 ---@class GitflowConflictViewState
 ---@field active boolean
@@ -116,8 +118,86 @@ local function hunk_index_for_line(line)
 	return nil
 end
 
+-- ── keys ───────────────────────────────────────────────────────────────
+-- The resolver's only key registry: the winbar and the `c?` overlay are both
+-- generated from it. Resolution actions are c-prefixed (mnemonic: conflict)
+-- so single-key vim motions (o, a, e, b, t, r, i, counts …) still work while
+-- hand-editing a hunk — which is also why `?` itself is not bound here.
+---@type GitflowPanelKeymap[]
+local KEYMAPS = {
+	{ key = "co", desc = "ours", run = function() M.resolve_current("local") end },
+	{ key = "ct", desc = "theirs", run = function() M.resolve_current("remote") end },
+	{ key = "cb", desc = "both", run = function() M.resolve_both() end },
+	{ key = "cB", desc = "base", hint = false,
+		run = function() M.resolve_current("base") end },
+	{ key = "ca", desc = "all", run = function() M.resolve_all_from_prompt() end },
+	{ key = "ce", desc = "edit", run = function() M.edit_current_hunk() end },
+	{ key = "cr", desc = "refresh", hint = false, run = function() M.refresh() end },
+	-- Not `cx`: that opens this resolver from the status panel, and the same
+	-- chord must not also be the key that throws the work in it away.
+	{ key = "cD", desc = "reset", destructive = true,
+		run = function() M.reset_file() end },
+	{ key = "]c/[c", keys = { "]c", "[c" }, desc = "jump",
+		run = function(key)
+			M.jump(key == "]c" and 1 or -1)
+		end },
+	{ key = "q", desc = "save&close", essential = true,
+		run = function() M.close() end },
+	-- The affordance that reveals every other key: never elided.
+	{ key = "c?", desc = "help", always = true, run = function() M.open_help() end },
+}
+
+panel.register_surface({
+	name = "conflict_resolver",
+	title = "Gitflow Conflict Resolver",
+	keymaps = KEYMAPS,
+})
+
+---The registry with the user's `panel_keybindings.conflict_resolver` applied.
+---Binding, the winbar and the `c?` overlay all read this, so an override can
+---never move a key without moving what advertises it.
+---@return GitflowPanelKeymap[]
+local function keymaps()
+	return panel.surface_keymaps(
+		"conflict_resolver", M.state.cfg or require("gitflow.config").get()
+	)
+end
+
+---The `c?` overlay, generated from the registry — the winbar shows the common
+---keys, this shows all of them.
+function M.open_help()
+	local rows = {}
+	for _, entry in ipairs(keymaps()) do
+		if entry.desc then
+			rows[#rows + 1] = {
+				key = entry.key, desc = entry.desc, destructive = entry.destructive,
+			}
+		end
+	end
+	help.open(M.state.cfg or require("gitflow.config").get(), {
+		title = "Gitflow Conflict Resolver",
+		sections = { { label = nil, rows = rows } },
+		note = "Remap these: panel_keybindings.conflict_resolver",
+	})
+end
+
 -- ── styling ────────────────────────────────────────────────────────────
 ---@param winid integer|nil
+---The winbar's key chrome, generated from KEYMAPS. `hint = false` entries
+---(the aliases) stay out so the bar keeps its length; `c?` shows the rest.
+---@return string
+local function hint_chrome()
+	local parts = {}
+	for _, entry in ipairs(keymaps()) do
+		if entry.desc and entry.hint ~= false then
+			parts[#parts + 1] = ("%%#GitflowHintKey#%s%%#GitflowHintText# %s"):format(
+				entry.key, entry.desc
+			)
+		end
+	end
+	return table.concat(parts, "  ") .. " "
+end
+
 local function set_winbar(winid)
 	if not winid or not vim.api.nvim_win_is_valid(winid) then
 		return
@@ -134,14 +214,7 @@ local function set_winbar(winid)
 		bullet,
 		"%#GitflowHintText#" .. status,
 		bullet,
-		"%#GitflowHintKey#co%#GitflowHintText# ours  ",
-		"%#GitflowHintKey#ct%#GitflowHintText# theirs  ",
-		"%#GitflowHintKey#cb%#GitflowHintText# both  ",
-		"%#GitflowHintKey#ca%#GitflowHintText# all  ",
-		"%#GitflowHintKey#ce%#GitflowHintText# edit  ",
-		"%#GitflowHintKey#cx%#GitflowHintText# reset  ",
-		"%#GitflowHintKey#]c/[c%#GitflowHintText# jump  ",
-		"%#GitflowHintKey#q%#GitflowHintText# save&close ",
+		hint_chrome(),
 	})
 	pcall(vim.api.nvim_set_option_value, "winbar", bar, { win = winid })
 end
@@ -582,23 +655,14 @@ end
 
 ---@param bufnr integer
 local function set_keymaps(bufnr)
-	local function map(lhs, fn)
-		vim.keymap.set("n", lhs, fn, { buffer = bufnr, silent = true, nowait = true })
+	panel.warn_overrides("conflict_resolver", M.state.cfg)
+	for _, entry in ipairs(keymaps()) do
+		for _, binding in ipairs(panel.bindings(entry)) do
+			vim.keymap.set("n", binding.key, function()
+				entry.run(binding.run_key)
+			end, { buffer = bufnr, silent = true, nowait = true })
+		end
 	end
-	-- Resolution actions are c-prefixed (mnemonic: conflict) so single-key
-	-- vim motions (o, a, e, b, t, r, i, counts …) still work while
-	-- hand-editing a hunk.
-	map("co", function() M.resolve_current("local") end)
-	map("ct", function() M.resolve_current("remote") end)
-	map("cB", function() M.resolve_current("base") end)
-	map("cb", function() M.resolve_both() end)
-	map("ca", function() M.resolve_all_from_prompt() end)
-	map("ce", function() M.edit_current_hunk() end)
-	map("cr", function() M.refresh() end)
-	map("cx", function() M.reset_file() end)
-	map("]c", function() M.jump(1) end)
-	map("[c", function() M.jump(-1) end)
-	map("q", function() M.close() end)
 end
 
 ---@param path string
@@ -625,6 +689,8 @@ local function open_single_pane(path, lines, callbacks)
 	pcall(vim.api.nvim_set_option_value, "wrap", false, { win = merged_winid })
 	pcall(vim.api.nvim_set_option_value, "cursorline", true, { win = merged_winid })
 
+	-- Before the binds: they resolve `panel_keybindings` against it.
+	M.state.cfg = callbacks.cfg
 	set_keymaps(merged_bufnr)
 
 	-- Plain `:q`, `<C-w>c` or a layout change must not drop hand-edited hunks.
@@ -640,7 +706,6 @@ local function open_single_pane(path, lines, callbacks)
 	generation = generation + 1
 	M.state.active = true
 	M.state.path = path
-	M.state.cfg = callbacks.cfg
 	M.state.prev_winid = prev_winid
 	M.state.prev_tabid = prev_tabid
 	M.state.tabid = tabid

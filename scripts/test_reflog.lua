@@ -127,11 +127,11 @@ end)
 
 -- ── Config keybinding ──────────────────────────────────────────────
 
-test("reflog keybinding default is gF", function()
+test("reflog keybinding default is <leader>gF", function()
 	local defaults = require("gitflow.config").defaults()
 	assert_equals(
 		defaults.keybindings.reflog,
-		"gF",
+		"<leader>gF",
 		"default reflog keybinding"
 	)
 end)

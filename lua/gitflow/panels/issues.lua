@@ -161,7 +161,7 @@ local P = panel.new({
 		{ key = "Q", desc = "search", views = { "list" }, run = function()
 			M.search()
 		end },
-		{ key = "X", desc = "clear", views = { "list" }, run = function()
+		{ key = "F", desc = "clear filters", views = { "list" }, run = function()
 			M.clear_filters()
 		end },
 		{ key = "s", desc = "sort", views = { "list" }, run = function()
@@ -178,15 +178,19 @@ local P = panel.new({
 		end },
 		-- o/O (not v/V): v/V are vim's visual/visual-line mode, needed to
 		-- highlight and yank panel text (#428).
-		{ key = "o/O/D", keys = { "o", "O", "D" }, desc = "views",
+		{ key = "o/O", keys = { "o", "O" }, desc = "views",
 			views = { "list" }, run = function(key)
 				if key == "o" then
 					M.switch_view()
-				elseif key == "O" then
-					M.save_view()
 				else
-					M.delete_view()
+					M.save_view()
 				end
+			end },
+		-- Declared apart from o/O so `D` carries the destructive tier it has
+		-- in every other panel.
+		{ key = "D", desc = "del view", views = { "list" }, destructive = true,
+			run = function()
+				M.delete_view()
 			end },
 		{ key = "B", desc = "branch", views = { "list" }, run = function()
 			M.create_branch_under_cursor()
@@ -1250,6 +1254,14 @@ function M.delete_view()
 		items = view_items(saved),
 		multi_select = false,
 		on_submit = function(selected)
+			local confirmed = input.confirm(
+				("Delete saved issue view '%s'?"):format(selected[1]),
+				{ choices = { "&Delete", "&Cancel" }, default_choice = 2 }
+			)
+			if not confirmed then
+				focus_panel()
+				return
+			end
 			local remaining, removed = views_store.remove(saved, selected[1])
 			if not removed then
 				focus_panel()
