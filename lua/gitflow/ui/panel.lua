@@ -404,10 +404,24 @@ function Panel:paint(B)
 	return true
 end
 
+---Drop the line->entry map a panel builds while rendering its list.
+---
+---A state render collapses the buffer, so a map built for the previous
+---content would resolve a keypress on a hint or state line to an entry that
+---is no longer on screen -- on the status panel, to `X discard changes`.
+---`state.line_entries` is the base's name for that map: every adopting panel
+---that keeps one uses it.
+function Panel:clear_line_entries()
+	if type(self.state.line_entries) == "table" then
+		self.state.line_entries = {}
+	end
+end
+
 ---Paint the panel's loading state. The one way a gitflow panel says "working".
 ---@param label string|nil
 ---@param opts table|nil  { detail = string }
 function Panel:render_loading(label, opts)
+	self:clear_line_entries()
 	local B = self:begin_render()
 	components.loading(B, label or self.loading or "Loading…", opts)
 	self:paint(B)
@@ -419,6 +433,7 @@ end
 ---@param opts table|nil  { detail = string, hint = string, view = string }
 function Panel:render_error(message, opts)
 	opts = opts or {}
+	self:clear_line_entries()
 	local B = self:begin_render()
 	components.error_state(B, message, opts)
 	self:push_hints(B, opts.view)

@@ -45,7 +45,6 @@ local P = panel.new({
 
 local function render_loading()
 	local short_path = vim.fn.fnamemodify(M.state.filepath or "", ":~:.")
-	M.state.line_entries = {}
 	P:render_loading("Computing blame…", {
 		detail = short_path ~= "" and short_path or nil,
 	})
@@ -53,7 +52,6 @@ end
 
 ---@param message string
 local function render_error(message)
-	M.state.line_entries = {}
 	P:render_error("Could not compute blame", {
 		detail = message,
 		hint = "Press r to retry \u{b7} q to close",

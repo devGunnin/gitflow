@@ -143,13 +143,11 @@ function M.refresh()
 
 	local request_id = P:next_request()
 	P:render_loading("Loading labels…")
-	M.state.line_entries = {}
 	gh_labels.list({}, function(err, labels)
 		if not P:is_active(request_id) then
 			return
 		end
 		if err then
-			M.state.line_entries = {}
 			P:render_error("Failed to load labels", {
 				detail = err,
 				hint = "Press r to retry \u{b7} q to close",

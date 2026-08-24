@@ -108,13 +108,11 @@ local function reset_auto_continue_prompt()
 end
 
 local function render_loading()
-	M.state.line_entries = {}
 	P:render_loading("Scanning for conflicts…")
 end
 
 ---@param message string
 local function render_error(message)
-	M.state.line_entries = {}
 	P:render_error("Could not list conflicts", {
 		detail = message,
 		hint = "Press r to retry \u{b7} q to close",

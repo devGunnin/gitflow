@@ -50,6 +50,7 @@ local panel = require("gitflow.ui.panel")
 local ui_buffer = require("gitflow.ui.buffer")
 local ui_window = require("gitflow.ui.window")
 local render = require("gitflow.ui.render")
+local utils = require("gitflow.utils")
 
 -- Every panel that routes through the base, with the module-local `P` its
 -- lifecycle lives on. The panel modules keep `P` private (it is not API), so
@@ -253,6 +254,113 @@ for _, name in ipairs(LIFECYCLE_PANELS) do
 		)
 	end)
 end
+
+-- ── a state render drops the line→entry map ──────────────────────────
+-- A loading or error render collapses the buffer. The map built for the
+-- previous, longer content must not survive it: line 8 of a 57-line log is a
+-- commit, line 8 of the 8-line error state is the hint bar — and on status
+-- the same map is what `X discard changes` and `p push` act on.
+
+local MAPPED_PANELS = {
+	"status", "log", "branch", "blame", "stash", "tag", "reflog", "reset",
+	"revert", "conflict", "worktree",
+}
+
+for _, name in ipairs(MAPPED_PANELS) do
+	test(("%s: a state render invalidates the line→entry map"):format(name), function()
+		local modname = "gitflow.panels." .. name
+		local mod = require(modname)
+		local P = panel_object(modname)
+
+		mod.open(cfg, {})
+		P.state.line_entries = { [1] = { sentinel = true } }
+		P:render_loading("Reloading…")
+		assert_equals(
+			next(P.state.line_entries), nil,
+			("%s kept its line→entry map across the loading state"):format(name)
+		)
+
+		P.state.line_entries = { [1] = { sentinel = true } }
+		P:render_error("Boom", { hint = "r retries" })
+		assert_equals(
+			next(P.state.line_entries), nil,
+			("%s kept its line→entry map across the error state"):format(name)
+		)
+		mod.close()
+	end)
+end
+
+test("a destructive key resolves to nothing once status drops to its error state", function()
+	local mod = require("gitflow.panels.status")
+	local P = panel_object("gitflow.panels.status")
+	local ui = require("gitflow.ui")
+	local git_status = require("gitflow.git.status")
+
+	local real_confirm, real_revert = ui.input.confirm, git_status.revert_file
+	local real_notify = utils.notify
+	local confirmed, reverted, notified = {}, {}, {}
+	ui.input.confirm = function(message)
+		confirmed[#confirmed + 1] = tostring(message)
+		return true
+	end
+	git_status.revert_file = function(path)
+		reverted[#reverted + 1] = tostring(path)
+	end
+	utils.notify = function(message)
+		notified[#notified + 1] = tostring(message)
+	end
+
+	local ok, err = pcall(function()
+		mod.open(cfg, {})
+		vim.wait(2000, function()
+			return vim.api.nvim_buf_line_count(P.state.bufnr) > 3
+		end, 10)
+
+		-- Every line of the rendered list mapped to a file, as a full render
+		-- leaves it. Seeded rather than harvested so the case does not need
+		-- the test repo to have a dirty worktree.
+		local seeded = {}
+		for line = 1, vim.api.nvim_buf_line_count(P.state.bufnr) do
+			seeded[line] = {
+				kind = "file",
+				entry = { path = "seeded-under-cursor.txt", untracked = false },
+				diff_staged = false,
+			}
+		end
+		P.state.line_entries = seeded
+
+		P:render_error("Could not read repository status", { hint = "r retries" })
+
+		local discard
+		for _, entry in ipairs(P.keymaps) do
+			if entry.key == "X" then
+				discard = entry
+			end
+		end
+		assert_true(discard ~= nil, "status should still bind X")
+
+		vim.api.nvim_set_current_win(P.state.winid)
+		local last_line = vim.api.nvim_buf_line_count(P.state.bufnr)
+		assert_true(
+			seeded[last_line] ~= nil,
+			"the line the cursor lands on must have been mapped before the error"
+		)
+		vim.api.nvim_win_set_cursor(P.state.winid, { last_line, 0 })
+		discard.run("X")
+
+		assert_equals(#confirmed, 0, "X must not offer to discard a stale entry")
+		assert_equals(#reverted, 0, "X must not revert a stale entry")
+		assert_true(
+			table.concat(notified, "\n"):find("No file selected", 1, true) ~= nil,
+			"X on an error state should say there is no file selected"
+		)
+	end)
+
+	ui.input.confirm, git_status.revert_file = real_confirm, real_revert
+	utils.notify = real_notify
+	mod.close()
+	assert_true(ok, tostring(err))
+end)
 
 -- ── loading / empty / error states go through components ──────────────
 
