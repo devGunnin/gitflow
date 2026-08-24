@@ -47,6 +47,11 @@ jobs:
 
       - name: Run stage smoke tests
         if: always()
+        env:
+          # scripts/test_gh_live_contract.lua needs a real, authenticated gh
+          # to run instead of skipping; github.token is read-only but
+          # sufficient for `gh label list`, and works on fork PRs too.
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Every scripts/test_*.lua runs automatically — a hardcoded allowlist
           # here let two scripts rot out of CI silently before (#403, #416).
