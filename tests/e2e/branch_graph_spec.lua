@@ -387,7 +387,10 @@ T.run_suite("Branch Graph Visualization", {
 			local has_local_section = false
 			local has_graph_header = false
 			for _, line in ipairs(lines) do
-				if line == "Local" then
+				-- Standard section header: the single-column edge indent, an
+				-- optional icon, then the title -- not any line ending in
+				-- "Local" (a branch named feature/Local sits on a gutter).
+				if line:match("^ %S*%s*Local$") then
 					has_local_section = true
 				end
 				if line:find("Flow", 1, true) and line:find("Commit", 1, true) then

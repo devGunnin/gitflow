@@ -42,6 +42,11 @@ local function open_panel(cfg, state)
 				state.panel_window = nil
 			end,
 		})
+		if not state.panel_window then
+			-- open_float said why; leave no orphaned buffer behind.
+			ui.buffer.teardown(bufnr)
+			state.panel_buffer = nil
+		end
 		return
 	end
 
