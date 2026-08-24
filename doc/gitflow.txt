@@ -331,6 +331,7 @@ Issue list ~
     <CR>    View issue under cursor (list mode)
     c       Create new issue
     C       Comment on issue
+    E       Edit issue title/body
     x       Close issue
     L       Edit labels
     A       Edit assignees
@@ -340,8 +341,8 @@ Issue list ~
     S       Toggle sort direction
     G       Cycle grouping (none/milestone/assignee/label)
     <Tab>   Fold/unfold group under cursor (list mode, when grouped)
-    v       Switch to a saved view
-    V       Save current filters/sort as a named view
+    o       Switch to a saved view
+    O       Save current filters/sort as a named view
     D       Delete a saved view
     B       Create a branch from the selected issue
     r       Refresh
