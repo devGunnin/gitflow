@@ -1177,6 +1177,33 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		)
 	end,
 
+	["log's max_lines caps the raw input before formatting runs"] = function()
+		-- The fixture's raw log is 6 tab-separated lines; capping to the
+		-- last 2 must drop the earlier jobs entirely, not just trim the
+		-- already-formatted output — proves the cap bounds format cost too.
+		local lines_result, err_result
+		T.wait_async(function(done)
+			gh_actions.log(12345, { max_lines = 2 }, function(err, lines)
+				err_result, lines_result = err, lines
+				done()
+			end)
+		end)
+		T.assert_true(err_result == nil, "log should not error: " .. tostring(err_result))
+		local joined = table.concat(lines_result, "\n")
+		T.assert_true(
+			joined:find("Expected indentation to use tabs", 1, true) ~= nil,
+			"the capped tail should keep the last raw line"
+		)
+		T.assert_true(
+			joined:find("PASS test_one", 1, true) == nil,
+			"a raw line dropped by the cap must never reach formatting"
+		)
+		T.assert_true(
+			joined:find("Cloning into 'repo'", 1, true) == nil,
+			"the earlier job's lines must be dropped by the cap, not just trimmed"
+		)
+	end,
+
 	["job_log fetches a single job's log without a job-name header"] = function()
 		local lines_result, err_result
 		T.wait_async(function(done)

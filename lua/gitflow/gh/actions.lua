@@ -467,18 +467,28 @@ end
 
 ---Format raw tab-separated `gh run view --log[-failed]` text into readable,
 ---ANSI-stripped lines with a rule header whenever the job/step changes.
+---`max_raw_lines`, when given, keeps only the tail of the *raw* input before
+---formatting — formatting is linear, so a caller with a render cap should
+---bound the input rather than format everything and discard most of it.
 ---@param log_output string
----@param opts { show_job: boolean }|nil
+---@param opts { show_job: boolean, max_raw_lines: integer|nil }|nil
 ---@return string[]
 local function format_log_lines(log_output, opts)
 	local show_job = opts == nil or opts.show_job ~= false
+	local max_raw_lines = opts and opts.max_raw_lines
 	local lines = {}
 	local last_job, last_step = nil, nil
 
-	for _, raw_line in ipairs(vim.split(
+	local raw_lines = vim.split(
 		log_output or "", "\n", { plain = true, trimempty = true }
-	)) do
-		local job, step, message = split_log_line(raw_line)
+	)
+	local start_index = 1
+	if max_raw_lines and #raw_lines > max_raw_lines then
+		start_index = #raw_lines - max_raw_lines + 1
+	end
+
+	for index = start_index, #raw_lines do
+		local job, step, message = split_log_line(raw_lines[index])
 		if job and (job ~= last_job or step ~= last_step) then
 			local header = show_job
 				and ("── %s / %s "):format(job, step)
@@ -516,9 +526,12 @@ function M.find_first_error_line(lines)
 	return nil
 end
 
+---@class GitflowActionsLogOpts: GitflowGitRunOpts
+---@field max_lines? integer  keep only the formatted tail; bounds format cost too
+
 ---Full run log (every job/step), ANSI-stripped and readable in a buffer.
 ---@param run_id integer|string
----@param opts GitflowGitRunOpts|nil
+---@param opts GitflowActionsLogOpts|nil
 ---@param cb fun(err: string|nil, lines: string[]|nil)
 function M.log(run_id, opts, cb)
 	local ok, message = gh.ensure_prerequisites()
@@ -532,14 +545,16 @@ function M.log(run_id, opts, cb)
 			cb(error_from_result(result, ("view %s --log"):format(run_id)), nil)
 			return
 		end
-		cb(nil, format_log_lines(gh.output(result)))
+		cb(nil, format_log_lines(
+			gh.output(result), { max_raw_lines = opts and opts.max_lines }
+		))
 	end)
 end
 
 ---Single-job log, ANSI-stripped. Step headers only (the job is already fixed).
 ---@param run_id integer|string
 ---@param job_id integer|string
----@param opts GitflowGitRunOpts|nil
+---@param opts GitflowActionsLogOpts|nil
 ---@param cb fun(err: string|nil, lines: string[]|nil)
 function M.job_log(run_id, job_id, opts, cb)
 	local ok, message = gh.ensure_prerequisites()
@@ -561,7 +576,9 @@ function M.job_log(run_id, job_id, opts, cb)
 			)
 			return
 		end
-		cb(nil, format_log_lines(gh.output(result), { show_job = false }))
+		cb(nil, format_log_lines(gh.output(result), {
+			show_job = false, max_raw_lines = opts and opts.max_lines,
+		}))
 	end)
 end
 

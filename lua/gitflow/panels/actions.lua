@@ -66,8 +66,11 @@ local SEPARATORS = ui_render.separators
 local ROW_META_INDENT = SPACING.indent .. SPACING.edge
 
 -- Rendered-line cap for one log. Formatting + painting is linear and
--- blocking (~0.3s for a 100k-line, 8.8MB log), so keep the tail — CI
--- failures land at the end — and say in the buffer what was dropped.
+-- blocking (~0.3s for a 100k-line, 8.8MB log), so this is passed to
+-- gh_actions.log/job_log as max_lines to bound the raw input *before*
+-- formatting runs, not just the paint. The slice below stays as a backstop
+-- for any lines a caller hands us uncapped — CI failures land at the end,
+-- so keep the tail, and say in the buffer what was dropped.
 local MAX_LOG_LINES = 20000
 
 -- Consecutive failed polls that stop a watch. Without a bound a persistent
@@ -862,10 +865,11 @@ local function open_log(run_id, job, title, parent_view)
 		render_log()
 	end
 
+	local log_opts = { max_lines = MAX_LOG_LINES }
 	if job then
-		gh_actions.job_log(run_id, job.id, nil, deliver)
+		gh_actions.job_log(run_id, job.id, log_opts, deliver)
 	else
-		gh_actions.log(run_id, nil, deliver)
+		gh_actions.log(run_id, log_opts, deliver)
 	end
 end
 
