@@ -242,6 +242,9 @@ end
 --- the user has in hand: an in-memory list that is not empty is the newer
 --- truth, and clobbering it would lose unsent comments.
 local function hydrate_drafts(number)
+	-- From here on the in-memory list is the whole truth about this PR's
+	-- drafts, which is what lets the close guard trust its count.
+	state.drafts_hydrated = true
 	if #state.pending_comments > 0 then
 		return 0
 	end
@@ -255,6 +258,13 @@ end
 --- Reload the PR: metadata, changed files, remote threads and cached drafts.
 function M.refresh()
 	if not state.cfg or not state.pr_number then
+		return
+	end
+	-- Which cache file the drafts live in is not known yet, and hydrating
+	-- without it falls through to the blocking `repo_slug()`. Resolve first;
+	-- `start` refreshes once the answer lands.
+	if not state.repo_slug then
+		M.start(state.pr_number)
 		return
 	end
 	local number = state.pr_number

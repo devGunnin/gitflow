@@ -27,9 +27,11 @@ local P = panel.new({
 	filetype = "gitflow-review-files",
 	loading = "Loading changed files…",
 	state = state,
-	-- Three maps, all of them the stale-resolution hazard the base guards:
-	-- a keypress on a collapsed pane must not resolve to a file, folder or
-	-- draft that is no longer on screen.
+	-- Three maps, all of them the stale-resolution hazard: a keypress on a
+	-- collapsed pane must not resolve to a file, folder or draft that is no
+	-- longer on screen. Today `render` clears them before every paint,
+	-- including the loading/empty/error states it draws inline; registering
+	-- them keeps that true if a state ever renders through the base instead.
 	entry_maps = { "file_line_map", "dir_line_map", "draft_line_map" },
 	keymaps = keymaps.for_surface("list"),
 })

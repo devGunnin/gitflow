@@ -230,13 +230,35 @@ function M._on_layout_changed()
 	rstate.notify_info("Review mode closed")
 end
 
-function M.close_with_guard()
+--- Unsent comments are the one thing review mode can lose, so closing says
+--- what is actually at stake — including the two cases a plain count hides:
+--- the disk copy failed to write, and it has not been read back yet.
+---@return string|nil
+local function close_warning()
 	local count = #M.state.pending_comments
+	if count > 0 and M.state.draft_save_error then
+		return ("You have %d pending comment(s) and saving them to disk FAILED:\n"
+			.. "%s\n"
+			.. "Closing loses them. Close the review anyway?")
+			:format(count, M.state.draft_save_error)
+	end
 	if count > 0 then
-		local confirmed = require("gitflow.ui.input").confirm((
-			"You have %d pending comment(s). Cached drafts are kept on disk.\n"
-			.. "Discard the in-memory drafts and close the review?"
-		):format(count), { choices = { "&Yes", "&No" }, default_choice = 2 })
+		return ("You have %d pending comment(s). Cached drafts are kept on disk.\n"
+			.. "Discard the in-memory drafts and close the review?"):format(count)
+	end
+	if M.state.pr_number and not M.state.drafts_hydrated then
+		return "Drafts saved for this PR have not been read back from disk yet, "
+			.. "so whether there are any is still unknown.\n"
+			.. "Close the review anyway?"
+	end
+	return nil
+end
+
+function M.close_with_guard()
+	local warning = close_warning()
+	if warning then
+		local confirmed = require("gitflow.ui.input").confirm(warning,
+			{ choices = { "&Yes", "&No" }, default_choice = 2 })
 		if not confirmed then
 			return
 		end

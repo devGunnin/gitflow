@@ -55,6 +55,8 @@ local cache = require("gitflow.review.cache")
 ---@field pr_head string|nil
 ---@field pr_base string|nil
 ---@field repo_slug string|nil
+---@field draft_save_error string|nil  set while the last cache write failed
+---@field drafts_hydrated boolean  the on-disk drafts have been read back
 ---@field tabpage integer|nil
 ---@field bufnr integer|nil  file-list buffer (owned by ui/panel.lua)
 ---@field winid integer|nil  file-list window (owned by ui/panel.lua)
@@ -89,6 +91,10 @@ M.state = {
 	pr_head_sha = nil,
 	pr_base = nil,
 	repo_slug = nil,
+	-- Set to the reason while the last draft write failed, cleared by the
+	-- next write that lands. Read by the close prompt.
+	draft_save_error = nil,
+	drafts_hydrated = false,
 	tabpage = nil,
 	diff_winid = nil,
 	files = {},
@@ -117,8 +123,8 @@ M.state = {
 	-- When set, the review is scoped to a git commit range instead of the
 	-- whole PR diff: { base = <rev>, head = <rev>, label = <string> }.
 	commit_scope = nil,
-	-- Rendered file-list line → what it points at. Registered as the panel's
-	-- `entry_maps`, so a collapsing state render can never leave one behind.
+	-- Rendered file-list line → what it points at. `file_list.render` empties
+	-- all three before each paint, so no collapsed row can still resolve.
 	file_line_map = {},
 	dir_line_map = {},
 	draft_line_map = {},
@@ -144,6 +150,8 @@ function M.reset()
 	s.pr_head_sha = nil
 	s.pr_base = nil
 	s.repo_slug = nil
+	s.draft_save_error = nil
+	s.drafts_hydrated = false
 	s.tabpage = nil
 	s.diff_winid = nil
 	s.files = {}
@@ -226,14 +234,31 @@ end
 --- Write the in-memory drafts to the on-disk cache. Every mutation of
 --- `pending_comments` goes through here: the cache is the only thing that
 --- survives a crashed editor, so a draft that never reaches it is lost work.
+---
+--- A write that fails (read-only data dir, full disk) is therefore reported —
+--- once per run of failures, since this runs on every keystroke-sized edit —
+--- and recorded in `draft_save_error` so the close prompt stops telling the
+--- reviewer their drafts are safely on disk.
 function M.persist_pending()
 	if not M.state.pr_number then
 		return
 	end
-	cache.save(M.state.pr_number, {
+	local ok, err = cache.save(M.state.pr_number, {
 		pr_number = M.state.pr_number,
 		comments = M.state.pending_comments,
 	}, M.state.repo_slug)
+	if ok then
+		M.state.draft_save_error = nil
+		return
+	end
+
+	local reason = err or "unknown error"
+	if not M.state.draft_save_error then
+		M.notify_error(("Could not save review drafts: %s\n"
+			.. "They exist only in this editor session until a save succeeds.")
+			:format(reason))
+	end
+	M.state.draft_save_error = reason
 end
 
 --- Does the PR diff for `path` contain `line` on the given side?

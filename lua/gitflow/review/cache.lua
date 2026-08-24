@@ -114,13 +114,20 @@ function M.repo_slug()
 	return memoize(cwd, compute_repo_slug())
 end
 
+--- Callbacks waiting on the resolve that is currently out, or nil when none
+--- is. Without this, every caller before the first answer spawns its own
+--- `gh repo view`.
+local pending_resolves = nil
+
 --- Resolve the slug without blocking the editor.
 ---
 --- `gh repo view` is a network round-trip, so opening review mode must not
---- wait on it. The fallback order is the same as `repo_slug` and both share
---- one memo, so a draft written through the blocking path and one written
---- after this lands can never disagree about where the cache file is — which
---- would silently split a reviewer's drafts across two files.
+--- wait on it. Same fallback order and same memo as `repo_slug`, so both name
+--- the same cache file for the same answers; they can still differ if gh
+--- succeeds for one and fails for the other (flaky network, a token expiring
+--- between the two), and the later answer then takes the memo. Nothing is
+--- lost when that happens — `hydrate_drafts` refuses to clobber drafts held
+--- in memory — but the older slug's file is left behind.
 ---@param cb fun(slug: string)
 function M.resolve_repo_slug(cb)
 	local cwd = vim.fn.getcwd()
@@ -129,21 +136,55 @@ function M.resolve_repo_slug(cb)
 		cb(slug_cache.slug)
 		return
 	end
+	if pending_resolves then
+		pending_resolves[#pending_resolves + 1] = cb
+		return
+	end
+	pending_resolves = { cb }
+
+	local settled = false
+	---@param slug string
+	local function settle(slug)
+		if settled then
+			return
+		end
+		settled = true
+		local waiters = pending_resolves or {}
+		pending_resolves = nil
+		memoize(cwd, slug)
+		for _, waiter in ipairs(waiters) do
+			waiter(slug)
+		end
+	end
 
 	local git = require("gitflow.git")
 	local gh = require("gitflow.gh")
-	gh.run(GH_SLUG_ARGS, {}, function(gh_result)
-		local slug = gh_result.code == 0 and first_line_slug(gh_result.stdout) or nil
-		if slug then
-			cb(memoize(cwd, slug))
-			return
-		end
-		git.git(GIT_SLUG_ARGS, {}, function(git_result)
+
+	-- `vim.system` raises rather than answers when the executable is missing,
+	-- and the caller restores the reviewer's drafts from this callback: a
+	-- machine without gh must still get a slug, not an exception.
+	local function fall_back_to_git()
+		local ok = pcall(git.git, GIT_SLUG_ARGS, {}, function(git_result)
 			local fallback = git_result.code == 0
 				and first_line_slug(git_result.stdout) or nil
-			cb(memoize(cwd, fallback or "unknown"))
+			settle(fallback or "unknown")
 		end)
+		if not ok then
+			settle("unknown")
+		end
+	end
+
+	local ok = pcall(gh.run, GH_SLUG_ARGS, {}, function(gh_result)
+		local slug = gh_result.code == 0 and first_line_slug(gh_result.stdout) or nil
+		if slug then
+			settle(slug)
+			return
+		end
+		fall_back_to_git()
 	end)
+	if not ok then
+		fall_back_to_git()
+	end
 end
 
 ---@param pr_number integer|string
@@ -202,12 +243,22 @@ function M.save(pr_number, state, repo_slug)
 		updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 	}
 	local encoded = vim.json.encode(payload)
-	local file = io.open(path, "w")
+	local file, open_err = io.open(path, "w")
 	if not file then
-		return false, ("could not open %s for writing"):format(path)
+		return false, ("could not open %s for writing: %s"):format(
+			path, open_err or "unknown error")
 	end
-	file:write(encoded)
-	file:close()
+	-- Buffered: a full disk usually surfaces at close, not at write.
+	local ok, write_err = file:write(encoded)
+	if ok then
+		ok, write_err = file:close()
+	else
+		file:close()
+	end
+	if not ok then
+		return false, ("could not write %s: %s"):format(
+			path, write_err or "unknown error")
+	end
 	return true
 end
 

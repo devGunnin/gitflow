@@ -44,11 +44,19 @@ local P = panel.new({
 	keymaps = {
 		{ key = "]f/[f", keys = { "]f", "[f" }, desc = "files",
 			essential = true, run = function(key)
-				M.jump(M.state.file_markers, key == "]f" and 1 or -1)
+				if key == "]f" then
+					M.next_file()
+				else
+					M.prev_file()
+				end
 			end },
 		{ key = "]c/[c", keys = { "]c", "[c" }, desc = "hunks",
 			run = function(key)
-				M.jump(M.state.hunk_markers, key == "]c" and 1 or -1)
+				if key == "]c" then
+					M.next_hunk()
+				else
+					M.prev_hunk()
+				end
 			end },
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
@@ -89,7 +97,7 @@ end
 ---Jump to the next/prev marker in a list, wrapping around.
 ---@param markers table[]
 ---@param direction 1|-1
-function M.jump(markers, direction)
+local function jump_to_marker(markers, direction)
 	if not P:has_window() then
 		return
 	end
@@ -122,19 +130,19 @@ function M.jump(markers, direction)
 end
 
 function M.next_file()
-	M.jump(M.state.file_markers, 1)
+	jump_to_marker(M.state.file_markers, 1)
 end
 
 function M.prev_file()
-	M.jump(M.state.file_markers, -1)
+	jump_to_marker(M.state.file_markers, -1)
 end
 
 function M.next_hunk()
-	M.jump(M.state.hunk_markers, 1)
+	jump_to_marker(M.state.hunk_markers, 1)
 end
 
 function M.prev_hunk()
-	M.jump(M.state.hunk_markers, -1)
+	jump_to_marker(M.state.hunk_markers, -1)
 end
 
 ---Classify one raw diff line into its highlight group.

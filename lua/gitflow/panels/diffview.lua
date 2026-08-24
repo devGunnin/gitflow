@@ -74,6 +74,8 @@ local P = panel.new({
 	filetype = "gitflow-diffview",
 	loading = "Loading diff…",
 	state = M.state,
+	-- `render` empties this before every paint, error and empty states
+	-- included; registered so a state drawn through the base stays covered.
 	entry_maps = { "file_line_map" },
 	keymaps = KEYMAPS,
 })
