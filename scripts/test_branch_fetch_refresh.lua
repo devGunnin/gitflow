@@ -1,9 +1,13 @@
 -- scripts/test_branch_fetch_refresh.lua — #427 regression
 --
--- Fetching from the branch panel used to require closing and reopening it to
--- see branches the fetch had just brought in. This drives a real fetch against
--- a real remote and asserts the open panel repaints in place — for both the
--- keymapped fetch (f / R) and the `:Gitflow fetch` command.
+-- #427 reported that seeing branches a fetch had just brought in required
+-- closing and reopening the panel. This drives a real fetch against a real
+-- remote and asserts the open panel repaints in place — for the keymapped
+-- fetch (f / R), the `:Gitflow fetch` command, and a prune.
+--
+-- It is green on overhaul/v2 as well: the reported symptom does not reproduce
+-- there, so this locks the behaviour down rather than proving a fix. It is the
+-- guard the panel-base rewrite of the refresh path needed.
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
