@@ -777,6 +777,8 @@ local function render_current_view()
 	elseif M.state.view == "workflows" then
 		render_workflows(M.state.workflows or {})
 	elseif list_cache.key == list_cache_key() then
+		-- Only when the cache was filled under this scope; painting another
+		-- filter's (or repo's) runs is worse than leaving the view as-is.
 		render_list(list_cache.runs or {}, list_cache.branch or "(unknown)")
 	end
 end
