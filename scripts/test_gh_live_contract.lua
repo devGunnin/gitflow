@@ -26,9 +26,9 @@ local function fail(message)
 	vim.cmd("cquit! 1")
 end
 
--- gh.classify_failure() has no 5xx/rate-limit branch (both fall to
--- "unknown"/"permission"), so an upstream outage would otherwise fail()
--- here looking like drift. Detect those two transient conditions locally.
+-- gh.classify_failure() classifies rate limiting but not 5xx (it falls to
+-- "unknown"), so an upstream outage would otherwise fail() here looking like
+-- drift. Detect that locally; rate limiting is skipped via `kind` below.
 ---@param output string
 ---@return string|nil reason
 local function transient_upstream_reason(output)
@@ -78,7 +78,7 @@ if call_result and call_result.code ~= 0 then
 	-- notably gh rejecting a field this test's own query no longer
 	-- matches upstream ("Unknown JSON field") — is the drift this test
 	-- exists to catch, and must fail loudly, not skip green.
-	if kind == "network" or kind == "auth" then
+	if kind == "network" or kind == "auth" or kind == "rate_limit" then
 		skip(("gh label list exited %d (%s) — %s"):format(
 			call_result.code, kind, output
 		))

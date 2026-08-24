@@ -34,13 +34,19 @@ end
 ---| '"missing"'    gh is not on PATH
 ---| '"auth"'       not logged in, or the token was rejected
 ---| '"network"'    gh could not reach the GitHub host
+---| '"rate_limit"' throttled — primary (HTTP 403) or secondary/abuse (HTTP 429)
 ---| '"permission"' authenticated, but the token lacks rights (HTTP 403)
 ---| '"not_found"'  absent, or invisible to this account (HTTP 404)
 ---| '"unknown"'    no signal we can classify — report raw output only
 
 --- Classify a failed `gh` invocation from its combined output.
 --- Every pattern here was observed from a real gh (2.95.0); none are guessed.
---- Network is tested first: a connection failure otherwise reads as auth.
+--- Order matters twice: network is tested first (a connection failure
+--- otherwise reads as auth), and rate limiting ahead of BOTH auth and
+--- permission — GitHub answers a spent primary quota with HTTP 403, which is
+--- otherwise "your token lacks rights" and sends the user off to `gh auth
+--- refresh`. Safe because no observed auth or permission message contains a
+--- rate-limit phrase.
 ---@param output string
 ---@return GitflowGhFailureKind
 function M.classify_failure(output)
@@ -51,6 +57,14 @@ function M.classify_failure(output)
 		or text:find("check your internet connection", 1, true)
 	then
 		return "network"
+	end
+	if
+		text:find("rate limit exceeded", 1, true)
+		or text:find("secondary rate limit", 1, true)
+		or text:find("(http 429)", 1, true)
+		or text:find("too many requests", 1, true)
+	then
+		return "rate_limit"
 	end
 	if
 		text:find("not logged into any github hosts", 1, true)
@@ -75,6 +89,9 @@ local FAILURE_HINTS = {
 	missing = "Install the GitHub CLI (https://cli.github.com) and make sure `gh` is on your PATH.",
 	auth = "Run `gh auth login` to authenticate, then retry.",
 	network = "Could not reach GitHub — check your connection or https://www.githubstatus.com.",
+	rate_limit = "GitHub rate limit reached for this token. Wait for the window"
+		.. " to reset — `gh api rate_limit` shows when — then retry; avoid rapid"
+		.. " repeated refreshes until it does.",
 	permission = "Your token lacks the required permission. `gh auth status` lists its scopes; `gh auth refresh -s <scope>` adds one.",
 	-- GitHub answers 404 for private resources too, so "absent" and
 	-- "invisible to you" are indistinguishable and stay deliberately merged.
@@ -86,6 +103,141 @@ local FAILURE_HINTS = {
 ---@return string|nil
 function M.failure_hint(kind)
 	return FAILURE_HINTS[kind]
+end
+
+---Host and `owner/repo` out of a remote url, in either form git writes it:
+---`git@host:owner/repo.git` or `https://host/owner/repo(.git)`. Nested paths
+---(GitLab subgroups) yield no slug: two segments is what GitHub has.
+---@param url string
+---@return string|nil host
+---@return string|nil slug
+local function parse_remote_url(url)
+	local host, path = url:match("^[%w+.-]+://([^/]+)/(.+)$")
+	if not host then
+		local authority
+		authority, path = url:match("^([^/]+):(.+)$")
+		if not authority then
+			return nil, nil
+		end
+		host = authority
+	end
+	host = (host or ""):gsub("^[^@]*@", ""):gsub(":%d+$", "")
+	path = path:gsub("%.git$", ""):gsub("/+$", "")
+	local owner, repo = path:match("^([^/]+)/([^/]+)$")
+	if not owner or not repo then
+		return host, nil
+	end
+	return host, ("%s/%s"):format(owner, repo)
+end
+
+---@param host string|nil
+---@return boolean
+local function is_github_host(host)
+	if not host or host == "" then
+		return false
+	end
+	host = host:lower():gsub("^www%.", "")
+	if host == "github.com" then
+		return true
+	end
+	local configured = vim.env.GH_HOST
+	return configured ~= nil and configured ~= "" and host == configured:lower()
+end
+
+---Every `remote.<name>.url` and `remote.<name>.gh-resolved` in one git call.
+---@param cwd string
+---@return table<string, string> urls
+---@return table<string, string> resolved  `gh repo set-default` overrides
+local function remote_config(cwd)
+	local urls, resolved = {}, {}
+	local out = vim.fn.systemlist({ "git", "-C", cwd, "config", "--get-regexp", "^remote\\." })
+	if vim.v.shell_error ~= 0 or type(out) ~= "table" then
+		return urls, resolved
+	end
+	for _, line in ipairs(out) do
+		local key, value = line:match("^(%S+)%s+(.*)$")
+		if key then
+			local name = key:match("^remote%.(.+)%.url$")
+			if name then
+				urls[name] = vim.trim(value)
+			else
+				name = key:match("^remote%.(.+)%.gh%-resolved$")
+				if name then
+					resolved[name] = vim.trim(value)
+				end
+			end
+		end
+	end
+	return urls, resolved
+end
+
+---With no `gh repo set-default`, gh takes the first remote it knows in this
+---order — so a fork checkout (origin=fork, upstream=canonical) resolves to
+---upstream, not origin.
+local REMOTE_PREFERENCE = { "upstream", "github", "origin" }
+
+---@param urls table<string, string>
+---@return string[]
+local function remote_names_in_gh_order(urls)
+	local names, seen = {}, {}
+	for _, name in ipairs(REMOTE_PREFERENCE) do
+		if urls[name] then
+			names[#names + 1] = name
+			seen[name] = true
+		end
+	end
+	local rest = {}
+	for name in pairs(urls) do
+		if not seen[name] then
+			rest[#rest + 1] = name
+		end
+	end
+	table.sort(rest)
+	return vim.list_extend(names, rest)
+end
+
+---The repository a `gh` call from this cwd will act on, or nil when git alone
+---cannot say: no remote gh would serve, a host it does not serve, or a path
+---that is not `owner/repo`.
+---@param cwd string
+---@return string|nil
+local function resolved_repo(cwd)
+	local urls, resolved = remote_config(cwd)
+	local names = remote_names_in_gh_order(urls)
+
+	-- `gh repo set-default` wins outright: either an explicit owner/repo or
+	-- `base`, meaning that remote's own slug.
+	for _, name in ipairs(names) do
+		local override = resolved[name]
+		if override and override ~= "base" then
+			local owner, repo = override:match("([^/]+)/([^/]+)$")
+			return owner and ("%s/%s"):format(owner, repo) or nil
+		end
+	end
+
+	local candidates = {}
+	for _, name in ipairs(names) do
+		local host, slug = parse_remote_url(urls[name])
+		if slug and is_github_host(host) then
+			if resolved[name] == "base" then
+				return slug
+			end
+			candidates[#candidates + 1] = slug
+		end
+	end
+	return candidates[1]
+end
+
+---Which repository a `gh` call made from `cwd` will act on, for prompts that
+---must name it. Read from git, never from `gh` — a confirm gate must not spend
+---a request (or fire a process) just to describe itself. Falls back to the
+---directory whenever git cannot say which repo gh would pick, so the gate
+---never asserts a repo the command would not touch.
+---@param cwd string|nil  defaults to the live cwd
+---@return string
+function M.repo_label(cwd)
+	cwd = cwd or vim.fn.getcwd()
+	return resolved_repo(cwd) or cwd
 end
 
 ---@param result GitflowGitResult
