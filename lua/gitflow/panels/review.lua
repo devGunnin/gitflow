@@ -183,19 +183,16 @@ end
 
 --- Undo every editor-visible thing review mode installed, and forget the PR.
 --- Idempotent, so both the normal and the abnormal close path can call it.
-local function dismantle()
-	pcall(vim.api.nvim_clear_autocmds, { group = AUGROUP })
-	overlay.teardown_decorations()
-	drop_file_list_buffer()
-	rstate.reset()
-end
-
-function M.close()
-	closing = true
+---@param close_windows boolean  also tear the tabpage down. False on the
+---                              abnormal path: the user dismantled the layout
+---                              themselves and may be mid-edit in what is
+---                              left (#366).
+local function dismantle(close_windows)
 	pcall(vim.api.nvim_clear_autocmds, { group = AUGROUP })
 	overlay.teardown_decorations()
 
-	if M.state.tabpage and vim.api.nvim_tabpage_is_valid(M.state.tabpage) then
+	if close_windows and M.state.tabpage
+		and vim.api.nvim_tabpage_is_valid(M.state.tabpage) then
 		for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(M.state.tabpage)) do
 			pcall(vim.api.nvim_win_close, winid, true)
 		end
@@ -203,6 +200,11 @@ function M.close()
 
 	drop_file_list_buffer()
 	rstate.reset()
+end
+
+function M.close()
+	closing = true
+	dismantle(true)
 	closing = false
 end
 
@@ -224,7 +226,7 @@ function M._on_layout_changed()
 	if closing or not M.state.tabpage or layout_intact() then
 		return
 	end
-	dismantle()
+	dismantle(false)
 	rstate.notify_info("Review mode closed")
 end
 
