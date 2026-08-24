@@ -1,7 +1,6 @@
 -- Area: the Gitflow shell itself — usage, the main panel, the command palette
 -- and the notification center.
 local ui = require("gitflow.ui")
-local shared = require("gitflow.commands.shared")
 local help = require("gitflow.ui.help")
 local status_panel = require("gitflow.panels.status")
 local branch_panel = require("gitflow.panels.branch")
