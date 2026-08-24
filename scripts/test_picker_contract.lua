@@ -119,6 +119,15 @@ for _, shape in ipairs(shapes) do
 	assert_true(state.winid ~= nil, shape.name .. ": state.winid should be set")
 	assert_true(vim.api.nvim_win_is_valid(state.winid), shape.name .. ": window should be valid")
 	assert_true(state.bufnr ~= nil, shape.name .. ": state.bufnr should be set")
+
+	-- The caller's title must actually reach the float, not just get
+	-- accepted and dropped in favor of the spec's default_title.
+	local win_title_chunks = vim.api.nvim_win_get_config(state.winid).title
+	local win_title = win_title_chunks and win_title_chunks[1] and win_title_chunks[1][1]
+	assert_equals(
+		win_title, "  Contract Test  ",
+		shape.name .. ": window title should forward the caller's title"
+	)
 	assert_true(
 		type(state.items) == "table",
 		shape.name .. ": state.items should be a table regardless of the call shape's key name"
@@ -155,6 +164,33 @@ for _, shape in ipairs(shapes) do
 	pcall(vim.api.nvim_win_close, state.winid, true)
 	pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
 	assert_true(true, shape.name .. ": open/render/keymap contract holds")
+end
+
+-- ── 1b. opts.selected preselects the matching row, per shape. Already
+-- guarded outside this spec by test_stage10_pickers/test_stage10_forms, but
+-- this is the contract file a future picker change is read against.
+for _, shape in ipairs(shapes) do
+	local entries = { { name = "alpha" }, { name = "beta" } }
+	local pre_state = shape.open(entries, {
+		selected = { "alpha" },
+		on_submit = function() end,
+	})
+
+	local pre_lines = vim.api.nvim_buf_get_lines(pre_state.bufnr, 0, -1, false)
+	local selected_marker = pre_state.multi_select and "[x] alpha" or "> alpha"
+	assert_true(
+		find_line(pre_lines, selected_marker) ~= nil,
+		shape.name .. ": opts.selected should preselect the matching row"
+	)
+	if pre_state.multi_select then
+		assert_true(
+			find_line(pre_lines, "[ ] beta") ~= nil,
+			shape.name .. ": non-preselected rows should stay unselected"
+		)
+	end
+
+	pcall(vim.api.nvim_win_close, pre_state.winid, true)
+	pcall(vim.api.nvim_buf_delete, pre_state.bufnr, { force = true })
 end
 
 -- ── 2. Live search narrows results identically across shapes ────────
@@ -218,6 +254,35 @@ local string_state = list_picker.open({
 assert_equals(string_state.items[1].name, "gamma", "5a. list_picker normalizes a string item to {name=...}")
 pcall(vim.api.nvim_win_close, string_state.winid, true)
 pcall(vim.api.nvim_buf_delete, string_state.bufnr, { force = true })
+
+-- 5a2. list_picker preserves item.description through M.open's own
+-- normalization (not just through filter_items, which the matcher spec
+-- exercises directly and which bypasses this normalization entirely).
+-- Descriptions render AND are half the fuzzy haystack, so this goes through
+-- the real M.open path end to end: render, then search by description alone.
+local desc_state = list_picker.open({
+	items = {
+		{ name = "widget-one", description = "special-marker-zzz" },
+		{ name = "widget-two", description = "other" },
+	},
+	on_submit = function() end,
+})
+local desc_lines = vim.api.nvim_buf_get_lines(desc_state.bufnr, 0, -1, false)
+assert_true(
+	find_line(desc_lines, "special-marker-zzz") ~= nil,
+	"5a2. list_picker.open should render item.description"
+)
+
+press(desc_state.winid, "/")
+vim.api.nvim_buf_set_lines(desc_state.bufnr, 0, 1, false, { "special-marker-zzz" })
+vim.api.nvim_exec_autocmds("TextChanged", { buffer = desc_state.bufnr })
+wait_until(function()
+	local lines = vim.api.nvim_buf_get_lines(desc_state.bufnr, 0, -1, false)
+	return find_line(lines, "widget-one") ~= nil and find_line(lines, "widget-two") == nil
+end, "5a2. a query matching only the description should find its item and exclude others", 1000)
+
+pcall(vim.api.nvim_win_close, desc_state.winid, true)
+pcall(vim.api.nvim_buf_delete, desc_state.bufnr, { force = true })
 
 -- 5b. list_picker single-select toggles-and-submits on <CR> without <Space>
 -- accumulating a selection set; multi_select toggles then requires <CR>.
