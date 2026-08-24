@@ -153,7 +153,7 @@ Buffer-local bindings active in the branch panel (`:Gitflow branch`).
 | `D` | Force delete branch (confirms first) |
 | `m` | Merge branch into current (confirms first) |
 | `u` | Update branch to its upstream (fast-forward, no checkout) |
-| `M` | Rename branch (`git branch -m`) |
+| `e` | Rename branch (`git branch -m`) |
 | `f` | Fetch remote branches |
 | `.` | Jump to the current branch (list view only) |
 | `G` | Toggle list / graph view |
@@ -503,7 +503,7 @@ Buffer-local bindings active in the reflog panel (`:Gitflow reflog`).
 | --- | --- |
 | `<CR>` | Checkout entry under cursor |
 | `1-9` | Select entry by position |
-| `H` | Hard reset to entry under cursor (confirms first, defaults to Cancel) |
+| `H` | Reset to entry under cursor — soft, mixed or hard (confirms first, defaults to Cancel) |
 | `r` | Refresh |
 | `?` | Key help for this panel |
 | `q` | Close |
@@ -664,21 +664,35 @@ different things in different panels. Muscle memory does not know which buffer
 it is in, so gitflow constrains itself:
 
 - **`r` refreshes, `q` closes, `?` opens this panel's key help.** In every
-  panel, without exception.
+  panel. The two exceptions are text-entry surfaces, where `?` is a character
+  you type: the merge resolver puts its help on `c?`, and the command palette
+  carries its keys in the footer of each pane.
+- **`?` is never elided.** A narrow panel drops hints to fit; `?` is the last
+  one it gives up, because it is what shows you the ones already gone.
 - **No key is destructive in one panel and benign in another.** The destructive
   verbs live on `d` `D` `x` `X` `H` (and `cD` in the merge resolver), and those
   keys are never a harmless action anywhere. `scripts/test_keymap_contract.lua`
   fails the build if that stops being true.
 - **Every destructive verb confirms**, and declining does nothing at all — no
-  partial write, no refresh, no side effect. `scripts/test_confirm_gates.lua`
-  drives each gate with the answer NO and asserts the underlying git/gh call was
-  never made.
+  partial write, no refresh, no side effect. Rebase's `d drop` is the one
+  deliberate exception: it edits a todo list you have not executed yet.
+  `scripts/test_confirm_gates.lua` drives three of the gates with the answer NO
+  and asserts the underlying git/gh call was never made; the rest of the audit
+  is by hand, and the spec lints for a verb that describes destruction without
+  carrying the flag.
 - **The prompt defaults to Cancel** for anything that discards work.
 
 Keys that legitimately differ across panels are all benign: `A` is apply
 (stash) or assignees (PR/issue lists); `S` is submit, sort direction, stash
 push or soft reset; `P` is pop, push or preview; `o` is open, checkout or saved
 views. None of them can lose anything.
+
+`H` in the reflog and reset panels, and `M` on the PR panel, shadow vim's
+window motions in a scrollable list — a rule the actions panel keeps strictly.
+They are here because the destructive alphabet (`d` `D` `x` `X` `H`) has to
+stay small enough to recognise, and because both are confirm-gated with the
+prompt defaulting to Cancel. Nothing on a motion key can lose work to one
+keystroke. Branch rename moved off `M` for the same reason.
 
 `<C-n>` / `<C-p>` page in the PR and Label lists and move the selection in
 pickers. Both mean "the next one", on different things. They shadow Neovim's
@@ -722,16 +736,17 @@ require("gitflow").setup({ keybindings = { commit = "gc", refresh = "gr" } })
 
 | Panel | Old | New |
 | --- | --- | --- |
-| Branch List | `r` rename | `M` rename — `r` is refresh |
+| Branch List | `r` rename | `e` rename — `r` is refresh, and `M` is a motion |
 | Branch List | `R` refresh (with fetch) | `r` refresh (with fetch) |
 | Conflict List | `A` abort | `X` abort — `A` is assignees/apply elsewhere |
 | Conflict List | `R` refresh alias | removed; `r` refreshes |
 | Merge Resolver | `cx` reset file | `cD` reset file — `cx` opens the resolver from the status panel |
-| Reflog Panel | `R` reset | `H` hard reset — matches the Reset Panel |
+| Reflog Panel | `R` reset | `H` reset — matches the Reset Panel's hard reset |
 | Issue List | `X` clear filters | `F` clear filters — `X` is a destructive key |
 | Issue List | `D` inside `o`/`O`/`D` | `D` on its own, and it now confirms |
 | Rebase editor | `r` reword | `w` reword — `r` is refresh |
 | PR Review file list | `dd` / `x` delete draft | `x` delete draft — `dd` is diff in the status panel |
+| Every panel | `?` was vim's reverse search | `?` opens that panel's key help |
 
 Newly confirmed: deleting an already-merged branch (Branch List `d`), and
 deleting a saved issue view (Issue List `D`).
@@ -743,9 +758,16 @@ require("gitflow").setup({
   panel_keybindings = {
     conflict = { X = "A" },
     reflog   = { H = "R" },
+    -- Two rows where the old key is now taken by refresh or by `?`:
+    conflict_resolver = { cD = "cx" },
+    rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },
+    status = { ["?"] = false },  -- `?` back to reverse search
   },
 })
 ```
+
+`scripts/test_keymap_contract.lua` drives the awkward rows of that table end to
+end and asserts the old key works again.
 
 ## Overriding Keybindings
 
@@ -803,12 +825,31 @@ require("gitflow").setup({
 ```
 
 The hint bar, the float footer and the `?` overlay all follow the override, so
-a panel never advertises a key it does not bind. Overriding a pair or range
-entry (`s/u`, `1-9`) replaces the whole set with the single key you give. A
-label that matches no key in that panel raises a warning when the panel opens,
-rather than silently doing nothing.
+a panel never advertises a key it does not bind. This covers every surface in
+the list below, including the three that are not panels — the actions panel's
+per-view maps, the merge resolver and the review diff pane.
+
+A pair or range entry (`s/u`, `p/w/e/s/f`, `1-9`) can be re-keyed whole or
+collapsed. Name several keys with `/` to keep the set:
+
+```lua
+panel_keybindings = {
+  rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },  -- r rewords again
+}
+```
+
+A single key collapses the entry to that one key, which is sometimes what you
+want and is otherwise how four verbs quietly disappear — so say what you mean.
+
+Two guards, both loud:
+
+- A label that matches no key in that panel warns when the panel opens.
+- An override that would land on a key the panel already binds is **refused
+  whole** for that panel, with a warning naming the clash. Otherwise one verb
+  would silently win the key while the hints kept advertising both. Move the
+  other key in the same table (as `r = "R"` does above) and both apply.
 
 Panel names: `status` `branch` `log` `blame` `stash` `tag` `reflog` `reset`
 `revert` `cherry_pick` `rebase` `conflict` `conflict_resolver` `worktree`
 `labels` `notifications` `diff` `diffview` `prs` `issues` `actions`
-`review_files` `review_diff`.
+`review_files` `review_diff` `palette`.

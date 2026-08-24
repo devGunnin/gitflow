@@ -36,7 +36,8 @@ local P = panel.new({
 			run = function(key)
 				M.select_by_position(tonumber(key))
 			end },
-		{ key = "H", desc = "hard reset", destructive = true, run = function()
+		-- "reset", not "hard reset": the prompt offers soft/mixed/hard.
+		{ key = "H", desc = "reset", destructive = true, run = function()
 			M.reset_under_cursor()
 		end },
 		{ key = "r", desc = "refresh", run = function()

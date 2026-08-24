@@ -58,7 +58,9 @@ local P = panel.new({
 		{ key = "u", desc = "update", views = { "list" }, run = function()
 			M.update_under_cursor()
 		end },
-		{ key = "M", desc = "rename", views = { "list" }, run = function()
+		-- Not `M`: that is a vim motion, and the PR panel's merge family
+		-- claims it for auto-merge, which is destructive.
+		{ key = "e", desc = "rename", views = { "list" }, run = function()
 			M.rename_under_cursor()
 		end },
 		{ key = ".", desc = "current", views = { "list" }, run = function()

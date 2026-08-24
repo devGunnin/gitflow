@@ -114,9 +114,20 @@ T.run_suite("E2E: Tag Panel", {
 		local bufnr = ui.buffer.get("tag")
 		T.assert_true(bufnr ~= nil, "tag buffer should exist")
 		local lines = T.buf_lines(bufnr)
+		-- The whole fitted bar, not just `q close`: that alone would pass
+		-- against a hardcoded string rather than the panel's own registry.
+		local bar_line = T.find_line(lines, "q close")
 		T.assert_true(
-			T.find_line(lines, "q close") ~= nil,
-			"tag panel split layout should render its keybind hints"
+			bar_line ~= nil, "tag split layout should render a hint bar"
+		)
+		local bar = lines[bar_line]
+		for _, hint in ipairs({ "c create", "q close", "? help" }) do
+			T.assert_contains(bar, hint, "tag hint bar should keep " .. hint)
+		end
+		T.assert_contains(bar, "\u{2026}", "an elided bar should say so")
+		T.assert_true(
+			not bar:find("X remote del", 1, true),
+			"the destructive key should elide first: " .. bar
 		)
 
 		tag_panel.close()

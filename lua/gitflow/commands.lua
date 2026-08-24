@@ -200,9 +200,10 @@ end
 ---@return string
 function M.dispatch(args, cfg)
 	if #args == 0 then
-		local usage = M.usage()
-		shared.show_info(usage)
-		return usage
+		-- The same buffer `:Gitflow help` opens: the subcommand list outgrew
+		-- the message area, and half-migrating left bare `:Gitflow` on the old
+		-- notification.
+		return M.dispatch({ "help" }, cfg)
 	end
 
 	local subcommand_name = args[1]

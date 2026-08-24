@@ -740,7 +740,7 @@ T.run_suite("Branch Graph Visualization", {
 
 		local bufnr = ui.buffer.get("branch")
 		T.assert_keymaps(bufnr, {
-			"<CR>", "c", "d", "D", "r", "M", "f", "G", "u", "q", "?",
+			"<CR>", "c", "d", "D", "r", "e", "f", "G", "u", "q", "?",
 		})
 
 		close_panel()

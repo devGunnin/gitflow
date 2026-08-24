@@ -150,9 +150,21 @@ replacement key, or `false` to unbind it entirely: >lua
 Panel names and their key labels are exactly what `?` lists inside the panel,
 and what KEYBINDINGS.md documents.  An override moves the hint and the `?`
 entry with the binding, so the panel never advertises a key it does not bind.
-Overriding a pair or range entry (`s/u`, `1-9`) replaces the whole set with
-the single key given.  A label that matches no key in that panel is reported
-as a warning when the panel opens.
+This covers every registered surface, including the three that are not panels
+(actions, conflict_resolver, review_diff) and the command palette.
+
+A pair or range entry (`s/u`, `p/w/e/s/f`, `1-9`) can be re-keyed whole: name
+several keys separated by `/`.  A single key collapses the entry to that key.
+>lua
+    panel_keybindings = {
+      rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },  -- r rewords again
+    }
+<
+Two guards, both loud.  A label that matches no key in that panel warns when
+the panel opens.  An override that would land on a key the panel already binds
+is REFUSED whole for that panel, with a warning naming the clash -- otherwise
+one verb silently wins the key while the hints advertise both.  Move the other
+key in the same table, as `r = "R"` does above, and both apply.
 
                                                           *gitflow-config-ui*
 ui ~
@@ -323,9 +335,14 @@ Cross-panel rules ~
     ?                   Key help, in every panel.
     Destructive keys    d D x X H cD are delete/discard/rewrite verbs.  No
                         key that is destructive in one panel is a benign
-                        action in another, and every destructive verb asks
-                        before it acts -- declining changes nothing.  The
-                        scripts/test_keymap_contract.lua spec enforces this.
+                        action in another -- scripts/test_keymap_contract.lua
+                        fails the build if that stops being true.  Every
+                        destructive verb asks before it acts and declining
+                        changes nothing; that is audited by hand, and
+                        scripts/test_confirm_gates.lua drives three of the
+                        gates with the answer NO.  Rebase's `d drop` is the
+                        one deliberate exception: it edits a todo list you
+                        have not executed yet.
 
                                                          *gitflow-keymaps-v2*
 Migration from the pre-v2 keymaps ~
@@ -351,22 +368,29 @@ Restore any of them with, for example: >lua
 Panel keys.  The keys that changed meaning: >
 
     Panel               Old         New
-    branch              r rename    M rename; r is refresh
+    branch              r rename    e rename; r is refresh
     branch              R refresh   r refresh
     conflict list       A abort     X abort
     conflict list       R refresh   removed; r refreshes
     conflict resolver   cx reset    cD reset (cx opens the resolver from
                                     the status panel)
-    reflog              R reset     H hard reset
+    reflog              R reset     H reset (soft/mixed/hard)
     issue list          X clear     F clear filters
     issue list          D in o/O/D  D on its own, and it confirms
     rebase (todo)       r reword    w reword
     rebase (todo)       d drop      d drop, confirmed by X execute
     review file list    dd delete   x delete
+    every panel         ? searched  ? opens that panel's key help
+                        backwards
 <
 Restore any of them per panel: >lua
     require("gitflow").setup({
-      panel_keybindings = { conflict = { X = "A" } },
+      panel_keybindings = {
+        conflict = { X = "A" },
+        conflict_resolver = { cD = "cx" },
+        rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },
+        status = { ["?"] = false },  -- ? back to reverse search
+      },
     })
 <
 

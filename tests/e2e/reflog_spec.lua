@@ -123,11 +123,21 @@ T.run_suite("E2E: Reflog Panel", {
 		local bufnr = ui.buffer.get("reflog")
 		T.assert_true(bufnr ~= nil, "reflog buffer should exist")
 		local lines = T.buf_lines(bufnr)
-		-- `1-9 quick checkout` is a convenience, so it elides at the 50-column
-		-- split width; assert on a hint the fit is required to keep.
+		-- `1-9 quick checkout` is a convenience and `H reset` is destructive,
+		-- so both elide at this width. Assert the whole fitted bar, not just
+		-- `q close`: that alone would pass against a hardcoded string.
+		local bar_line = T.find_line(lines, "q close")
 		T.assert_true(
-			T.find_line(lines, "q close") ~= nil,
-			"reflog panel split layout should render its keybind hints"
+			bar_line ~= nil, "reflog split layout should render a hint bar"
+		)
+		local bar = lines[bar_line]
+		for _, hint in ipairs({ "<CR> checkout", "q close", "? help" }) do
+			T.assert_contains(bar, hint, "reflog hint bar should keep " .. hint)
+		end
+		T.assert_contains(bar, "\u{2026}", "an elided bar should say so")
+		T.assert_true(
+			not bar:find("H reset", 1, true),
+			"the destructive key should elide first: " .. bar
 		)
 
 		reflog_panel.close()
