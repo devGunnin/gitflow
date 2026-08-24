@@ -61,7 +61,7 @@ local utils = require("gitflow.utils")
 local PANEL_NAMES = {
 	"status", "log", "branch", "blame", "stash", "tag", "reflog", "reset",
 	"revert", "cherry_pick", "rebase", "conflict", "worktree", "labels",
-	"notifications",
+	"notifications", "prs", "issues",
 }
 
 ---Find the panel object a module built, by walking the upvalues of one of its
@@ -408,6 +408,8 @@ local STALE_GUARD_PANELS = {
 	{ name = "conflict", module = "gitflow.git.conflict", fn = "list" },
 	{ name = "worktree", module = "gitflow.git.worktree", fn = "list" },
 	{ name = "labels", module = "gitflow.gh.labels", fn = "list" },
+	{ name = "prs", module = "gitflow.gh.prs", fn = "list" },
+	{ name = "issues", module = "gitflow.gh.issues", fn = "list" },
 	{
 		name = "blame",
 		module = "gitflow.git.blame",

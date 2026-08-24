@@ -258,6 +258,8 @@ Buffer-local bindings active in the PR panel (`:Gitflow pr list`).
 | `x` | Close PR |
 | `o` | Checkout PR branch |
 | `v` | Open review panel |
+| `<C-n>` | Next page |
+| `<C-p>` | Previous page |
 | `r` | Refresh |
 | `q` | Close |
 
@@ -391,6 +393,8 @@ Buffer-local bindings active in the label panel (`:Gitflow label list`).
 | --- | --- |
 | `c` | Create new label |
 | `d` | Delete label under cursor |
+| `<C-n>` | Next page |
+| `<C-p>` | Previous page |
 | `r` | Refresh |
 | `q` | Close |
 
@@ -599,6 +603,12 @@ bug — but it can catch you out if you jump between panels on muscle memory:
   List, Conflict List — same as `r` there) / [reply to the comment thread on
   the current line](#pr-review-mode) (PR Review Mode editing pane and thread
   popup).
+- **`<C-n>` / `<C-p>`** — next / previous page (PR List, Label Panel) / move the
+  selection down / up (command palette, searchable pickers). Both mean "the
+  next one", on different things. In the PR and Label lists they also shadow
+  Neovim's own `CTRL-N` / `CTRL-P` cursor motions; `j` / `k` still move the
+  cursor there, and keeping `n` for `/` search-next matters more in a buffer
+  you search.
 - **"Back to list"** — `b` (Issue List, PR List) or `<BS>` (Actions Panel),
   depending on the panel. There is no panel where `<Esc>` performs this;
   `<Esc>` is used elsewhere for unrelated things (cancelling a log-panel range

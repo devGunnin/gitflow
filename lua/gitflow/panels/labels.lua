@@ -11,15 +11,46 @@ local icons = require("gitflow.icons")
 ---@field bufnr integer|nil
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
+---@field cache table[]|nil  raw labels from the last successful fetch
+---@field cache_key string|nil  scope the cache was filled under
+---@field page integer  1-based page into `cache`
 ---@field line_entries table<integer, table>
 
 local M = {}
 
+-- `gh label list` defaults to 30 and has no cursor pagination; fetch a
+-- generous bound in one call and page through it client-side (#283).
+local FETCH_LIMIT = 500
+local PAGE_SIZE = 30
+
 ---@type GitflowLabelPanelState
 M.state = {
 	cfg = nil,
+	cache = nil,
+	cache_key = nil,
+	page = 1,
 	line_entries = {},
 }
+
+---Scope the cache is only valid under: `gh` resolves the repo from the cwd.
+---@return string
+local function cache_key()
+	return vim.fn.getcwd()
+end
+
+---The cache, but only when it was filled under the current scope. Unkeyed it
+---painted another repo's labels as `d`-deletable rows, so a mismatch drops it.
+---@return table[]|nil
+local function scoped_cache()
+	if not M.state.cache then
+		return nil
+	end
+	if M.state.cache_key ~= cache_key() then
+		M.state.cache, M.state.cache_key = nil, nil
+		return nil
+	end
+	return M.state.cache
+end
 
 local P = panel.new({
 	name = "labels",
@@ -28,42 +59,71 @@ local P = panel.new({
 	loading = "Loading labels…",
 	state = M.state,
 	keymaps = {
-		{ key = "c", desc = "create", run = function()
+		{ key = "c", desc = "create", essential = true, run = function()
 			M.create_interactive()
 		end },
-		{ key = "d", desc = "delete", run = function()
+		{ key = "d", desc = "delete", destructive = true, run = function()
 			M.delete_under_cursor()
+		end },
+		-- Not n/p: n is search-next in a buffer users `/` through; shadows
+		-- CTRL-N/P motion instead, j/k still move. `d` drops first (destructive).
+		{ key = "<C-n>", desc = "next page", run = function()
+			M.next_page()
+		end },
+		{ key = "<C-p>", desc = "prev page", run = function()
+			M.prev_page()
 		end },
 		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
 		end },
-		{ key = "q", desc = "close", run = function()
+		{ key = "q", desc = "close", essential = true, run = function()
 			M.close()
 		end },
 	},
 })
 
----@param value string|nil
----@return string
-local function maybe_text(value)
-	local text = vim.trim(tostring(value or ""))
-	if text == "" then
-		return "-"
+---Slice `list` to page `page` (clamped) at PAGE_SIZE.
+---@param list table[]
+---@param page integer
+---@return table[] slice, integer page, integer total_pages
+local function paginate(list, page)
+	local total = #list
+	local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
+	page = math.min(math.max(1, page), total_pages)
+	local start_index = (page - 1) * PAGE_SIZE + 1
+	local end_index = math.min(total, page * PAGE_SIZE)
+	local slice = {}
+	for index = start_index, end_index do
+		slice[#slice + 1] = list[index]
 	end
-	return text
+	return slice, page, total_pages
 end
 
 ---@param labels table[]
 local function render_list(labels)
+	local page_items, page, total_pages = paginate(labels, M.state.page)
+	M.state.page = page
+
 	local tag_icon = icons.get("ui", "tag")
 	local B = P:begin_render()
 
-	-- Summary bar: tag icon + label count.
-	B:push({
+	-- Summary bar: tag icon + label count (+ page, once there's more than one).
+	local summary = {
 		{ components.spacing.gutter, nil },
 		{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
 		{ ("%d label%s"):format(#labels, #labels == 1 and "" or "s"), "GitflowSectionTitle" },
-	})
+	}
+	if #labels >= FETCH_LIMIT then
+		-- `gh label list` has no cursor pagination: say the count is a cap,
+		-- never report a truncated fetch as the repo's total.
+		summary[#summary + 1] = { components.separators.field .. "capped at ", "GitflowMetaKey" }
+		summary[#summary + 1] = { tostring(FETCH_LIMIT), "GitflowMeta" }
+	end
+	if total_pages > 1 then
+		summary[#summary + 1] = { components.separators.field .. "page ", "GitflowMetaKey" }
+		summary[#summary + 1] = { ("%d/%d"):format(page, total_pages), "GitflowMeta" }
+	end
+	B:push(summary)
 	B:blank()
 
 	components.section(B, tag_icon, "Repository Labels")
@@ -72,10 +132,10 @@ local function render_list(labels)
 	if #labels == 0 then
 		components.empty(B, "(no labels)")
 	else
-		for _, label in ipairs(labels) do
-			local name = maybe_text(label.name)
-			local color = maybe_text(label.color)
-			local description = maybe_text(label.description)
+		for _, label in ipairs(page_items) do
+			local name = components.maybe_text(label.name)
+			local color = components.maybe_text(label.color)
+			local description = components.maybe_text(label.description)
 
 			-- Name line: text MUST contain "<name> (#<color>)" exactly so the
 			-- colored highlight can target the name and tests can locate it.
@@ -114,6 +174,9 @@ local function render_list(labels)
 
 	if P:paint(B) then
 		M.state.line_entries = line_entries
+	else
+		-- A failed paint must not leave the previous rows resolvable.
+		P:clear_entry_maps()
 	end
 end
 
@@ -130,8 +193,14 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
+	M.state.page = 1
 	if not P:ensure_window(cfg) then
 		return
+	end
+	-- Instant paint from what we already have (if any), then reconcile below.
+	local cached = scoped_cache()
+	if cached then
+		render_list(cached)
 	end
 	M.refresh()
 end
@@ -142,21 +211,66 @@ function M.refresh()
 	end
 
 	local request_id = P:next_request()
-	P:render_loading("Loading labels…")
-	gh_labels.list({}, function(err, labels)
+	-- The scope this fetch is issued under: a cwd change while it is in flight
+	-- must not stamp its rows as belonging to the new repo.
+	local requested_key = cache_key()
+	if not scoped_cache() then
+		P:render_loading("Loading labels…")
+	end
+	gh_labels.list({ limit = FETCH_LIMIT }, {}, function(err, labels)
 		if not P:is_active(request_id) then
 			return
 		end
-		if err then
-			P:render_error("Failed to load labels", {
-				detail = err,
-				hint = "Press r to retry \u{b7} q to close",
-			})
-			utils.notify(err, vim.log.levels.ERROR)
+		-- Scope moved under the fetch: these rows describe somewhere we
+		-- left, so drop them and re-issue under the scope live now.
+		if requested_key ~= cache_key() then
+			M.state.cache, M.state.cache_key = nil, nil
+			M.refresh()
 			return
 		end
-		render_list(labels or {})
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			-- Drop the cache and paint the failure even when rows are on
+			-- screen: stale rows left actionable resolve `d` against a fetch
+			-- that failed.
+			M.state.cache, M.state.cache_key = nil, nil
+			P:render_error("Failed to load labels", {
+				detail = err,
+				hint = "r retries",
+			})
+			return
+		end
+		M.state.cache = labels or {}
+		M.state.cache_key = requested_key
+		M.state.page = 1
+		render_list(M.state.cache)
 	end)
+end
+
+---Advance to the next page of the cached list.
+function M.next_page()
+	local cached = scoped_cache()
+	if not cached then
+		return
+	end
+	local _, _, total_pages = paginate(cached, M.state.page)
+	if M.state.page >= total_pages then
+		utils.notify("No more labels", vim.log.levels.WARN)
+		return
+	end
+	M.state.page = M.state.page + 1
+	render_list(cached)
+end
+
+---Return to the previous page of the cached list.
+function M.prev_page()
+	local cached = scoped_cache()
+	if not cached or M.state.page <= 1 then
+		utils.notify("Already on the first page", vim.log.levels.WARN)
+		return
+	end
+	M.state.page = M.state.page - 1
+	render_list(cached)
 end
 
 function M.create_interactive()
@@ -199,7 +313,7 @@ function M.delete_under_cursor()
 		return
 	end
 
-	local label_name = maybe_text(entry.name)
+	local label_name = components.maybe_text(entry.name)
 	local confirmed = input.confirm(("Delete label '%s'?"):format(label_name), {
 		choices = { "&Delete", "&Cancel" },
 		default_choice = 2,

@@ -140,7 +140,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -206,7 +206,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -252,7 +252,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -299,7 +299,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -378,7 +378,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -444,7 +444,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -514,7 +514,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -588,7 +588,7 @@ T.run_suite("E2E: PR Creation Flow", {
 				{
 					table = gh_labels,
 					key = "list",
-					value = function(_, cb)
+					value = function(_, _, cb)
 						cb(nil, {})
 					end,
 				},
@@ -760,7 +760,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -807,7 +807,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb("network error")
 				end,
 			},
@@ -1015,7 +1015,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -1089,7 +1089,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -1146,7 +1146,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -1192,7 +1192,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -1251,7 +1251,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -1333,7 +1333,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -1405,7 +1405,7 @@ T.run_suite("E2E: PR Creation Flow", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},

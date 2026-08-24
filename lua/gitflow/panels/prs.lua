@@ -1,8 +1,7 @@
-local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local form = require("gitflow.ui.form")
 local gh_prs = require("gitflow.gh.prs")
 local gh_labels = require("gitflow.gh.labels")
@@ -14,164 +13,153 @@ local list_picker = require("gitflow.ui.list_picker")
 local review_panel = require("gitflow.panels.review")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local highlights = require("gitflow.highlights")
 
 ---@class GitflowPrPanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
 ---@field filters table
+---@field cache table[]|nil  raw PRs from the last successful fetch
+---@field cache_key string|nil  scope the cache was filled under
+---@field page integer  1-based page into `cache`, list mode only
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_pr_number integer|nil
----@field view_request_id integer
 
 local M = {}
-local PRS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_prs_hl")
-local PRS_FLOAT_TITLE = "  Gitflow Pull Requests  "
-local PRS_FLOAT_FOOTER =
-	" <CR> view · c create · m merge · o checkout · v review"
-	.. " · L labels · A assign · x close PR · r refresh · q close "
+
+-- Client-side page size (#283): the list is fetched in one bounded call
+-- (filters.limit) but only one page is ever painted, so a large result set
+-- never renders 100+ markdown cards into the buffer at once.
+local PAGE_SIZE = 30
+-- Create form's label picker: high enough to be the whole list on any sane
+-- repo, and the fill is reported rather than silently truncating.
+local LABEL_PICK_LIMIT = 1000
 
 ---@type GitflowPrPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	filters = {},
+	cache = nil,
+	cache_key = nil,
+	page = 1,
 	line_entries = {},
 	mode = "list",
 	active_pr_number = nil,
-	view_request_id = 0,
 }
 
----@return integer
-local function next_view_request_id()
-	M.state.view_request_id = (M.state.view_request_id or 0) + 1
-	return M.state.view_request_id
-end
+-- Forward-declared: the "b" (back) keymap below closes over it before its
+-- definition later in the file.
+local render_list
 
----@param request_id integer
----@return boolean
-local function is_active_view_request(request_id)
-	return M.state.view_request_id == request_id
-end
-
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("prs", {
-			filetype = "markdown",
-			lines = components.loading_lines("Loading pull requests…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "prs",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = PRS_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and PRS_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "prs",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_set_option_value(
-			"cursorline", true, { win = M.state.winid }
-		)
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.view_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "c", function()
-		M.create_interactive()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "C", function()
-		M.comment_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "L", function()
-		M.edit_labels_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "A", function()
-		M.edit_assignees_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "m", function()
-		M.merge_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "x", function()
-		M.close_pr_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "o", function()
-		M.checkout_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "v", function()
-		M.review_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		if M.state.mode == "view" and M.state.active_pr_number then
-			M.open_view(M.state.active_pr_number)
-			return
-		end
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "b", function()
-		if M.state.mode == "view" then
-			M.state.mode = "list"
-			M.refresh()
-		end
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
----@param value string|nil
+---Scope the cache is only valid under: `gh` resolves the repo from the cwd,
+---and the filters decide what the rows mean.
 ---@return string
-local function maybe_text(value)
-	local text = vim.trim(tostring(value or ""))
-	if text == "" then
-		return "-"
+local function cache_key()
+	local filters = M.state.filters
+	return table.concat({
+		vim.fn.getcwd(),
+		filters.state or "",
+		filters.base or "",
+		filters.head or "",
+		tostring(filters.limit or ""),
+	}, "\0")
+end
+
+---The cache, but only when it was filled under the current scope. Unkeyed it
+---painted another repo's PRs as actionable rows, so a mismatch drops it.
+---@return table[]|nil
+local function scoped_cache()
+	if not M.state.cache then
+		return nil
 	end
-	return text
+	if M.state.cache_key ~= cache_key() then
+		M.state.cache, M.state.cache_key = nil, nil
+		return nil
+	end
+	return M.state.cache
+end
+
+local P = panel.new({
+	name = "prs",
+	title = "Gitflow Pull Requests",
+	filetype = "markdown",
+	loading = "Loading pull requests…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "view", views = { "list" }, essential = true,
+			run = function()
+				M.view_under_cursor()
+			end },
+		{ key = "c", desc = "create", views = { "list" }, run = function()
+			M.create_interactive()
+		end },
+		{ key = "C", desc = "comment", hint = false, run = function()
+			M.comment_under_cursor()
+		end },
+		{ key = "m", desc = "merge", run = function()
+			M.merge_under_cursor()
+		end },
+		{ key = "o", desc = "checkout", run = function()
+			M.checkout_under_cursor()
+		end },
+		{ key = "v", desc = "review", run = function()
+			M.review_under_cursor()
+		end },
+		{ key = "L", desc = "labels", run = function()
+			M.edit_labels_under_cursor()
+		end },
+		{ key = "A", desc = "assign", run = function()
+			M.edit_assignees_under_cursor()
+		end },
+		{ key = "x", desc = "close PR", destructive = true, run = function()
+			M.close_pr_under_cursor()
+		end },
+		-- Not n/p: n is search-next in a buffer users `/` through; shadows
+		-- CTRL-N/P motion instead, j/k still move. Tiered below the core verbs.
+		{ key = "<C-n>", desc = "next page", views = { "list" }, run = function()
+			M.next_page()
+		end },
+		{ key = "<C-p>", desc = "prev page", views = { "list" }, run = function()
+			M.prev_page()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			if M.state.mode == "view" and M.state.active_pr_number then
+				M.open_view(M.state.active_pr_number)
+				return
+			end
+			M.refresh()
+		end },
+		{ key = "b", desc = "back", views = { "view" }, hint = false,
+			run = function()
+				if M.state.mode ~= "view" then
+					return
+				end
+				-- Leave view mode before the fetch: if the list load fails,
+				-- `r` must retry the list, not reopen the detail.
+				M.state.mode = "list"
+				M.state.active_pr_number = nil
+				-- Instant paint from cache (if any), then reconcile in the
+				-- background — same cached-first-paint contract as M.open.
+				local cached = scoped_cache()
+				if cached then
+					render_list(cached)
+				end
+				M.refresh()
+			end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
+
+---@param text string
+---@return string[]
+local function split_lines(text)
+	if text == "" then
+		return {}
+	end
+	return vim.split(text, "\n", { plain = true, trimempty = false })
 end
 
 ---@param pr table
@@ -183,7 +171,7 @@ local function pr_state(pr)
 	if pr.isDraft then
 		return "draft"
 	end
-	local state = maybe_text(pr.state):lower()
+	local state = components.maybe_text(pr.state):lower()
 	if state == "open" then
 		return "open"
 	end
@@ -208,23 +196,24 @@ local function pr_highlight_group(state)
 	return "GitflowPRClosed"
 end
 
----@param text string
----@return string[]
-local function split_lines(text)
-	if text == "" then
-		return {}
-	end
-	return vim.split(text, "\n", { plain = true, trimempty = false })
+---@param pr table
+---@return string
+local function pr_state_icon(state)
+	return icons.get("github", "pr_" .. state)
 end
 
 ---@param review table
 ---@return string
 local function review_author(review)
-	local author = maybe_text(type(review.author) == "table" and review.author.login or review.author)
+	local author = components.maybe_text(
+		type(review.author) == "table" and review.author.login or review.author
+	)
 	if author ~= "-" then
 		return author
 	end
-	author = maybe_text(type(review.user) == "table" and review.user.login or review.user)
+	author = components.maybe_text(
+		type(review.user) == "table" and review.user.login or review.user
+	)
 	if author ~= "-" then
 		return author
 	end
@@ -253,151 +242,71 @@ local function join_assignee_names(pr)
 	return table.concat(names, ", ")
 end
 
----@param pr table
----@return string
-local function join_label_names(pr)
-	local labels = pr.labels or {}
-	if type(labels) ~= "table" or #labels == 0 then
-		return "-"
+---Slice `list` to page `page` (clamped) at PAGE_SIZE.
+---@param list table[]
+---@param page integer
+---@return table[] slice, integer page, integer total_pages
+local function paginate(list, page)
+	local total = #list
+	local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
+	page = math.min(math.max(1, page), total_pages)
+	local start_index = (page - 1) * PAGE_SIZE + 1
+	local end_index = math.min(total, page * PAGE_SIZE)
+	local slice = {}
+	for index = start_index, end_index do
+		slice[#slice + 1] = list[index]
 	end
-
-	local names = {}
-	for _, label in ipairs(labels) do
-		if type(label) == "table" and label.name then
-			names[#names + 1] = label.name
-		elseif type(label) == "string" then
-			names[#names + 1] = label
-		end
-	end
-	if #names == 0 then
-		return "-"
-	end
-	return table.concat(names, ", ")
-end
-
----@param pr table
----@return table[]
-local function label_chunks(pr)
-	local labels = pr.labels or {}
-	if type(labels) ~= "table" or #labels == 0 then
-		return { { "\u{2014}", "GitflowMeta" } }
-	end
-	local chunks = {}
-	for _, label in ipairs(labels) do
-		local name = type(label) == "table" and label.name
-			or (type(label) == "string" and label or nil)
-		if name then
-			if #chunks > 0 then
-				chunks[#chunks + 1] = { " ", "GitflowMeta" }
-			end
-			local color = type(label) == "table" and label.color
-			local group = color and highlights.label_color_group(color)
-				or "GitflowChip"
-			chunks[#chunks + 1] = { name, group }
-		end
-	end
-	if #chunks == 0 then
-		return { { "\u{2014}", "GitflowMeta" } }
-	end
-	return chunks
-end
-
----@param B GitflowRenderBuilder
----@param icon string
----@param title string
-local function section_header(B, icon, title)
-	components.section(B, icon, title)
-end
-
----@param B GitflowRenderBuilder
----@param title string
----@param render_opts table
-local function push_header(B, title, render_opts)
-	components.header(B, title, render_opts)
-end
-
----@param B GitflowRenderBuilder
----@param key string
----@param value_chunks table[]
-local function meta_row(B, key, value_chunks)
-	local chunks = {
-		{ "  ", nil },
-		{ ui_render.pad_right(key, 12), "GitflowMetaKey" },
-	}
-	for _, chunk in ipairs(value_chunks) do
-		chunks[#chunks + 1] = chunk
-	end
-	return B:push(chunks)
-end
-
----@param pr table
----@return string
-local function pr_state_icon(state)
-	return icons.get("github", "pr_" .. state)
-end
-
-local function render_loading(message)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	push_header(B, "Gitflow Pull Requests", render_opts)
-	B:blank()
-	components.loading(B, message)
-	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
-	M.state.line_entries = {}
+	return slice, page, total_pages
 end
 
 ---@param prs table[]
-local function render_list(prs)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	push_header(B, "Gitflow Pull Requests", render_opts)
+render_list = function(prs)
+	local page_items, page, total_pages = paginate(prs, M.state.page)
+	M.state.page = page
+
+	local B = P:begin_render()
 
 	local summary = {
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("github", "pr_open") .. "  ", "GitflowSectionIcon" },
 		{ ("PRs (%d)"):format(#prs), "GitflowSectionTitle" },
-		{ "     state ", "GitflowMetaKey" },
-		{ maybe_text(M.state.filters.state), "GitflowMeta" },
+		{ components.separators.field .. "state ", "GitflowMetaKey" },
+		{ components.maybe_text(M.state.filters.state), "GitflowMeta" },
 	}
 	if M.state.filters.base then
-		summary[#summary + 1] = { "   base ", "GitflowMetaKey" }
-		summary[#summary + 1] = { maybe_text(M.state.filters.base), "GitflowMeta" }
+		summary[#summary + 1] = { components.separators.field .. "base ", "GitflowMetaKey" }
+		summary[#summary + 1] = { components.maybe_text(M.state.filters.base), "GitflowMeta" }
+	end
+	if total_pages > 1 then
+		summary[#summary + 1] = { components.separators.field .. "page ", "GitflowMetaKey" }
+		summary[#summary + 1] = { ("%d/%d"):format(page, total_pages), "GitflowMeta" }
 	end
 	B:push(summary)
 	B:blank()
 
 	local line_entries = {}
 	if #prs == 0 then
-		B:push({
-			{ "   ", nil },
-			{ "No pull requests match these filters.", "GitflowMeta" },
-		})
+		components.empty(B, "No pull requests match these filters.")
 	else
-		local width = ui_render.content_width(render_opts)
-		for _, pr in ipairs(prs) do
+		local width = components.content_width(P:render_opts())
+		for _, pr in ipairs(page_items) do
 			local number = tostring(pr.number or "?")
 			local state = pr_state(pr)
 			local state_icon = pr_state_icon(state)
-			local title = maybe_text(pr.title)
-			local time = ui_render.relative_time(pr.updatedAt)
+			local title = components.maybe_text(pr.title)
+			local time = components.relative_time(pr.updatedAt)
 			local left = (" %s  #%s  "):format(state_icon, number)
 			local left_w = vim.fn.strdisplaywidth(left)
 			local time_w = vim.fn.strdisplaywidth(time)
 			local title_max = math.max(8, width - left_w - time_w - 2)
-			title = ui_render.truncate(title, title_max)
+			title = components.truncate(title, title_max)
 			local gap = math.max(
 				2, width - left_w - vim.fn.strdisplaywidth(title) - time_w
 			)
 			local title_group = (state == "merged" or state == "closed")
 				and "GitflowCardTitleDim" or "GitflowCardTitle"
 			local title_line = B:push({
-				{ " ", nil },
+				{ components.spacing.edge, nil },
 				{ state_icon .. "  ", pr_highlight_group(state) },
 				{ "#" .. number, "GitflowNumber" },
 				{ "  ", nil },
@@ -407,22 +316,22 @@ local function render_list(prs)
 			})
 
 			local meta = {
-				{ "     ", nil },
+				{ components.spacing.gutter .. components.spacing.indent, nil },
 				{ icons.get("ui", "ref") .. " ", "GitflowMeta" },
-				{ maybe_text(pr.headRefName), "GitflowChip" },
-				{ " " .. ui_render.glyphs.arrow .. " ", "GitflowMeta" },
-				{ maybe_text(pr.baseRefName), "GitflowChip" },
-				{ "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" },
-				{ pr.author and maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
-				{ "    labels: ", "GitflowMetaKey" },
+				{ components.maybe_text(pr.headRefName), "GitflowChip" },
+				{ " " .. components.glyphs.arrow .. " ", "GitflowMeta" },
+				{ components.maybe_text(pr.baseRefName), "GitflowChip" },
+				{ components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" },
+				{ pr.author and components.maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
+				{ components.separators.field .. "labels: ", "GitflowMetaKey" },
 			}
-			for _, chunk in ipairs(label_chunks(pr)) do
+			for _, chunk in ipairs(components.label_chunks(pr.labels)) do
 				meta[#meta + 1] = chunk
 			end
 			local assignees = join_assignee_names(pr)
 			if assignees ~= "-" then
 				meta[#meta + 1] =
-					{ "    " .. icons.get("ui", "author") .. " ", "GitflowMeta" }
+					{ components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" }
 				meta[#meta + 1] = { assignees, "GitflowChip" }
 			end
 			local meta_line = B:push(meta)
@@ -433,29 +342,27 @@ local function render_list(prs)
 		end
 	end
 
-	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
-	M.state.line_entries = line_entries
+	P:push_hints(B, "list")
+
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B) then
+		M.state.line_entries = line_entries
+	else
+		-- Never leave the new mode paired with the old map.
+		P:clear_entry_maps()
 	end
+	P:refresh_footer("list")
 
+	-- P:paint already turned cursorline on; just place it on the first card.
 	local first_line = nil
 	for line_no in pairs(line_entries) do
 		if not first_line or line_no < first_line then
 			first_line = line_no
 		end
 	end
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_set_option_value(
-			"cursorline", true, { win = M.state.winid }
-		)
-		if first_line then
-			pcall(vim.api.nvim_win_set_cursor, M.state.winid, { first_line, 0 })
-		end
+	if first_line and M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { first_line, 0 })
 	end
 end
 
@@ -464,66 +371,59 @@ end
 local function render_view(pr, review_comments)
 	local view_state = pr_state(pr)
 	local view_icon = pr_state_icon(view_state)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	push_header(
-		B,
-		("PR #%s: %s"):format(maybe_text(pr.number), maybe_text(pr.title)),
-		render_opts
+	local B = P:begin_render(
+		("PR #%s: %s"):format(components.maybe_text(pr.number), components.maybe_text(pr.title))
 	)
 	B:blank()
 
-	meta_row(B, "Title:", { { maybe_text(pr.title), "GitflowCardTitle" } })
-	meta_row(B, "State:", {
+	components.meta_row(B, "Title:", { { components.maybe_text(pr.title), "GitflowCardTitle" } })
+	components.meta_row(B, "State:", {
 		{ view_icon .. " " .. view_state, pr_highlight_group(view_state) },
 	})
-	meta_row(B, "Author:", {
-		{ pr.author and maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
+	components.meta_row(B, "Author:", {
+		{ pr.author and components.maybe_text(pr.author.login) or "\u{2014}", "GitflowAuthor" },
 	})
-	meta_row(B, "Refs:", {
-		{ maybe_text(pr.headRefName), "GitflowChip" },
-		{ " " .. ui_render.glyphs.arrow .. " ", "GitflowMeta" },
-		{ maybe_text(pr.baseRefName), "GitflowChip" },
+	components.meta_row(B, "Refs:", {
+		{ components.maybe_text(pr.headRefName), "GitflowChip" },
+		{ " " .. components.glyphs.arrow .. " ", "GitflowMeta" },
+		{ components.maybe_text(pr.baseRefName), "GitflowChip" },
 	})
-	meta_row(B, "Labels:", label_chunks(pr))
-	meta_row(B, "Assignees:", { { join_assignee_names(pr), "GitflowChip" } })
+	components.meta_row(B, "Labels:", components.label_chunks(pr.labels))
+	components.meta_row(B, "Assignees:", { { join_assignee_names(pr), "GitflowChip" } })
 	B:blank()
 
 	local n_reviews = type(pr.reviews) == "table" and #pr.reviews or 0
 	local n_files = type(pr.files) == "table" and #pr.files or 0
 	local n_reqs = type(pr.reviewRequests) == "table" and #pr.reviewRequests or 0
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("ui", "check") .. " ", "GitflowCount" },
 		{ ("%d file%s changed"):format(n_files, n_files == 1 and "" or "s"), "GitflowMeta" },
-		{ "   \u{b7}   ", "GitflowHintSep" },
+		{ components.separators.inline, "GitflowHintSep" },
 		{ ("%d review%s"):format(n_reviews, n_reviews == 1 and "" or "s"), "GitflowMeta" },
-		{ "   \u{b7}   ", "GitflowHintSep" },
+		{ components.separators.inline, "GitflowHintSep" },
 		{ ("%d requested"):format(n_reqs), "GitflowMeta" },
 	})
 	B:blank()
 
-	section_header(B, icons.get("ui", "comment"), "Body")
+	components.section(B, icons.get("ui", "comment"), "Body")
 	local body_lines = split_lines(tostring(pr.body or ""))
 	if #body_lines == 0 then
-		B:raw("   (no description)", "GitflowMeta")
+		components.empty(B, "(no description)")
 	else
 		for _, body_line in ipairs(body_lines) do
-			B:raw("   " .. body_line)
+			B:raw(components.spacing.indent .. body_line)
 		end
 	end
 	B:blank()
 
 	local reviews = pr.reviews or {}
 	if type(reviews) == "table" and #reviews > 0 then
-		section_header(B, icons.get("github", "review_approved"), "Reviews")
+		components.section(B, icons.get("github", "review_approved"), "Reviews")
 		for _, review in ipairs(reviews) do
 			local author = review_author(review)
-			local state = maybe_text(review.state)
-			local submitted_at = maybe_text(review.submittedAt)
+			local state = components.maybe_text(review.state)
+			local submitted_at = components.maybe_text(review.submittedAt)
 			local header = ("@%s [%s]"):format(author, state)
 			if submitted_at ~= "-" then
 				header = ("%s (%s)"):format(header, submitted_at)
@@ -531,10 +431,10 @@ local function render_view(pr, review_comments)
 			B:raw(("%s:"):format(header), "GitflowReviewAuthor")
 			local review_message_lines = split_lines(tostring(review.body or ""))
 			if #review_message_lines == 0 then
-				B:raw("  >> (empty)", "GitflowReviewComment")
+				B:raw(components.spacing.gutter .. ">> (empty)", "GitflowReviewComment")
 			else
 				for _, review_body_line in ipairs(review_message_lines) do
-					B:raw(("  >> %s"):format(review_body_line), "GitflowReviewComment")
+					B:raw(("%s>> %s"):format(components.spacing.gutter, review_body_line), "GitflowReviewComment")
 				end
 			end
 			B:blank()
@@ -543,24 +443,24 @@ local function render_view(pr, review_comments)
 
 	local comments = pr.comments or {}
 	local comment_count = type(comments) == "table" and #comments or 0
-	section_header(B, icons.get("ui", "comment"), ("Comments (%d)"):format(comment_count))
+	components.section(B, icons.get("ui", "comment"), ("Comments (%d)"):format(comment_count))
 	if comment_count == 0 then
-		B:raw("   (none)", "GitflowMeta")
+		components.empty(B, "(none)")
 	else
 		for _, comment in ipairs(comments) do
 			local author = comment.author
-				and maybe_text(comment.author.login) or "unknown"
+				and components.maybe_text(comment.author.login) or "unknown"
 			B:push({
-				{ "   ", nil },
+				{ components.spacing.indent, nil },
 				{ icons.get("ui", "author") .. " ", "GitflowMeta" },
 				{ author .. ":", "GitflowAuthor" },
 			})
 			local comment_lines = split_lines(tostring(comment.body or ""))
 			if #comment_lines == 0 then
-				B:raw("     (empty)", "GitflowMeta")
+				components.empty(B, "(empty)")
 			else
 				for _, comment_line in ipairs(comment_lines) do
-					B:raw("     " .. comment_line)
+					B:raw(components.spacing.indent .. components.spacing.gutter .. comment_line)
 				end
 			end
 			B:blank()
@@ -569,38 +469,34 @@ local function render_view(pr, review_comments)
 
 	local rc = review_comments or {}
 	if type(rc) == "table" and #rc > 0 then
-		section_header(B, icons.get("ui", "comment"), "Review Comments")
+		components.section(B, icons.get("ui", "comment"), "Review Comments")
 		for _, c in ipairs(rc) do
 			local author = review_author(c)
-			local path = maybe_text(c.path)
+			local path = components.maybe_text(c.path)
 			B:raw(("@%s on %s:"):format(author, path), "GitflowReviewAuthor")
 			local cbody = split_lines(tostring(c.body or ""))
 			if #cbody == 0 then
-				B:raw("  >> (empty)", "GitflowReviewComment")
+				B:raw(components.spacing.gutter .. ">> (empty)", "GitflowReviewComment")
 			else
 				for _, bl in ipairs(cbody) do
-					B:raw(("  >> %s"):format(bl), "GitflowReviewComment")
+					B:raw(("%s>> %s"):format(components.spacing.gutter, bl), "GitflowReviewComment")
 				end
 			end
 			B:blank()
 		end
 	end
 
-	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
-	M.state.line_entries = {}
+	P:push_hints(B, "view")
+
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
-
+	P:paint(B)
+	-- No rows in the detail view: drop whatever the list left behind.
+	P:clear_entry_maps()
+	P:refresh_footer("view")
+	components.cursorline(M.state.winid, false)
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_set_option_value(
-			"cursorline", false, { win = M.state.winid }
-		)
 		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { 1, 0 })
-	end
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
 	end
 end
 
@@ -624,8 +520,16 @@ function M.open(cfg, filters)
 		head = nil,
 		limit = 100,
 	}, filters or {})
+	M.state.page = 1
 
-	ensure_window(cfg)
+	if not P:ensure_window(cfg, { view = "list" }) then
+		return
+	end
+	-- Instant paint from what we already have (if any), then reconcile below.
+	local cached = scoped_cache()
+	if cached then
+		render_list(cached)
+	end
 	M.refresh()
 end
 
@@ -634,15 +538,41 @@ function M.refresh()
 		return
 	end
 
-	next_view_request_id()
-	render_loading("Loading pull requests…")
+	local request_id = P:next_request()
+	-- The scope this fetch is issued under: a cwd or filter change while it is
+	-- in flight must not stamp its rows as belonging to the new scope.
+	local requested_key = cache_key()
+	if not scoped_cache() then
+		P:render_loading("Loading pull requests…")
+	end
 	gh_prs.list(M.state.filters, {}, function(err, prs)
-		if err then
-			render_loading("Failed to load pull requests")
-			utils.notify(err, vim.log.levels.ERROR)
+		if not P:is_active(request_id) then
 			return
 		end
-		render_list(prs or {})
+		-- Scope moved under the fetch: these rows describe somewhere we
+		-- left, so drop them and re-issue under the scope live now.
+		if requested_key ~= cache_key() then
+			M.state.cache, M.state.cache_key = nil, nil
+			M.refresh()
+			return
+		end
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			-- Drop the cache and paint the failure even when rows are on
+			-- screen: stale rows left actionable resolve verbs against a
+			-- fetch that failed.
+			M.state.cache, M.state.cache_key = nil, nil
+			P:render_error("Failed to load pull requests", {
+				detail = err,
+				hint = "r retries",
+				view = "list",
+			})
+			return
+		end
+		M.state.cache = prs or {}
+		M.state.cache_key = requested_key
+		M.state.page = 1
+		render_list(M.state.cache)
 	end)
 end
 
@@ -655,21 +585,27 @@ function M.open_view(number, cfg)
 	if not M.state.cfg then
 		return
 	end
-	ensure_window(M.state.cfg)
+	if not P:ensure_window(M.state.cfg, { view = "view" }) then
+		return
+	end
 
-	local request_id = next_view_request_id()
-	render_loading(("Loading PR #%s…"):format(tostring(number)))
+	local request_id = P:next_request()
+	P:render_loading(("Loading PR #%s…"):format(tostring(number)))
 	gh_prs.view(number, {}, function(err, pr)
-		if not is_active_view_request(request_id) then
+		if not P:is_active(request_id) then
 			return
 		end
 		if err then
-			render_loading("Failed to load pull request")
 			utils.notify(err, vim.log.levels.ERROR)
+			P:render_error("Failed to load pull request", {
+				detail = err,
+				hint = "b returns to the list",
+				view = "view",
+			})
 			return
 		end
 		gh_prs.review_comments(number, {}, function(rc_err, rc)
-			if not is_active_view_request(request_id) then
+			if not P:is_active(request_id) then
 				return
 			end
 			render_view(pr or {}, not rc_err and rc or nil)
@@ -684,6 +620,35 @@ function M.view_under_cursor()
 		return
 	end
 	M.open_view(entry.number)
+end
+
+---Advance to the next page of the cached list. List mode only.
+function M.next_page()
+	local cached = M.state.mode == "list" and scoped_cache() or nil
+	if not cached then
+		return
+	end
+	local _, _, total_pages = paginate(cached, M.state.page)
+	if M.state.page >= total_pages then
+		utils.notify("No more pull requests", vim.log.levels.WARN)
+		return
+	end
+	M.state.page = M.state.page + 1
+	render_list(cached)
+end
+
+---Return to the previous page of the cached list. List mode only.
+function M.prev_page()
+	local cached = M.state.mode == "list" and scoped_cache() or nil
+	if not cached then
+		return
+	end
+	if M.state.page <= 1 then
+		utils.notify("Already on the first page", vim.log.levels.WARN)
+		return
+	end
+	M.state.page = M.state.page - 1
+	render_list(cached)
 end
 
 local function parse_csv_input(value)
@@ -1019,7 +984,7 @@ function M.create_interactive()
 		end)
 	end
 
-	gh_labels.list({}, function(err, labels)
+	gh_labels.list({ limit = LABEL_PICK_LIMIT }, {}, function(err, labels)
 		if err then
 			utils.notify(
 				("Failed to load labels: %s"):format(err),
@@ -1027,6 +992,12 @@ function M.create_interactive()
 			)
 		end
 		loaded.labels = type(labels) == "table" and labels or {}
+		if #loaded.labels >= LABEL_PICK_LIMIT then
+			utils.notify(
+				("Offering the first %d labels only"):format(LABEL_PICK_LIMIT),
+				vim.log.levels.WARN
+			)
+		end
 		try_open()
 	end)
 
@@ -1371,29 +1342,15 @@ function M.review_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("prs")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("prs")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
-	next_view_request_id()
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M
