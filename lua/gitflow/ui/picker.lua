@@ -41,9 +41,8 @@ local M = {}
 ---@field on_submit fun(selected: string[])
 ---@field on_cancel? fun()
 
----@param items GitflowPickerItem[]
----@param query string|nil
----@return GitflowPickerItem[]
+---@param item GitflowPickerItem
+---@return string
 local function searchable_text(item)
 	return ("%s %s"):format(item.name or "", item.description or "")
 end
