@@ -178,6 +178,83 @@ test("every panel surface binds ? to help", function()
 	end
 end)
 
+-- ── what a surface REALLY bound ───────────────────────────────────────
+-- Discovery is a source scan, and a source scan only decides who is ASKED to
+-- register. This is the part that does not take the source's word for it:
+-- open the surface and diff the keys on the real buffer against the keys its
+-- registry declares. A key bound by an aliased or metatable-dispatched binder
+-- shows up here as an undeclared key, whatever it spelled.
+
+---Surfaces that can be brought up headlessly, and the buffers they bind on.
+---@type table[]
+local OPENABLE = {
+	{ surface = "status" }, { surface = "branch" }, { surface = "log" },
+	{ surface = "blame" }, { surface = "stash" }, { surface = "tag" },
+	{ surface = "reflog" }, { surface = "reset" }, { surface = "revert" },
+	{ surface = "cherry_pick" }, { surface = "rebase" }, { surface = "conflict" },
+	{ surface = "worktree" }, { surface = "labels" }, { surface = "notifications" },
+	{ surface = "diff" }, { surface = "prs" }, { surface = "issues" },
+}
+
+test("every openable surface binds exactly the keys its registry declares", function()
+	local problems = {}
+	vim.list_extend(problems, key_surfaces.watch_rebinds(function()
+		for _, case in ipairs(OPENABLE) do
+			local mod = require("gitflow.panels." .. case.surface)
+			mod.open(cfg)
+			local bufnr = require("gitflow.ui.buffer").get(case.surface)
+			assert_true(bufnr ~= nil, ("%s should have opened"):format(case.surface))
+			vim.list_extend(problems, key_surfaces.compare(
+				case.surface, bufnr, panel.surface_keymaps(case.surface, cfg)
+			))
+			mod.close()
+		end
+	end))
+	table.sort(problems)
+	assert_equals(
+		#problems, 0,
+		"buffer/registry mismatches:\n    " .. table.concat(problems, "\n    ")
+	)
+end)
+
+test("the actions panel binds exactly its current view's keys", function()
+	local actions = require("gitflow.panels.actions")
+	actions.open(cfg)
+	local bufnr = actions.state.bufnr
+	assert_true(bufnr ~= nil, "the actions panel should have opened")
+	local problems = key_surfaces.compare(
+		"actions", bufnr, panel.surface_keymaps("actions", cfg),
+		{ view = actions.state.view }
+	)
+	actions.close()
+	assert_equals(
+		#problems, 0,
+		"buffer/registry mismatches:\n    " .. table.concat(problems, "\n    ")
+	)
+end)
+
+test("the palette's two panes bind exactly their own keys", function()
+	local palette = require("gitflow.panels.palette")
+	palette.open(cfg)
+	local entries = panel.surface_keymaps("palette", cfg)
+	local problems = {}
+	for _, pane in ipairs({
+		{ view = "prompt", bufnr = palette.state.prompt_bufnr },
+		{ view = "list", bufnr = palette.state.list_bufnr },
+	}) do
+		assert_true(pane.bufnr ~= nil, ("the palette should have a %s pane"):format(pane.view))
+		vim.list_extend(problems, key_surfaces.compare(
+			"palette:" .. pane.view, pane.bufnr, entries, { view = pane.view }
+		))
+	end
+	palette.close()
+	table.sort(problems)
+	assert_equals(
+		#problems, 0,
+		"buffer/registry mismatches:\n    " .. table.concat(problems, "\n    ")
+	)
+end)
+
 -- ── the ? overlay is generated, not written ───────────────────────────
 
 ---Open a panel's `?` overlay and return the help buffer's lines.
@@ -307,11 +384,16 @@ test("panel_keybindings false unbinds a key entirely", function()
 end)
 
 
--- ── the migration promise ─────────────────────────────────────────────
+-- ── the migration promise, proved by pressing the key ─────────────────
 -- KEYBINDINGS.md tells users every key this change moved can be put back
--- through `panel_keybindings`. These drive that config end to end and assert
--- the OLD key works again — the two rows below could not be restored at all
--- before, silently, because the surfaces never resolved overrides.
+-- through `panel_keybindings`. These PRESS the restored key on the real panel
+-- buffer and assert WHAT THE PRESS DID.
+--
+-- Pressing is the whole point. Re-keying moves the BINDING; until this round
+-- it did not move the DISPATCH, so `rebase = { ["p/w/e/s/f"] = "p/r/e/s/f" }`
+-- bound `r` and then wrote a nil action into the commit plan. A spec that
+-- compares the hint label passes against exactly that, which is how the
+-- flagship row shipped broken twice.
 
 ---Buffer-local normal-mode lhs set.
 ---@param bufnr integer
@@ -340,7 +422,192 @@ local function desc_for_key(surface_name, cfg_used, key)
 	return nil
 end
 
-test("the merge resolver's cx reset can be put back", function()
+
+---Press `key` in the current window and let its mapping run to completion.
+---@param key string
+local function press(key)
+	vim.api.nvim_feedkeys(
+		vim.api.nvim_replace_termcodes(key, true, false, true), "x", false
+	)
+end
+
+---Swap every entry of a surface's DEFAULT registry for a recorder, so a press
+---reports which entry fired and which key it dispatched on. Must be installed
+---BEFORE the surface binds: the resolved copy it binds is `vim.tbl_extend`ed
+---from these entries, and copies the `run` value as it stands then.
+---@param surface_name string
+---@return table dispatches, fun() restore
+local function recording(surface_name)
+	local dispatches = {}
+	local entries = panel.surface(surface_name).keymaps
+	local originals = {}
+	for index, entry in ipairs(entries) do
+		originals[index] = entry.run
+		entry.run = function(key)
+			dispatches[#dispatches + 1] =
+				{ label = entry.key, desc = entry.desc, key = key }
+		end
+	end
+	return dispatches, function()
+		for index, entry in ipairs(entries) do
+			entry.run = originals[index]
+		end
+	end
+end
+
+---Open a panel with `overrides` applied, press `key` on its buffer, and
+---return the single dispatch it produced.
+---@param modname string
+---@param surface_name string
+---@param overrides table
+---@param key string
+---@return table  { label, desc, key }  the entry that ran and the key it meant
+local function press_on_panel(modname, surface_name, overrides, key)
+	local dispatches, restore = recording(surface_name)
+	local mod = require("gitflow.panels." .. modname)
+	local ok, err = pcall(function()
+		mod.open(gitflow.setup({ panel_keybindings = overrides }))
+		local bufnr = require("gitflow.ui.buffer").get(surface_name)
+		assert_true(bufnr ~= nil, ("%s should have opened"):format(surface_name))
+		assert_true(
+			bound_keys(bufnr)[key],
+			("%s should bind %q again"):format(surface_name, key)
+		)
+		press(key)
+	end)
+	restore()
+	mod.close()
+	gitflow.setup({})
+	if not ok then
+		error(err, 0)
+	end
+	assert_equals(
+		#dispatches, 1,
+		("pressing %q on %s should run exactly one entry"):format(key, surface_name)
+	)
+	return dispatches[1]
+end
+
+---@param dispatch table
+---@param desc string  the verb the migration row promises is back
+---@param means string  the DEFAULT key that verb dispatches on
+---@param what string
+local function assert_did(dispatch, desc, means, what)
+	assert_equals(dispatch.desc, desc, what .. ": wrong verb ran")
+	assert_equals(dispatch.key, means, what .. ": wrong action within the verb")
+end
+
+-- One row per line of KEYBINDINGS.md's "Panel keys" table that names a key a
+-- user can put back. `press` is the old key; `desc`/`means` are what it has to
+-- do again — `means` being the DEFAULT key whose behaviour must follow it.
+local PANEL_ROWS = {
+	{ row = "Branch List: r rename", mod = "branch", surface = "branch",
+		overrides = { branch = { e = "r", r = "R" } },
+		press = "r", desc = "rename", means = "e" },
+	{ row = "Branch List: R refresh", mod = "branch", surface = "branch",
+		overrides = { branch = { e = "r", r = "R" } },
+		press = "R", desc = "refresh", means = "r" },
+	{ row = "Conflict List: A abort", mod = "conflict", surface = "conflict",
+		overrides = { conflict = { X = "A" } },
+		press = "A", desc = "abort", means = "X" },
+	{ row = "Reflog: R reset", mod = "reflog", surface = "reflog",
+		overrides = { reflog = { H = "R" } },
+		press = "R", desc = "reset", means = "H" },
+	{ row = "Issue List: X clear filters", mod = "issues", surface = "issues",
+		overrides = { issues = { F = "X" } },
+		press = "X", desc = "clear filters", means = "F" },
+	-- The flagship: `r` has to reword, and re-keying must not cost the other
+	-- four actions their meanings.
+	{ row = "Rebase editor: r reword", mod = "rebase", surface = "rebase",
+		overrides = { rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" } },
+		press = "r", desc = "action", means = "w" },
+	{ row = "Rebase editor: p still picks", mod = "rebase", surface = "rebase",
+		overrides = { rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" } },
+		press = "p", desc = "action", means = "p" },
+	{ row = "Rebase editor: e still edits", mod = "rebase", surface = "rebase",
+		overrides = { rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" } },
+		press = "e", desc = "action", means = "e" },
+	{ row = "Rebase editor: s still squashes", mod = "rebase", surface = "rebase",
+		overrides = { rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" } },
+		press = "s", desc = "action", means = "s" },
+	{ row = "Rebase editor: f still fixups", mod = "rebase", surface = "rebase",
+		overrides = { rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" } },
+		press = "f", desc = "action", means = "f" },
+	{ row = "Rebase editor: refresh moved to R", mod = "rebase", surface = "rebase",
+		overrides = { rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" } },
+		press = "R", desc = "refresh", means = "r" },
+	-- Not migration rows, but the same defect: a `/` re-key on any multi-key
+	-- entry used to make every one of its keys mean the first key's action.
+	{ row = "status s/u re-keyed: S stages", mod = "status", surface = "status",
+		overrides = { status = { ["s/u"] = "S/U" } },
+		press = "S", desc = "stage/unstage", means = "s" },
+	{ row = "status s/u re-keyed: U unstages", mod = "status", surface = "status",
+		overrides = { status = { ["s/u"] = "S/U" } },
+		press = "U", desc = "stage/unstage", means = "u" },
+	{ row = "worktree d/D re-keyed: x removes", mod = "worktree", surface = "worktree",
+		overrides = { worktree = { ["d/D"] = "x/X" } },
+		press = "x", desc = "remove", means = "d" },
+	{ row = "worktree d/D re-keyed: X force-removes", mod = "worktree", surface = "worktree",
+		overrides = { worktree = { ["d/D"] = "x/X" } },
+		press = "X", desc = "remove", means = "D" },
+}
+
+for _, case in ipairs(PANEL_ROWS) do
+	test(("pressing the restored key does the verb — %s"):format(case.row), function()
+		assert_did(
+			press_on_panel(case.mod, case.surface, case.overrides, case.press),
+			case.desc, case.means, case.row
+		)
+	end)
+end
+
+test("the rebase editor's restored r writes reword, not nil, into the plan", function()
+	-- The observed effect the label comparison could not see: the todo entry
+	-- the plan carries. `set_action(nil)` used to render `● nil abc1234 …`.
+	local restored = gitflow.setup({
+		panel_keybindings = {
+			rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", ["r"] = "R" },
+		},
+	})
+	local rebase = require("gitflow.panels.rebase")
+	rebase.open(restored)
+	rebase.state.current_branch = "feature"
+	rebase.state.base_ref = "main"
+	rebase.state.stage = "normal"
+	rebase.state.entries = {
+		{ sha = "abc1234", subject = "a commit", action = "pick" },
+	}
+	rebase.switch_to_interactive()
+
+	-- Reword prompts for the new message; decline it, so the only thing this
+	-- asserts is the action the keypress set.
+	local ui_input = require("gitflow.ui.input")
+	local real_input = ui_input.prompt
+	ui_input.prompt = function() end
+
+	local line
+	for candidate, entry in pairs(rebase.state.line_entries) do
+		if entry == rebase.state.entries[1] and (not line or candidate < line) then
+			line = candidate
+		end
+	end
+	local ok, err = pcall(function()
+		assert_true(line ~= nil, "the todo view should have a commit row")
+		vim.api.nvim_win_set_cursor(0, { line, 0 })
+		press("r")
+	end)
+
+	ui_input.prompt = real_input
+	local action = rebase.state.entries[1] and rebase.state.entries[1].action
+	rebase.close()
+	gitflow.setup({})
+	if not ok then
+		error(err, 0)
+	end
+	assert_equals(action, "reword", "pressing the restored r should reword")
+end)
+
+test("the merge resolver's cx reset can be put back, pressed", function()
 	local restored = gitflow.setup({
 		panel_keybindings = { conflict_resolver = { cD = "cx" } },
 	})
@@ -349,53 +616,118 @@ test("the merge resolver's cx reset can be put back", function()
 	vim.fn.writefile({
 		"a", "<<<<<<< HEAD", "mine", "=======", "theirs", ">>>>>>> other", "b",
 	}, path)
-	conflict.open(path, { cfg = restored })
 
-	local bufnr = conflict.state.merged_bufnr
-	assert_true(bufnr ~= nil, "the resolver should have opened a merged buffer")
-	local bound = bound_keys(bufnr)
-	assert_true(bound["cx"], "cx should be bound again on the resolver buffer")
-	assert_true(bound["cD"] == nil, "the new key should be free once remapped")
-	assert_equals(
-		desc_for_key("conflict_resolver", restored, "cx"), "reset",
-		"cx should mean reset again"
-	)
-
+	local dispatches, restore = recording("conflict_resolver")
+	local ok, err = pcall(function()
+		conflict.open(path, { cfg = restored })
+		local bufnr = conflict.state.merged_bufnr
+		assert_true(bufnr ~= nil, "the resolver should have opened a merged buffer")
+		local bound = bound_keys(bufnr)
+		assert_true(bound["cx"], "cx should be bound again on the resolver buffer")
+		assert_true(bound["cD"] == nil, "the new key should be free once remapped")
+		vim.api.nvim_set_current_buf(bufnr)
+		press("cx")
+	end)
+	restore()
 	conflict.close()
 	vim.fn.delete(path)
 	gitflow.setup({})
+	if not ok then
+		error(err, 0)
+	end
+	assert_equals(#dispatches, 1, "cx should run exactly one entry")
+	assert_did(dispatches[1], "reset", "cD", "Merge Resolver: cx reset")
 end)
 
-test("the rebase editor's r reword can be put back", function()
-	-- Two rows, because `r` is refresh in every panel now: the multi-key
-	-- action entry takes `r` back and refresh moves off it. Re-keying the
-	-- multi-key entry must not unbind p/e/s/f.
+test("the review file list's dd delete-draft can be put back, pressed", function()
+	-- Review mode needs a PR; the pane is the same `Panel` either way, so
+	-- this attaches it to a scratch buffer exactly as `panels/review.lua` does.
 	local restored = gitflow.setup({
-		panel_keybindings = {
-			rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", ["r"] = "R" },
-		},
+		panel_keybindings = { review_files = { x = "dd" } },
 	})
-	local rebase = require("gitflow.panels.rebase")
-	rebase.open(restored)
+	local file_list = require("gitflow.review.file_list")
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	local winid = vim.api.nvim_get_current_win()
+	local previous = vim.api.nvim_win_get_buf(winid)
+	vim.api.nvim_win_set_buf(winid, bufnr)
 
-	local bufnr = require("gitflow.ui.buffer").get("rebase")
-	assert_true(bufnr ~= nil, "the rebase panel should have opened")
-	local bound = bound_keys(bufnr)
-	for _, key in ipairs({ "p", "r", "e", "s", "f" }) do
-		assert_true(bound[key], ("re-keying must keep %q bound"):format(key))
+	local dispatches, restore = recording("review_files")
+	local ok, err = pcall(function()
+		file_list.attach(bufnr, winid, restored)
+		assert_true(
+			bound_keys(bufnr)["dd"],
+			"dd should be bound again on the review file list"
+		)
+		press("dd")
+	end)
+	restore()
+	file_list.detach()
+	pcall(vim.api.nvim_win_set_buf, winid, previous)
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+	gitflow.setup({})
+	if not ok then
+		error(err, 0)
 	end
-	assert_equals(
-		desc_for_key("rebase", restored, "r"), "action",
-		"r should pick a rebase action again, not refresh"
-	)
-	assert_equals(
-		desc_for_key("rebase", restored, "R"), "refresh",
-		"refresh should have moved to R"
-	)
+	assert_equals(#dispatches, 1, "dd should run exactly one entry")
+	assert_did(dispatches[1], "delete", "x", "PR Review file list: dd delete draft")
+end)
 
-	rebase.close()
+test("? goes back to reverse search when the row says so", function()
+	local without = gitflow.setup({ panel_keybindings = { status = { ["?"] = false } } })
+	local status = require("gitflow.panels.status")
+	status.open(without)
+	local bufnr = require("gitflow.ui.buffer").get("status")
+	assert_true(
+		bound_keys(bufnr)["?"] == nil,
+		"? must be unbound, or vim's reverse search never comes back"
+	)
+	status.close()
 	gitflow.setup({})
 end)
+
+-- ── the global migration rows ─────────────────────────────────────────
+-- The other ten rows are ordinary global mappings. Pressing them has to reach
+-- the subcommand the table names, so the old key does the old thing.
+
+test("every global row's old key runs its old action when put back", function()
+	local commands = require("gitflow.commands")
+	local rows = {
+		{ action = "refresh", old = "gr", subcommand = "refresh" },
+		{ action = "status", old = "gs", subcommand = "status" },
+		{ action = "commit", old = "gc", subcommand = "commit" },
+		{ action = "diff", old = "gD", subcommand = "diff" },
+		{ action = "palette", old = "gP", subcommand = "palette" },
+		{ action = "revert", old = "gV", subcommand = "revert" },
+		{ action = "tag", old = "gT", subcommand = "tag" },
+		{ action = "reflog", old = "gF", subcommand = "reflog" },
+		{ action = "rebase_interactive", old = "gI", subcommand = "rebase-interactive" },
+		{ action = "notifications", old = "gN", subcommand = "notifications" },
+	}
+	local real_dispatch = commands.dispatch
+	local seen
+	commands.dispatch = function(args)
+		seen = args[1]
+	end
+	local ok, err = pcall(function()
+		for _, row in ipairs(rows) do
+			gitflow.setup({ keybindings = { [row.action] = row.old } })
+			seen = nil
+			press(row.old)
+			assert_equals(
+				seen, row.subcommand,
+				("%s put back on %q should run :Gitflow %s"):format(
+					row.action, row.old, row.subcommand
+				)
+			)
+		end
+	end)
+	commands.dispatch = real_dispatch
+	gitflow.setup({})
+	if not ok then
+		error(err, 0)
+	end
+end)
+
 
 test("an override that would shadow an existing key is refused, loudly", function()
 	local warnings = {}
@@ -432,6 +764,39 @@ test("an override that would shadow an existing key is refused, loudly", functio
 	utils.notify = real_notify
 	tag.close()
 	gitflow.setup({})
+end)
+
+test("a replacement naming more keys than the entry binds is refused", function()
+	-- Without this the extra key binds with no meaning behind it: `run` gets
+	-- a key its action table has no entry for.
+	local warnings = {}
+	local utils = require("gitflow.utils")
+	local real_notify = utils.notify
+	utils.notify = function(message)
+		warnings[#warnings + 1] = message
+	end
+
+	local overreach = gitflow.setup({
+		panel_keybindings = { worktree = { ["d/D"] = "x/X/Y" } },
+	})
+	local worktree = require("gitflow.panels.worktree")
+	worktree.open(overreach)
+	local bound = bound_keys(require("gitflow.ui.buffer").get("worktree"))
+
+	local reported = false
+	for _, message in ipairs(warnings) do
+		if message:find("names 3 keys but d/D binds 2", 1, true) then
+			reported = true
+		end
+	end
+
+	utils.notify = real_notify
+	worktree.close()
+	gitflow.setup({})
+
+	assert_true(bound["d"] and bound["D"], "the refused override must leave d/D alone")
+	assert_true(bound["Y"] == nil, "a key with no meaning must not be bound")
+	assert_true(reported, "the refusal must say so: " .. vim.inspect(warnings))
 end)
 
 test("panel_keybindings reaches the actions panel and the review diff pane", function()
