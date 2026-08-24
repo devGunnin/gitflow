@@ -97,8 +97,11 @@ jobs:
 
       - name: Run luacheck
         run: |
-          luacheck lua/ scripts/ tests/
-          status=$?
+          # `run:` executes under `bash -e`, so the status must be captured
+          # with `||` — a bare command's nonzero exit would abort the step
+          # before this guard ever runs.
+          luacheck lua/ scripts/ tests/ || status=$?
+          status="${status:-0}"
           # luacheck exit codes: 0 clean, 1 warnings only, 2+ real
           # errors/fatal. This first lint pass carries pre-existing style
           # warnings (unused locals, redefinition shadows in a few large
@@ -108,6 +111,7 @@ jobs:
           if [ "$status" -ge 2 ]; then
             exit "$status"
           fi
+          exit 0
 
       # stylua is intentionally not run here: the repo's hand-formatting
       # (multi-value table rows, manually wrapped boolean conditions) isn't
