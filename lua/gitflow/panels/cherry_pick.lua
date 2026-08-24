@@ -242,14 +242,13 @@ local function render_commits(commits, source_branch, current_branch)
 		{ "q", "close" },
 	})
 
-	ui.buffer.update("cherry_pick", B.lines)
+	B:flush("cherry_pick", M.state.bufnr, CP_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, CP_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

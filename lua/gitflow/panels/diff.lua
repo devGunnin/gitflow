@@ -277,11 +277,10 @@ local function render(title, text, current_branch)
 		git_diff.collect_markers(diff_lines, diff_start_idx)
 
 	local bufnr = M.state.bufnr
+	B:flush("diff", bufnr, DIFF_HIGHLIGHT_NS)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		ui.buffer.update("diff", B.lines)
 		return
 	end
-	B:flush("diff", bufnr, DIFF_HIGHLIGHT_NS)
 
 	-- Line numbers via right-aligned virtual text
 	vim.api.nvim_buf_clear_namespace(

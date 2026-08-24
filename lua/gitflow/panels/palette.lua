@@ -1,4 +1,5 @@
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
 
@@ -219,7 +220,7 @@ local function apply_selection_highlight(line)
 		return
 	end
 
-	vim.api.nvim_buf_add_highlight(
+	ui_render.highlight(
 		bufnr, ns, SELECTION_HIGHLIGHT, line - 1, 0, -1
 	)
 end
@@ -323,7 +324,7 @@ end
 ---@param col_end integer  byte offset (-1 for end of line)
 ---@param hl_group string
 local function add_hl(bufnr, ns, row, col_start, col_end, hl_group)
-	vim.api.nvim_buf_add_highlight(
+	ui_render.highlight(
 		bufnr, ns, hl_group, row, col_start, col_end
 	)
 end

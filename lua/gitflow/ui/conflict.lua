@@ -10,6 +10,7 @@
 ---   q save & close
 
 local ui = require("gitflow.ui")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
 local git_conflict = require("gitflow.git.conflict")
@@ -153,7 +154,7 @@ local function apply_highlights()
 	local line_count = vim.api.nvim_buf_line_count(bufnr)
 	local function hl(line, group)
 		if line >= 1 and line <= line_count then
-			pcall(vim.api.nvim_buf_add_highlight, bufnr, ns, group, line - 1, 0, -1)
+			ui_render.highlight(bufnr, ns, group, line - 1, 0, -1)
 		end
 	end
 	local function label(line, text, group)

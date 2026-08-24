@@ -111,12 +111,11 @@ local function render_loading(message)
 	B:blank()
 	components.empty(B, message)
 
-	ui.buffer.update("labels", B.lines)
+	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		B:apply(bufnr, LABELS_HIGHLIGHT_NS)
 		components.cursorline(M.state.winid, true)
 	end
 end
@@ -191,12 +190,11 @@ local function render_list(labels)
 		{ "q", "close" },
 	})
 
-	ui.buffer.update("labels", B.lines)
+	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		B:apply(bufnr, LABELS_HIGHLIGHT_NS)
 		components.cursorline(M.state.winid, true)
 	end
 end

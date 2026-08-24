@@ -279,14 +279,13 @@ local function render_list(runs, current_branch)
 		end
 	end
 
-	ui.buffer.update("actions", B.lines)
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 
@@ -384,14 +383,13 @@ local function render_detail(run)
 		end
 	end
 
-	ui.buffer.update("actions", B.lines)
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

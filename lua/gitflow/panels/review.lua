@@ -10,6 +10,7 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
+local ui_render = require("gitflow.ui.render")
 local git = require("gitflow.git")
 local gh_prs = require("gitflow.gh.prs")
 local list_picker = require("gitflow.ui.list_picker")
@@ -887,7 +888,7 @@ local function render_file_list()
 
 	vim.api.nvim_buf_clear_namespace(bufnr, FILE_LIST_HL_NS, 0, -1)
 	local function hl(line, cs, ce, group)
-		pcall(vim.api.nvim_buf_add_highlight,
+		ui_render.highlight(
 			bufnr, FILE_LIST_HL_NS, group, line, cs, ce)
 	end
 	-- Header chrome.

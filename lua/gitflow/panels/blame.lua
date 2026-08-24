@@ -123,13 +123,12 @@ local function render_state(paint)
 	components.header(B, "Gitflow Blame", render_opts)
 	B:blank()
 	paint(B)
-	ui.buffer.update("blame", B.lines)
+	B:flush("blame", M.state.bufnr, BLAME_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, BLAME_HIGHLIGHT_NS)
 end
 
 local function render_loading()
@@ -235,14 +234,13 @@ local function render(entries, current_branch)
 
 	components.split_hint_bar(B, render_opts, BLAME_HINTS)
 
-	ui.buffer.update("blame", B.lines)
+	B:flush("blame", M.state.bufnr, BLAME_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, BLAME_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

@@ -346,10 +346,9 @@ local function render_loading(message)
 		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
 		{ message, "GitflowMeta" },
 	})
-	ui.buffer.update("issues", B.lines)
+	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.line_groups = {}
-	B:apply(M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
 ---Summary bar: the rendered count plus every active filter.
@@ -502,7 +501,7 @@ local function render_list(groups, total)
 		end
 	end
 
-	ui.buffer.update("issues", B.lines)
+	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.line_groups = line_groups
 	M.state.mode = "list"
@@ -512,7 +511,6 @@ local function render_list(groups, total)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ISSUES_HIGHLIGHT_NS)
 
 	-- Place the cursor on the first card.
 	local first_line = nil
@@ -616,7 +614,7 @@ local function render_view(issue)
 		end
 	end
 
-	ui.buffer.update("issues", B.lines)
+	B:flush("issues", M.state.bufnr, ISSUES_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.line_groups = {}
 	M.state.mode = "view"
@@ -633,7 +631,6 @@ local function render_view(issue)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ISSUES_HIGHLIGHT_NS)
 end
 
 ---@return table|nil

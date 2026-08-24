@@ -208,14 +208,13 @@ local function render(entries, current_branch)
 	-- their window footer).
 	components.split_hint_bar(B, render_opts, REFLOG_HINTS)
 
-	ui.buffer.update("reflog", B.lines)
+	B:flush("reflog", M.state.bufnr, REFLOG_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, REFLOG_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

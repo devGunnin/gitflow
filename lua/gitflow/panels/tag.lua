@@ -178,14 +178,13 @@ local function render(entries, current_branch)
 	-- their window footer).
 	components.split_hint_bar(B, render_opts, TAG_HINTS)
 
-	ui.buffer.update("tag", B.lines)
+	B:flush("tag", M.state.bufnr, TAG_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, TAG_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

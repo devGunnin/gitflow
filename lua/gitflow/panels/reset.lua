@@ -182,7 +182,7 @@ local function render(entries, merge_base_sha, current_branch)
 		end
 	end
 
-	ui.buffer.update("reset", B.lines)
+	B:flush("reset", M.state.bufnr, RESET_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.merge_base_sha = merge_base_sha
 
@@ -191,7 +191,6 @@ local function render(entries, merge_base_sha, current_branch)
 		return
 	end
 
-	B:apply(bufnr, RESET_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

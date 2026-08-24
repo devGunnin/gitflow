@@ -464,10 +464,9 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	-- Final line must be exactly "Current branch: <branch>".
 	components.branch_footer(B, current_branch)
 
-	ui.buffer.update("status", B.lines)
+	B:flush("status", M.state.bufnr, STATUS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 
-	B:apply(bufnr, STATUS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

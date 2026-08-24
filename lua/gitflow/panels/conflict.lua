@@ -170,13 +170,12 @@ local function render_state(paint)
 	components.header(B, "Gitflow Conflicts", render_opts)
 	B:blank()
 	paint(B)
-	ui.buffer.update("conflict", B.lines)
+	B:flush("conflict", M.state.bufnr, CONFLICT_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, CONFLICT_HIGHLIGHT_NS)
 end
 
 local function render_loading()
@@ -268,7 +267,7 @@ local function render(files, operation)
 
 	components.split_hint_bar(B, render_opts, CONFLICT_HINTS)
 
-	ui.buffer.update("conflict", B.lines)
+	B:flush("conflict", M.state.bufnr, CONFLICT_HIGHLIGHT_NS)
 	M.state.files = files
 	M.state.line_entries = line_entries
 	M.state.active_operation = operation
@@ -277,7 +276,6 @@ local function render(files, operation)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, CONFLICT_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 

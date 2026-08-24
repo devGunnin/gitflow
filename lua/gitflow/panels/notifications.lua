@@ -270,14 +270,13 @@ local function render(entries)
 		{ ("%d entries"):format(#filtered), "GitflowFooter" },
 	})
 
-	ui.buffer.update("notifications", B.lines)
+	B:flush("notifications", M.state.bufnr, NOTIF_HIGHLIGHT_NS)
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
 
-	B:apply(bufnr, NOTIF_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 	M.state.line_context = line_context
 end

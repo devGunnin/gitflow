@@ -349,14 +349,13 @@ local function render_loading(message)
 		{ icons.get("ui", "clock") .. "  ", "GitflowSectionIcon" },
 		{ message, "GitflowMeta" },
 	})
-	ui.buffer.update("prs", B.lines)
+	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 end
 
 ---@param prs table[]
@@ -443,7 +442,7 @@ local function render_list(prs)
 		end
 	end
 
-	ui.buffer.update("prs", B.lines)
+	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
@@ -452,7 +451,6 @@ local function render_list(prs)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 
 	local first_line = nil
 	for line_no in pairs(line_entries) do
@@ -597,7 +595,7 @@ local function render_view(pr, review_comments)
 		end
 	end
 
-	ui.buffer.update("prs", B.lines)
+	B:flush("prs", M.state.bufnr, PRS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
@@ -613,7 +611,6 @@ local function render_view(pr, review_comments)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, PRS_HIGHLIGHT_NS)
 end
 
 ---@return table|nil
