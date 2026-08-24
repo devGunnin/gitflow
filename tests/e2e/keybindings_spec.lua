@@ -464,7 +464,7 @@ T.run_suite("E2E: Keybinding Verification", {
 
 		T.assert_keymaps(
 			bufnr,
-			{ "<CR>", "c", "C", "x", "L", "A", "r", "b", "q" }
+			{ "<CR>", "c", "C", "E", "x", "L", "A", "r", "b", "q" }
 		)
 
 		T.cleanup_panels()
