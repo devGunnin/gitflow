@@ -1,4 +1,3 @@
-local ui = require("gitflow.ui")
 local git = require("gitflow.git")
 local utils = require("gitflow.utils")
 local git_cherry_pick = require("gitflow.git.cherry_pick")

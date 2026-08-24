@@ -69,9 +69,10 @@ end
 
 -- ── request generation ─────────────────────────────────────────────────
 -- Every async chain a panel starts captures the id current at its start and
--- drops its result if a newer one has begun. Bumping on open, refresh and
--- close is what stops a slow response from repainting a superseded view or
--- resurrecting a closed panel.
+-- drops its result if a newer one has begun. Bumping on open, refresh and on
+-- either way a panel closes -- M.close() or the window going away under `:q`
+-- -- is what stops a slow response from repainting a superseded view,
+-- painting into an invisible buffer, or resurrecting a closed panel.
 
 ---Start a new request generation and return its id.
 ---@return integer
@@ -360,6 +361,9 @@ function Panel:ensure_window(cfg, opts)
 			lines = components.loading_lines(self.loading),
 		})
 		self.state.bufnr = bufnr
+		-- Bind with the buffer, not with the window: a buffer handed back
+		-- through the reuse path below would otherwise carry no keymaps.
+		self:bind_keymaps(bufnr)
 	end
 	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
 
@@ -370,6 +374,10 @@ function Panel:ensure_window(cfg, opts)
 
 	local function on_close()
 		self.state.winid = nil
+		-- `:q` leaves the buffer alive (bufhidden=hide), so nothing else
+		-- invalidates the refresh chain: without this a closed panel keeps
+		-- running git and painting into a window nobody can see.
+		self:next_request()
 		if self.on_close then
 			self.on_close()
 		end
@@ -411,7 +419,6 @@ function Panel:ensure_window(cfg, opts)
 		})
 	end
 
-	self:bind_keymaps(bufnr)
 	return true
 end
 

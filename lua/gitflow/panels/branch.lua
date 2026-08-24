@@ -125,21 +125,21 @@ local function append_section(B, icon, title, entries, line_entries)
 	end
 
 	for _, entry in ipairs(entries) do
-		local icon, group
+		local entry_icon, group
 		if entry.is_current then
-			icon = icons.get("branch", "current")
+			entry_icon = icons.get("branch", "current")
 			group = "GitflowBranchCurrent"
 		elseif entry.is_remote then
-			icon = icons.get("branch", "remote")
+			entry_icon = icons.get("branch", "remote")
 			group = "GitflowBranchRemote"
 		else
-			icon = icons.get("branch", "local_branch")
+			entry_icon = icons.get("branch", "local_branch")
 			group = "GitflowCardTitle"
 		end
 
 		local chunks = {
 			{ components.spacing.gutter, nil },
-			{ icon ~= "" and (icon .. "  ") or "", group },
+			{ entry_icon ~= "" and (entry_icon .. "  ") or "", group },
 			{ entry.name, group },
 		}
 		if entry.is_current then

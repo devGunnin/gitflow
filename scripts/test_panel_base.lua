@@ -366,6 +366,24 @@ for _, case in ipairs(STALE_GUARD_PANELS) do
 	end)
 end
 
+test("closing the window with :q invalidates the refresh chain", function()
+	local mod = require("gitflow.panels.tag")
+	local P = panel_object("gitflow.panels.tag")
+
+	mod.open(cfg)
+	local in_flight = P:next_request()
+	assert_true(P:is_active(in_flight), "the panel should be live once open")
+
+	-- `:q` closes the window and leaves the buffer; without the generation
+	-- bump the whole refresh chain keeps running and painting into it.
+	vim.api.nvim_win_close(P.state.winid, true)
+	assert_true(
+		not P:is_active(in_flight),
+		"closing the window must invalidate in-flight requests"
+	)
+	mod.close()
+end)
+
 -- ── a state render drops the line→entry map ──────────────────────────
 -- A loading or error render collapses the buffer. The map built for the
 -- previous, longer content must not survive it: line 8 of a 57-line log is a
