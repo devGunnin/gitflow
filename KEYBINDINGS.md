@@ -584,7 +584,10 @@ bug — but it can catch you out if you jump between panels on muscle memory:
   popup).
 - **`<C-n>` / `<C-p>`** — next / previous page (PR List, Label Panel) / move the
   selection down / up (command palette, searchable pickers). Both mean "the
-  next one", on different things.
+  next one", on different things. In the PR and Label lists they also shadow
+  Neovim's own `CTRL-N` / `CTRL-P` cursor motions; `j` / `k` still move the
+  cursor there, and keeping `n` for `/` search-next matters more in a buffer
+  you search.
 - **"Back to list"** — `b` (Issue List, PR List) or `<BS>` (Actions Panel),
   depending on the panel. There is no panel where `<Esc>` performs this;
   `<Esc>` is used elsewhere for unrelated things (cancelling a log-panel range
