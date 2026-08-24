@@ -1,9 +1,8 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
-local git = require("gitflow.git")
 local git_reflog = require("gitflow.git.reflog")
 local git_branch = require("gitflow.git.branch")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 local icons = require("gitflow.icons")
 
@@ -14,107 +13,45 @@ local icons = require("gitflow.icons")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local REFLOG_FLOAT_TITLE = "Gitflow Reflog"
-local REFLOG_HIGHLIGHT_NS =
-	vim.api.nvim_create_namespace("gitflow_reflog_hl")
-local REFLOG_FLOAT_FOOTER =
-	" <CR> checkout · 1-9 quick checkout · R reset · r refresh · q close "
--- Split-layout counterpart of REFLOG_FLOAT_FOOTER; keep the two in sync.
-local REFLOG_HINTS = {
-	{ "<CR>", "checkout" },
-	{ "1-9", "quick checkout" },
-	{ "R", "reset" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
 
 ---@type GitflowReflogPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	cfg = nil,
 }
+
+local QUICK_SELECT_KEYS = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+
+local P = panel.new({
+	name = "reflog",
+	title = "Gitflow Reflog",
+	filetype = "gitflowreflog",
+	loading = "Loading reflog…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "checkout", run = function()
+			M.checkout_under_cursor()
+		end },
+		{ key = "1-9", keys = QUICK_SELECT_KEYS, desc = "quick checkout",
+			run = function(key)
+				M.select_by_position(tonumber(key))
+			end },
+		{ key = "R", desc = "reset", run = function()
+			M.reset_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", run = function()
+			M.close()
+		end },
+	},
+})
 
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
 		"User", { pattern = "GitflowPostOperation" }
 	)
-end
-
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("reflog", {
-			filetype = "gitflowreflog",
-			lines = components.loading_lines("Loading reflog…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-
-	if M.state.winid
-		and vim.api.nvim_win_is_valid(M.state.winid)
-	then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "reflog",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = REFLOG_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer
-				and REFLOG_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "reflog",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.checkout_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	for i = 1, 9 do
-		vim.keymap.set("n", tostring(i), function()
-			M.select_by_position(i)
-		end, { buffer = bufnr, silent = true, nowait = true })
-	end
-
-	vim.keymap.set("n", "R", function()
-		M.reset_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
 end
 
 ---Choose a per-row accent icon based on the reflog action.
@@ -134,16 +71,11 @@ end
 ---@param entries GitflowReflogEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Reflog", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: entry count + current branch context.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
 		{
 			("%d entr%s"):format(#entries, #entries == 1 and "y" or "ies"),
@@ -184,7 +116,7 @@ local function render(entries, current_branch)
 
 			local icon = action_icon(action)
 			local chunks = {
-				{ " ", nil },
+				{ components.spacing.edge, nil },
 				{ icon ~= "" and (icon .. "  ") or "", "GitflowSectionIcon" },
 				{ marker, "GitflowNumber" },
 				{ sha, "GitflowReflogHash" },
@@ -204,18 +136,11 @@ local function render(entries, current_branch)
 		end
 	end
 
-	-- In-buffer hints for split layout (floats advertise the same keys in
-	-- their window footer).
-	components.split_hint_bar(B, render_opts, REFLOG_HINTS)
+	P:push_hints(B)
 
-	B:flush("reflog", M.state.bufnr, REFLOG_HIGHLIGHT_NS)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B) then
+		M.state.line_entries = line_entries
 	end
-	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowReflogEntry|nil
@@ -276,7 +201,9 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -286,10 +213,19 @@ function M.refresh()
 		return
 	end
 
+	local request_id = P:next_request()
 	git_branch.current({}, function(_, branch)
+		if not P:is_active(request_id) then
+			return
+		end
 		git_reflog.list({}, function(err, entries)
+			if not P:is_active(request_id) then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				P:render_error("Could not read the reflog", { detail = err,
+					hint = "r retries" })
 				return
 			end
 			render(entries or {}, branch or "(unknown)")
@@ -363,27 +299,13 @@ function M.reset_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("reflog")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("reflog")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

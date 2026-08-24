@@ -1,16 +1,11 @@
-local ui = require("gitflow.ui")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local form = require("gitflow.ui.form")
 local gh_labels = require("gitflow.gh.labels")
 local highlights = require("gitflow.highlights")
 local icons = require("gitflow.icons")
-
-local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
-local LABELS_FLOAT_TITLE = "  Gitflow Labels  "
-local LABELS_FLOAT_FOOTER = " c create · d delete · r refresh · q close "
 
 ---@class GitflowLabelPanelState
 ---@field bufnr integer|nil
@@ -22,73 +17,31 @@ local M = {}
 
 ---@type GitflowLabelPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	line_entries = {},
 }
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("labels", {
-			filetype = "markdown",
-			lines = components.loading_lines("Loading labels…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "labels",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = LABELS_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and LABELS_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "labels",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "c", function()
-		M.create_interactive()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "d", function()
-		M.delete_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
+local P = panel.new({
+	name = "labels",
+	title = "Gitflow Labels",
+	filetype = "markdown",
+	loading = "Loading labels…",
+	state = M.state,
+	keymaps = {
+		{ key = "c", desc = "create", run = function()
+			M.create_interactive()
+		end },
+		{ key = "d", desc = "delete", run = function()
+			M.delete_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@param value string|nil
 ---@return string
@@ -100,63 +53,14 @@ local function maybe_text(value)
 	return text
 end
 
-local function render_loading(message)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Labels", render_opts)
-	components.summary(B, icons.get("ui", "tag"), "Labels", {})
-	B:blank()
-	components.loading(B, message)
-
-	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
-	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		components.cursorline(M.state.winid, true)
-	end
-end
-
----@param message string
-local function render_error(message)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Labels", render_opts)
-	components.summary(B, icons.get("ui", "tag"), "Labels", {})
-	B:blank()
-	components.error_state(B, "Failed to load labels", {
-		detail = message,
-		hint = "Press r to retry · q to close",
-	})
-
-	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
-	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		components.cursorline(M.state.winid, true)
-	end
-end
-
 ---@param labels table[]
 local function render_list(labels)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
 	local tag_icon = icons.get("ui", "tag")
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Labels", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: tag icon + label count.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
 		{ ("%d label%s"):format(#labels, #labels == 1 and "" or "s"), "GitflowSectionTitle" },
 	})
@@ -176,13 +80,13 @@ local function render_list(labels)
 			-- Name line: text MUST contain "<name> (#<color>)" exactly so the
 			-- colored highlight can target the name and tests can locate it.
 			local name_line = B:push({
-				{ " ", nil },
+				{ components.spacing.edge, nil },
 				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
 				{ name, "GitflowCardTitle" },
 				{ (" (#%s)"):format(color), "GitflowMeta" },
 			})
 			local desc_line = B:push({
-				{ "      ", nil },
+				{ components.spacing.indent .. components.spacing.gutter, nil },
 				{ description, "GitflowMeta" },
 			})
 
@@ -206,20 +110,10 @@ local function render_list(labels)
 		end
 	end
 
-	B:blank()
-	components.hint_bar(B, {
-		{ "c", "create" },
-		{ "d", "delete" },
-		{ "r", "refresh" },
-		{ "q", "close" },
-	})
+	P:push_hints(B)
 
-	B:flush("labels", M.state.bufnr, LABELS_HIGHLIGHT_NS)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		components.cursorline(M.state.winid, true)
+	if P:paint(B) then
+		M.state.line_entries = line_entries
 	end
 end
 
@@ -236,7 +130,9 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -245,10 +141,19 @@ function M.refresh()
 		return
 	end
 
-	render_loading("Loading labels…")
+	local request_id = P:next_request()
+	P:render_loading("Loading labels…")
+	M.state.line_entries = {}
 	gh_labels.list({}, function(err, labels)
+		if not P:is_active(request_id) then
+			return
+		end
 		if err then
-			render_error(err)
+			M.state.line_entries = {}
+			P:render_error("Failed to load labels", {
+				detail = err,
+				hint = "Press r to retry \u{b7} q to close",
+			})
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
@@ -316,26 +221,13 @@ function M.delete_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("labels")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("labels")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

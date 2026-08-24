@@ -1,9 +1,8 @@
-local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_log = require("gitflow.git.log")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 
 ---@class GitflowLogPanelOpts
@@ -17,95 +16,38 @@ local components = require("gitflow.ui.components")
 ---@field opts GitflowLogPanelOpts
 
 local M = {}
-local LOG_FLOAT_TITLE = "  Gitflow Log  "
-local LOG_FLOAT_FOOTER = " <CR> review commit · V range select · r refresh · q close "
--- Split-layout counterpart of LOG_FLOAT_FOOTER; keep the two in sync.
-local LOG_HINTS = {
-	{ "<CR>", "review commit" },
-	{ "V", "range select" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
-local LOG_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_log_hl")
 
 ---@type GitflowLogPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	cfg = nil,
 	opts = {},
 }
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("log", {
-			filetype = "gitflowlog",
-			lines = components.loading_lines("Loading git log…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "log",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = LOG_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and LOG_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "log",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.open_commit_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "V", function()
-		M.mark_range_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "<Esc>", function()
-		if M.state.range_start then
-			M.state.range_start = nil
-			M.state.range_marks = {}
+local P = panel.new({
+	name = "log",
+	title = "Gitflow Log",
+	filetype = "gitflowlog",
+	loading = "Loading git log…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "review commit", run = function()
+			M.open_commit_under_cursor()
+		end },
+		{ key = "V", desc = "range select", run = function()
+			M.mark_range_under_cursor()
+		end },
+		{ key = "<Esc>", run = function()
+			M.clear_range()
+		end },
+		{ key = "r", desc = "refresh", run = function()
 			M.refresh()
-		end
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
+		end },
+		{ key = "q", desc = "close", run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@param entry GitflowLogEntry
 ---@return string
@@ -132,15 +74,10 @@ end
 ---@param entries GitflowLogEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Log", render_opts)
+	local B = P:begin_render()
 
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
 		{ ("%d commit%s"):format(#entries, #entries == 1 and "" or "s"), "GitflowSectionTitle" },
 		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
@@ -157,7 +94,10 @@ local function render(entries, current_branch)
 			local summary = display_summary(entry)
 			local marked = marks[entry.sha]
 			local line_no = B:push({
-				{ marked and " \u{2503} " or "   ", marked and "GitflowNumber" or nil },
+				{
+					marked and (" \u{2503} ") or (components.spacing.gutter .. " "),
+					marked and "GitflowNumber" or nil,
+				},
 				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
 				{ entry.short_sha, "GitflowLogHash" },
 				{ summary ~= "" and ("  " .. summary) or "", "GitflowCardTitle" },
@@ -166,20 +106,14 @@ local function render(entries, current_branch)
 		end
 	end
 
-	-- In-buffer hints for split layout (floats advertise the same keys in
-	-- their window footer). Kept above the branch footer so the final line
-	-- stays the exact "Current branch: <branch>" string tests rely on.
-	components.split_hint_bar(B, render_opts, LOG_HINTS)
+	-- Hints sit above the branch footer so the final line stays the exact
+	-- "Current branch: <branch>" string other panels and tests rely on.
+	P:push_hints(B)
 	components.branch_footer(B, current_branch)
 
-	B:flush("log", M.state.bufnr, LOG_HIGHLIGHT_NS)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B) then
+		M.state.line_entries = line_entries
 	end
-	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowLogEntry|nil
@@ -197,7 +131,9 @@ function M.open(cfg, opts)
 	M.state.cfg = cfg
 	M.state.opts = opts or {}
 
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -207,18 +143,38 @@ function M.refresh()
 		return
 	end
 
+	local request_id = P:next_request()
 	git_branch.current({}, function(_, branch)
+		if not P:is_active(request_id) then
+			return
+		end
 		git_log.list({
 			count = cfg.git.log.count,
 			format = cfg.git.log.format,
 		}, function(err, entries)
+			if not P:is_active(request_id) then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				P:render_error("Could not read the git log", { detail = err,
+					hint = "r retries" })
 				return
 			end
 			render(entries, branch or "(unknown)")
 		end)
 	end)
+end
+
+--- Drop a pending range selection (bound to <Esc>). A no-op otherwise, so
+--- <Esc> keeps its normal meaning when nothing is marked.
+function M.clear_range()
+	if not M.state.range_start then
+		return
+	end
+	M.state.range_start = nil
+	M.state.range_marks = {}
+	M.refresh()
 end
 
 --- Mark the commit under the cursor as the start of a range. Press <CR> on a
@@ -269,21 +225,15 @@ function M.open_commit_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("log")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("log")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
+	M.state.range_start = nil
+	M.state.range_marks = {}
+end
+
+---@return boolean
+function M.is_open()
+	return P:is_open()
 end
 
 return M
