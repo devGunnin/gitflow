@@ -561,6 +561,48 @@ for _, case in ipairs(PANEL_ROWS) do
 	end)
 end
 
+test("every multi-key entry re-keys its dispatch, not just its binding", function()
+	-- The presses above cover the rows a user is told about. This covers the
+	-- rest of the class: every entry binding more than one key, re-keyed to a
+	-- synthetic set, has to hand `run` the DEFAULT key at the same position.
+	local checked, offences = 0, {}
+	for _, surface in ipairs(surfaces) do
+		for _, entry in ipairs(surface.keymaps) do
+			local defaults = panel.bound_keys(entry)
+			if #defaults > 1 then
+				checked = checked + 1
+				local replacement = {}
+				for index = 1, #defaults do
+					replacement[index] = ("<leader>k%d"):format(index)
+				end
+				local resolved = panel.resolve_keymaps(
+					{ entry },
+					{ panel_keybindings = {
+						[surface.name] = { [entry.key] = table.concat(replacement, "/") },
+					} },
+					surface.name
+				)
+				for index, binding in ipairs(panel.bindings(resolved[1])) do
+					if binding.key ~= replacement[index]
+						or binding.run_key ~= defaults[index] then
+						offences[#offences + 1] = ("%s %s: %s dispatches on %s, not %s"):format(
+							surface.name, entry.key, binding.key,
+							tostring(binding.run_key), defaults[index]
+						)
+					end
+				end
+			end
+		end
+	end
+	assert_true(checked >= 30, ("expected the multi-key entries, got %d"):format(checked))
+	table.sort(offences)
+	assert_equals(
+		#offences, 0,
+		"entries whose dispatch did not follow the re-key:\n    "
+			.. table.concat(offences, "\n    ")
+	)
+end)
+
 test("the rebase editor's restored r writes reword, not nil, into the plan", function()
 	-- The observed effect the label comparison could not see: the todo entry
 	-- the plan carries. `set_action(nil)` used to render `● nil abc1234 …`.
