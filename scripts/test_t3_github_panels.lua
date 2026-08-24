@@ -7,7 +7,9 @@
 --   * reopening a panel that already has data paints it in the same frame,
 --     before the reconciling refetch resolves;
 --   * the new client-side pagination (#283) pages the cached list without
---     another `gh` call.
+--     another `gh` call;
+--   * the cache is scoped to the repo it was filled in, a failed refresh is
+--     visible even with rows on screen, and `b` leaves view mode (T3 review).
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local project_root = vim.fn.fnamemodify(script_path, ":p:h:h")
@@ -202,9 +204,12 @@ for _, case in ipairs(CASES) do
 				("%s should have painted the seeded item"):format(case.name)
 			)
 			mod.close()
+			-- Kept across close only for THIS repo and query; the scoped-cache
+			-- test below drives the other-repo half of the contract.
 			assert_true(
 				mod.state.cache ~= nil,
-				("%s should keep its cache across close"):format(case.name)
+				("%s should keep its cache across close, in the same repo")
+					:format(case.name)
 			)
 
 			-- Reopen with the lister held: the cached frame must appear
@@ -269,7 +274,8 @@ local PAGINATED_CASES = {
 }
 
 for _, case in ipairs(PAGINATED_CASES) do
-	test(("%s: n/p page the cached list without another gh call"):format(case.name), function()
+	test(("%s: <C-n>/<C-p> page the cached list without another gh call")
+		:format(case.name), function()
 		local modname = "gitflow.panels." .. case.name
 		local mod = require(modname)
 		local gh_mod = require(case.module)
@@ -319,6 +325,316 @@ for _, case in ipairs(PAGINATED_CASES) do
 		mod.close()
 		mod.state.cache = nil
 		assert_true(ok, tostring(err))
+	end)
+end
+
+-- ── the cache is scoped: another repo's rows never paint or resolve ──
+-- `gh` resolves the repo from the cwd, so an unkeyed module-level cache
+-- painted repo A's rows in repo B — with line_entries registered, so `m`
+-- merge / `x` close / `d` delete resolved a stale row and fired against the
+-- CURRENT repo.
+
+for _, case in ipairs(CASES) do
+	test(("%s: a cache filled in another repo neither paints nor resolves"):format(
+		case.name
+	), function()
+		local modname = "gitflow.panels." .. case.name
+		local mod = require(modname)
+		local gh_mod = require(case.module)
+		local real_list = gh_mod.list
+		local original_cwd = vim.fn.getcwd()
+		local repo_a, repo_b = vim.fn.tempname(), vim.fn.tempname()
+		vim.fn.mkdir(repo_a, "p")
+		vim.fn.mkdir(repo_b, "p")
+
+		mod.close()
+		mod.state.cache = nil
+
+		local ok, err = pcall(function()
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_a))
+			gh_mod.list = function(...)
+				local cb = select(select("#", ...), ...)
+				cb(nil, { case.item(1, "REPO-A-ONLY") })
+			end
+			case.open(mod)
+			assert_true(
+				buffer_text(mod.state.bufnr):find("REPO-A-ONLY", 1, true) ~= nil,
+				("%s should have painted the repo A row"):format(case.name)
+			)
+			mod.close()
+
+			-- Reopen in another repo with the reconciling fetch held: whatever
+			-- is on screen in that frame is what a keypress acts on.
+			vim.cmd("cd " .. vim.fn.fnameescape(repo_b))
+			local held_cb
+			gh_mod.list = function(...)
+				held_cb = select(select("#", ...), ...)
+			end
+			case.open(mod)
+
+			assert_true(
+				buffer_text(mod.state.bufnr):find("REPO-A-ONLY", 1, true) == nil,
+				("%s painted repo A's row in repo B: %q")
+					:format(case.name, buffer_text(mod.state.bufnr))
+			)
+			assert_true(
+				next(mod.state.line_entries) == nil,
+				("%s left repo A's rows resolvable in repo B"):format(case.name)
+			)
+			assert_true(
+				held_cb ~= nil,
+				("%s should still kick a reconciling refetch"):format(case.name)
+			)
+		end)
+
+		gh_mod.list = real_list
+		vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+		mod.close()
+		mod.state.cache = nil
+		vim.fn.delete(repo_a, "rf")
+		vim.fn.delete(repo_b, "rf")
+		assert_true(ok, tostring(err))
+	end)
+end
+
+-- ── a failed refresh with rows already on screen still shows the failure ──
+-- The error render used to be gated on an empty cache, so a failed refresh
+-- with content painted nothing at all: no error state, no map invalidation,
+-- and stale rows stayed actionable indefinitely.
+
+for _, case in ipairs(CASES) do
+	test(("%s: a failed refresh with rows on screen paints the error and drops them")
+		:format(case.name), function()
+		local modname = "gitflow.panels." .. case.name
+		local mod = require(modname)
+		local gh_mod = require(case.module)
+		local real_list = gh_mod.list
+		local real_notify = require("gitflow.utils").notify
+		require("gitflow.utils").notify = function() end
+
+		mod.close()
+		mod.state.cache = nil
+
+		local ok, err = pcall(function()
+			gh_mod.list = function(...)
+				local cb = select(select("#", ...), ...)
+				cb(nil, { case.item(1, "Live item") })
+			end
+			case.open(mod)
+			assert_true(
+				next(mod.state.line_entries) ~= nil,
+				("%s should have actionable rows before the failure")
+					:format(case.name)
+			)
+
+			gh_mod.list = function(...)
+				local cb = select(select("#", ...), ...)
+				cb("network error")
+			end
+			mod.refresh()
+
+			local text = buffer_text(mod.state.bufnr)
+			assert_true(
+				text:find("Failed to load", 1, true) ~= nil,
+				("%s hid a failed refresh behind stale rows: %q")
+					:format(case.name, text)
+			)
+			assert_true(
+				text:find("Live item", 1, true) == nil,
+				("%s still shows rows from before the failed refresh")
+					:format(case.name)
+			)
+			assert_true(
+				next(mod.state.line_entries) == nil,
+				("%s left rows resolvable after a failed refresh"):format(case.name)
+			)
+			assert_true(
+				mod.state.cache == nil,
+				("%s kept a cache a failed refresh could not confirm")
+					:format(case.name)
+			)
+		end)
+
+		gh_mod.list = real_list
+		require("gitflow.utils").notify = real_notify
+		mod.close()
+		mod.state.cache = nil
+		assert_true(ok, tostring(err))
+	end)
+end
+
+-- ── `b` leaves view mode even when the list it returns to fails to load ──
+
+---@type { name: string, module: string, item: fun(): table, stub_extra: (fun(gh_mod: table): fun())|nil }[]
+local BACK_CASES = {
+	{
+		name = "prs",
+		module = "gitflow.gh.prs",
+		item = function()
+			return { number = 5, title = "Detail PR", state = "open", body = "" }
+		end,
+		-- The PR detail only paints once its review comments land too.
+		stub_extra = function(gh_mod)
+			local real = gh_mod.review_comments
+			gh_mod.review_comments = function(...)
+				local cb = select(select("#", ...), ...)
+				cb(nil, {})
+			end
+			return function()
+				gh_mod.review_comments = real
+			end
+		end,
+	},
+	{
+		name = "issues",
+		module = "gitflow.gh.issues",
+		item = function()
+			return { number = 9, title = "Detail issue", state = "open", body = "" }
+		end,
+	},
+}
+
+for _, case in ipairs(BACK_CASES) do
+	test(("%s: b leaves view mode even when the list fetch fails"):format(case.name),
+		function()
+			local modname = "gitflow.panels." .. case.name
+			local mod = require(modname)
+			local P = panel_object(modname)
+			local gh_mod = require(case.module)
+			local real_list, real_view = gh_mod.list, gh_mod.view
+			local real_notify = require("gitflow.utils").notify
+			local restore_extra = case.stub_extra and case.stub_extra(gh_mod)
+			require("gitflow.utils").notify = function() end
+
+			mod.close()
+			mod.state.cache = nil
+
+			local ok, err = pcall(function()
+				-- Straight into the detail view, so no list cache exists.
+				gh_mod.view = function(...)
+					local cb = select(select("#", ...), ...)
+					cb(nil, case.item())
+				end
+				mod.open_view(case.item().number, cfg)
+				assert_true(
+					mod.state.mode == "view",
+					("%s should be in the detail view"):format(case.name)
+				)
+
+				gh_mod.list = function(...)
+					local cb = select(select("#", ...), ...)
+					cb("network error")
+				end
+				local back
+				for _, entry in ipairs(P:keymap_entries("view")) do
+					if entry.key == "b" then
+						back = entry
+					end
+				end
+				assert_true(back ~= nil, ("%s has no b binding"):format(case.name))
+				back.run("b")
+
+				assert_true(
+					mod.state.mode == "list",
+					("%s stayed in view mode after b, so r reopens the detail")
+						:format(case.name)
+				)
+			end)
+
+			gh_mod.list, gh_mod.view = real_list, real_view
+			if restore_extra then
+				restore_extra()
+			end
+			require("gitflow.utils").notify = real_notify
+			mod.close()
+			mod.state.cache = nil
+			assert_true(ok, tostring(err))
+		end)
+end
+
+-- ── pagination is off `n`, and tiered below the core verbs ──
+-- `n` is vim's search-next in these read-only markdown buffers, and a narrow
+-- float used to advertise two pagination keys while eliding merge/close-PR.
+
+---@type { name: string, module: string }[]
+local PAGINATION_KEY_CASES = {
+	{ name = "prs", module = "gitflow.gh.prs" },
+	{ name = "labels", module = "gitflow.gh.labels" },
+}
+
+for _, case in ipairs(PAGINATION_KEY_CASES) do
+	test(("%s: pagination is not bound to n"):format(case.name), function()
+		local modname = "gitflow.panels." .. case.name
+		local mod = require(modname)
+		local gh_mod = require(case.module)
+		local real_list = gh_mod.list
+		gh_mod.list = function(...)
+			local cb = select(select("#", ...), ...)
+			cb(nil, {})
+		end
+
+		local ok, err = pcall(function()
+			mod.open(cfg)
+			for _, map in ipairs(vim.api.nvim_buf_get_keymap(mod.state.bufnr, "n")) do
+				assert_true(
+					map.lhs ~= "n",
+					("%s binds n, shadowing vim's search-next"):format(case.name)
+				)
+			end
+		end)
+
+		gh_mod.list = real_list
+		mod.close()
+		mod.state.cache = nil
+		assert_true(ok, tostring(err))
+	end)
+end
+
+test("prs: a narrow hint bar keeps merge and drops pagination", function()
+	local P = panel_object("gitflow.panels.prs")
+	local footer = P:footer("list", 60)
+	assert_true(
+		footer:find("merge", 1, true) ~= nil,
+		("a 60-column PR bar dropped merge: %q"):format(footer)
+	)
+	assert_true(
+		footer:find("next page", 1, true) == nil,
+		("a 60-column PR bar kept pagination over its core verbs: %q"):format(footer)
+	)
+end)
+
+-- ── the GitHub state-change verbs are tagged destructive ──
+-- Untagged, the base's destructive-first drop pass is a no-op: a cramped bar
+-- keeps advertising `x close` while dropping the verbs it exists for.
+
+---@type { panel: string, key: string }[]
+local DESTRUCTIVE_HINTS = {
+	{ panel = "prs", key = "x" },
+	{ panel = "issues", key = "x" },
+	{ panel = "labels", key = "d" },
+}
+
+for _, case in ipairs(DESTRUCTIVE_HINTS) do
+	test(("%s: %s is tagged destructive, so a cramped bar drops it first")
+		:format(case.panel, case.key), function()
+		local P = panel_object("gitflow.panels." .. case.panel)
+		local tagged = false
+		for _, hint in ipairs(P:hints("list")) do
+			if hint[1] == case.key then
+				tagged = hint.destructive == true
+			end
+		end
+		assert_true(
+			tagged,
+			("%s: %s is not marked destructive"):format(case.panel, case.key)
+		)
+		local narrow = P:footer("list", 60)
+		assert_true(
+			narrow:find(case.key .. " ", 1, true) == nil
+				or narrow:find("close", 1, true) == nil,
+			("%s kept its destructive verb on a 60-column bar: %q")
+				:format(case.panel, narrow)
+		)
 	end)
 end
 
