@@ -331,6 +331,7 @@ Issue list ~
     <CR>    View issue under cursor (list mode)
     c       Create new issue
     C       Comment on issue
+    E       Edit title/body
     x       Close issue
     L       Edit labels
     A       Edit assignees
@@ -341,12 +342,15 @@ Issue list ~
     G       Cycle grouping (none/milestone/assignee/label)
     <Tab>   Fold/unfold group under cursor (list mode, when grouped)
     v       Switch to a saved view
-    V       Save current filters/sort as a named view
+    W       Save current filters/sort as a named view
     D       Delete a saved view
     B       Create a branch from the selected issue
     r       Refresh
     b       Back to list (detail view)
     q       Close
+
+    Note: V (shift-v) is deliberately left unbound so vim's visual-line
+    select still works for highlighting and copying issue text.
 
 PR list ~
     <CR>    View PR under cursor (list mode)

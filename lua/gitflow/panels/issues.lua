@@ -34,9 +34,9 @@ local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
-	" <CR> view · c create · C comment · x close · L labels"
+	" <CR> view · c create · C comment · E edit · x close · L labels"
 	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · G group · <Tab> fold group · v/V/D views · B branch"
+	.. " · G group · <Tab> fold group · v/W/D views · B branch"
 	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
@@ -122,6 +122,10 @@ local function ensure_window(cfg)
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "E", function()
+		M.edit_issue_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "x", function()
 		M.close_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -162,7 +166,9 @@ local function ensure_window(cfg)
 		M.switch_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "V", function()
+	-- V is deliberately left unbound: it collides with vim's visual-line
+	-- select, which the panel's readonly buffer should still support (#428).
+	vim.keymap.set("n", "W", function()
 		M.save_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -1364,6 +1370,79 @@ function M.comment_under_cursor()
 		return
 	end
 	comment_on_issue(number)
+end
+
+-- ── Edit title/body (#428) ────────────────────────────────────────────
+
+---@param number integer|string
+---@param issue table
+local function open_edit_form(number, issue)
+	form.open({
+		title = ("Edit Issue #%s"):format(tostring(number)),
+		draft_key = ("issue:%s:edit"):format(tostring(number)),
+		fields = {
+			{
+				name = "Title",
+				key = "title",
+				required = true,
+				default = maybe_text(issue.title) ~= "-" and issue.title or "",
+			},
+			{
+				name = "Body",
+				key = "body",
+				multiline = true,
+				default = tostring(issue.body or ""),
+			},
+		},
+		on_submit = function(values)
+			gh_issues.edit(number, {
+				title = values.title,
+				body = values.body,
+			}, {}, function(err)
+				if err then
+					utils.notify(err, vim.log.levels.ERROR)
+					return
+				end
+				utils.notify(("Updated issue #%s"):format(tostring(number)), vim.log.levels.INFO)
+				if M.state.mode == "view" then
+					M.open_view(number)
+				else
+					M.refresh()
+				end
+			end)
+		end,
+	})
+end
+
+---@param number integer|string
+local function edit_issue(number)
+	gh_issues.view(number, {}, function(err, issue)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		vim.schedule(function()
+			open_edit_form(number, issue or {})
+		end)
+	end)
+end
+
+function M.edit_issue_under_cursor()
+	local number = M.state.active_issue_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No issue selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+	edit_issue(number)
 end
 
 ---@param number integer|string

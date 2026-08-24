@@ -13,6 +13,8 @@ local gh_issues = require("gitflow.gh.issues")
 local derive = require("gitflow.issues.derive")
 local views_store = require("gitflow.issues.views")
 local ui = require("gitflow.ui")
+local input = require("gitflow.ui.input")
+local form = require("gitflow.ui.form")
 
 local GH_LOG = vim.fn.tempname()
 
@@ -750,12 +752,22 @@ T.run_suite("issues_panel_spec", {
 
 	["view keymaps are bound on the panel buffer"] = function()
 		local bufnr = open_and_wait()
-		for _, lhs in ipairs({ "v", "V", "D" }) do
+		for _, lhs in ipairs({ "v", "W", "D" }) do
 			T.assert_true(
 				buf_map(bufnr, lhs) ~= nil,
 				("%s should be mapped on the issues buffer"):format(lhs)
 			)
 		end
+	end,
+
+	-- ── #428 shift-V no longer collides with visual-line select ────────
+
+	["V is left unbound so visual-line select still works"] = function()
+		local bufnr = open_and_wait()
+		T.assert_true(
+			buf_map(bufnr, "V") == nil,
+			"V should not be mapped on the issues buffer"
+		)
 	end,
 
 	-- ── #381 branch from an issue ──────────────────────────────────────
@@ -826,5 +838,154 @@ T.run_suite("issues_panel_spec", {
 			return gh_call_count("issue list") >= 2
 		end, "refresh should issue a second fetch", 5000)
 		T.drain_jobs()
+	end,
+
+	-- ── #428 restore commenting on issues ───────────────────────────────
+
+	["C posts a comment for the issue under the cursor"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		T.assert_true(buf_map(bufnr, "C") ~= nil, "C should be mapped")
+
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		T.assert_true(card ~= nil, "the card should render")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local captured_opts = nil
+		local original_prompt = input.prompt
+		input.prompt = function(opts, on_confirm)
+			captured_opts = opts
+			on_confirm("Looks good, thanks!")
+		end
+
+		local ok, err = T.pcall_message(function()
+			issues_panel.comment_under_cursor()
+		end)
+		input.prompt = original_prompt
+
+		T.assert_true(ok, "commenting should not raise: " .. tostring(err))
+		T.assert_true(
+			captured_opts ~= nil and captured_opts.multiline == true,
+			"the comment prompt should be multiline"
+		)
+		T.drain_jobs()
+		T.assert_equals(gh_call_count("issue comment"), 1, "one comment call")
+
+		local posted = false
+		for _, line in ipairs(gh_calls()) do
+			if line:find("issue comment", 1, true)
+				and line:find("Looks good, thanks!", 1, true)
+			then
+				posted = true
+			end
+		end
+		T.assert_true(posted, "the comment body should reach gh issue comment")
+	end,
+
+	["commenting rejects an empty body without calling gh"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local original_prompt = input.prompt
+		input.prompt = function(_, on_confirm)
+			on_confirm("   ")
+		end
+
+		local ok = T.pcall_message(function()
+			issues_panel.comment_under_cursor()
+		end)
+		input.prompt = original_prompt
+
+		T.assert_true(ok, "an empty comment should not raise")
+		T.assert_equals(
+			gh_call_count("issue comment"), 0,
+			"a blank comment must not reach gh"
+		)
+	end,
+
+	-- ── #428 restore editing an issue's title/body ──────────────────────
+
+	["E opens an edit form prefilled from the issue"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		T.assert_true(buf_map(bufnr, "E") ~= nil, "E should be mapped")
+
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local captured_fields = nil
+		local original_open = form.open
+		form.open = function(opts)
+			captured_fields = opts.fields
+			return { bufnr = nil, winid = nil }
+		end
+
+		local ok, err = T.pcall_message(function()
+			issues_panel.edit_issue_under_cursor()
+		end)
+		T.wait_until(function()
+			return captured_fields ~= nil
+		end, "edit form should open once the issue is fetched", 5000)
+		form.open = original_open
+
+		T.assert_true(ok, "opening the edit form should not raise: " .. tostring(err))
+		local by_key = {}
+		for _, field in ipairs(captured_fields) do
+			by_key[field.key] = field
+		end
+		T.assert_true(by_key.title ~= nil, "form should have a title field")
+		T.assert_true(by_key.body ~= nil, "form should have a body field")
+		T.assert_equals(
+			by_key.title.default, "Setup CI pipeline",
+			"title should be prefilled from gh issue view"
+		)
+		T.assert_equals(
+			by_key.body.default,
+			"We need to configure GitHub Actions for automated testing.",
+			"body should be prefilled from gh issue view"
+		)
+		T.assert_true(by_key.title.required == true, "title should be required")
+		T.assert_true(by_key.body.multiline == true, "body should be multiline")
+	end,
+
+	["submitting the edit form sends title and body to gh issue edit"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		local submitted = false
+		local original_open = form.open
+		form.open = function(opts)
+			opts.on_submit({ title = "Setup CI pipeline v2", body = "Updated body." })
+			submitted = true
+			return { bufnr = nil, winid = nil }
+		end
+
+		issues_panel.edit_issue_under_cursor()
+		T.wait_until(function()
+			return submitted
+		end, "the form should open and submit", 5000)
+		form.open = original_open
+
+		T.drain_jobs()
+		T.assert_equals(gh_call_count("issue edit"), 1, "one edit call")
+
+		local matched = false
+		for _, line in ipairs(gh_calls()) do
+			if line:find("issue edit", 1, true)
+				and line:find("Setup CI pipeline v2", 1, true)
+				and line:find("Updated body.", 1, true)
+			then
+				matched = true
+			end
+		end
+		T.assert_true(matched, "gh issue edit should carry the new title and body")
 	end,
 })

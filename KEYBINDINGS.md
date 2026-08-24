@@ -197,6 +197,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `<CR>` | View issue under cursor |
 | `c` | Create new issue |
 | `C` | Comment on issue |
+| `E` | Edit title/body |
 | `x` | Close issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
@@ -207,7 +208,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `G` | Cycle grouping (none → milestone → assignee → label) |
 | `<Tab>` | Fold / unfold the group under cursor (when grouped) |
 | `v` | Switch to a saved view |
-| `V` | Save current filters/sort as a named view |
+| `W` | Save current filters/sort as a named view |
 | `D` | Delete a saved view |
 | `B` | Create a branch from the selected issue (prompts, prefilled name) |
 | `r` | Refresh |
@@ -220,6 +221,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `b` | Back to list |
 | `c` | Create new issue |
 | `C` | Comment on issue |
+| `E` | Edit title/body |
 | `x` | Close issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
@@ -229,15 +231,19 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `S` | Toggle sort direction |
 | `G` | Cycle grouping |
 | `v` | Switch to a saved view |
-| `V` | Save current filters/sort as a named view |
+| `W` | Save current filters/sort as a named view |
 | `D` | Delete a saved view |
 | `B` | Create a branch from this issue (prompts, prefilled name) |
 | `r` | Refresh |
 | `q` | Close |
 
-`f`/`X`/`s`/`S`/`G`/`v`/`V`/`D` act on the panel's shared filter/sort/group/view
+`f`/`X`/`s`/`S`/`G`/`v`/`W`/`D` act on the panel's shared filter/sort/group/view
 state, so they take effect from either view but only become visible once you
 go back (`b`) to the list.
+
+Note: `V` (shift-v) is deliberately left unbound in the issue list/detail
+views so vim's visual-line select still works for highlighting and copying
+text (#428).
 
 ## PR List
 
