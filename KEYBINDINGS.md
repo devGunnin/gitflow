@@ -197,6 +197,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `<CR>` | View issue under cursor |
 | `c` | Create new issue |
 | `C` | Comment on issue |
+| `E` | Edit issue title/body |
 | `x` | Close issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
@@ -206,8 +207,8 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `S` | Toggle sort direction |
 | `G` | Cycle grouping (none → milestone → assignee → label) |
 | `<Tab>` | Fold / unfold the group under cursor (when grouped) |
-| `v` | Switch to a saved view |
-| `V` | Save current filters/sort as a named view |
+| `o` | Switch to a saved view |
+| `O` | Save current filters/sort as a named view |
 | `D` | Delete a saved view |
 | `B` | Create a branch from the selected issue (prompts, prefilled name) |
 | `r` | Refresh |
@@ -220,6 +221,7 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `b` | Back to list |
 | `c` | Create new issue |
 | `C` | Comment on issue |
+| `E` | Edit issue title/body |
 | `x` | Close issue |
 | `L` | Edit labels |
 | `A` | Edit assignees |
@@ -228,14 +230,14 @@ Buffer-local bindings active in the issue panel (`:Gitflow issue list`).
 | `s` | Cycle sort key |
 | `S` | Toggle sort direction |
 | `G` | Cycle grouping |
-| `v` | Switch to a saved view |
-| `V` | Save current filters/sort as a named view |
+| `o` | Switch to a saved view |
+| `O` | Save current filters/sort as a named view |
 | `D` | Delete a saved view |
 | `B` | Create a branch from this issue (prompts, prefilled name) |
 | `r` | Refresh |
 | `q` | Close |
 
-`f`/`X`/`s`/`S`/`G`/`v`/`V`/`D` act on the panel's shared filter/sort/group/view
+`f`/`X`/`s`/`S`/`G`/`o`/`O`/`D` act on the panel's shared filter/sort/group/view
 state, so they take effect from either view but only become visible once you
 go back (`b`) to the list.
 

@@ -27,8 +27,18 @@ local git_status = require("gitflow.git.status")
 local gh_labels = require("gitflow.gh.labels")
 local form = require("gitflow.ui.form")
 local input = require("gitflow.ui.input")
+local cache = require("gitflow.review.cache")
 
 -- ── Helpers ────────────────────────────────────────────────────────────
+
+--- Open PR review mode with that PR's on-disk draft cache pre-cleared, so a
+--- prior test's crash-before-cleanup (or in-flight draft) can never leak
+--- into this one. Mirrors tests/e2e/pr_review_spec.lua's open_review.
+---@param pr_number integer
+local function open_review(pr_number)
+	cache.clear(pr_number, cache.repo_slug())
+	review_panel.open(cfg, pr_number)
+end
 
 ---@param patches table[]
 ---@param fn fun()
@@ -491,7 +501,7 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: review panel opens for PR"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
 		local bufnr = review_panel.state.file_list_bufnr
@@ -509,7 +519,7 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: review panel has expected keymaps"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
 		local bufnr = review_panel.state.file_list_bufnr
@@ -526,7 +536,7 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: review tracks PR number"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
 		T.assert_equals(
@@ -539,7 +549,7 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: inline comment adds to pending list"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
 		local before_count = #(review_panel.state.pending_comments or {})
@@ -568,7 +578,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		local input_mod = require("gitflow.ui.input")
 		with_temp_gh_log(function(log_path)
 			T.cleanup_panels()
-			review_panel.open(cfg, 42)
+			open_review(42)
 			T.drain_jobs(3000)
 
 			with_temporary_patches({
@@ -708,7 +718,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.cleanup_panels()
 
 		-- 4. Open review panel
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 		local review_buf = review_panel.state.file_list_bufnr
 		T.assert_true(
@@ -788,7 +798,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			T.cleanup_panels()
 
 			-- Open review
-			review_panel.open(cfg, 42)
+			open_review(42)
 			T.drain_jobs(3000)
 			T.cleanup_panels()
 
@@ -839,7 +849,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.drain_jobs(3000)
 		T.cleanup_panels()
 
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 		T.cleanup_panels()
 

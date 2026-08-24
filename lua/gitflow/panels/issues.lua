@@ -35,9 +35,9 @@ local M = {}
 local ISSUES_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_issues_hl")
 local ISSUES_FLOAT_TITLE = "  Gitflow Issues  "
 local ISSUES_FLOAT_FOOTER =
-	" <CR> view · c create · C comment · x close · L labels"
+	" <CR> view · c create · C comment · E edit · x close · L labels"
 	.. " · A assign · f filter · X clear · s sort · S sort dir"
-	.. " · G group · <Tab> fold group · v/V/D views · B branch"
+	.. " · G group · <Tab> fold group · o/O/D views · B branch"
 	.. " · r refresh · b back · q close "
 
 --- Fetch broadly once so filter changes never need another `gh` round-trip.
@@ -123,6 +123,10 @@ local function ensure_window(cfg)
 		M.comment_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
+	vim.keymap.set("n", "E", function()
+		M.edit_under_cursor()
+	end, { buffer = bufnr, silent = true, nowait = true })
+
 	vim.keymap.set("n", "x", function()
 		M.close_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
@@ -159,11 +163,13 @@ local function ensure_window(cfg)
 		M.toggle_group_under_cursor()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "v", function()
+	-- o/O (not v/V): v/V are vim's visual/visual-line mode, needed to
+	-- highlight and yank panel text (#428).
+	vim.keymap.set("n", "o", function()
 		M.switch_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
-	vim.keymap.set("n", "V", function()
+	vim.keymap.set("n", "O", function()
 		M.save_view()
 	end, { buffer = bufnr, silent = true, nowait = true })
 
@@ -1347,6 +1353,87 @@ function M.comment_under_cursor()
 		return
 	end
 	comment_on_issue(number)
+end
+
+---`vim.json.decode` turns a JSON `null` into the truthy `vim.NIL`; treat that
+---(and Lua `nil`) as empty so it never prefills as a userdata address.
+---@param v any
+---@return string
+local function json_text(v)
+	if v == nil or v == vim.NIL then
+		return ""
+	end
+	local text = tostring(v)
+	return text:gsub("\r\n", "\n"):gsub("\r", "\n")
+end
+
+---Fetch the issue fresh (list cache carries no body) and open an edit form
+---prefilled with its current title/body.
+---@param number integer|string
+local function edit_issue(number)
+	gh_issues.view(number, {}, function(err, issue)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		issue = issue or {}
+
+		form.open({
+			title = ("Edit Issue #%s"):format(tostring(number)),
+			-- No draft_key: a stashed draft would outrank the fresh `gh issue
+			-- view` fetch on reopen and could write a stale body back remotely.
+			fields = {
+				{
+					name = "Title",
+					key = "title",
+					required = true,
+					default = json_text(issue.title),
+				},
+				{
+					name = "Body",
+					key = "body",
+					multiline = true,
+					default = json_text(issue.body),
+					placeholder = "Describe the issue… (Markdown supported)",
+				},
+			},
+			on_submit = function(values)
+				gh_issues.edit(number, {
+					title = values.title,
+					body = values.body,
+				}, {}, function(edit_err)
+					if edit_err then
+						utils.notify(edit_err, vim.log.levels.ERROR)
+						return
+					end
+					utils.notify(("Updated issue #%s"):format(tostring(number)), vim.log.levels.INFO)
+					if M.state.mode == "view" then
+						M.open_view(number)
+					else
+						M.refresh()
+					end
+				end)
+			end,
+		})
+	end)
+end
+
+function M.edit_under_cursor()
+	local number = M.state.active_issue_number
+	if M.state.mode == "list" then
+		local entry = entry_under_cursor()
+		if not entry then
+			utils.notify("No issue selected", vim.log.levels.WARN)
+			return
+		end
+		number = entry.number
+	end
+
+	if not number then
+		utils.notify("No issue selected", vim.log.levels.WARN)
+		return
+	end
+	edit_issue(number)
 end
 
 ---@param number integer|string

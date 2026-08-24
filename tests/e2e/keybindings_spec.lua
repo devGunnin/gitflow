@@ -12,6 +12,7 @@ local cfg = _G.TestConfig
 local commands = require("gitflow.commands")
 local ui = require("gitflow.ui")
 local branch_panel = require("gitflow.panels.branch")
+local cache = require("gitflow.review.cache")
 
 --- Resolve a key notation to its internal form for comparison.
 ---@param lhs string
@@ -464,7 +465,7 @@ T.run_suite("E2E: Keybinding Verification", {
 
 		T.assert_keymaps(
 			bufnr,
-			{ "<CR>", "c", "C", "x", "L", "A", "r", "b", "q" }
+			{ "<CR>", "c", "C", "E", "x", "L", "A", "r", "b", "q" }
 		)
 
 		T.cleanup_panels()
@@ -508,6 +509,9 @@ T.run_suite("E2E: Keybinding Verification", {
 
 	["review panel has expected buffer-local keymaps"] = function()
 		local review = require("gitflow.panels.review")
+		-- Same on-disk draft cache PR 42 uses elsewhere in the suite; clear
+		-- it so a prior test's leftover draft can't shift this one's state.
+		cache.clear(42, cache.repo_slug())
 		review.open(cfg, 42)
 		T.drain_jobs(3000)
 
