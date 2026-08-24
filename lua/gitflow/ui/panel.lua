@@ -505,8 +505,32 @@ function M.bound_keys(entry)
 	return entry.keys or { entry.key }
 end
 
+---Report `panel_keybindings` entries that name a key this panel does not
+---have. Checked here rather than in `config.validate` because panels register
+---their registries on demand, long after `setup()`; a silent no-op would let a
+---typo look like a binding that simply refuses to move.
+function Panel:warn_unknown_overrides()
+	local overrides = overrides_for(self.cfg, self.name)
+	if next(overrides) == nil then
+		return
+	end
+	local declared = {}
+	for _, entry in ipairs(self.keymaps) do
+		declared[entry.key] = true
+	end
+	for key in pairs(overrides) do
+		if not declared[key] then
+			require("gitflow.utils").notify(
+				("gitflow: panel_keybindings.%s has no key '%s'"):format(self.name, key),
+				vim.log.levels.WARN
+			)
+		end
+	end
+end
+
 ---@param bufnr integer
 function Panel:bind_keymaps(bufnr)
+	self:warn_unknown_overrides()
 	for _, entry in ipairs(self:entries()) do
 		for _, key in ipairs(entry.bind == false and {} or M.bound_keys(entry)) do
 			vim.keymap.set(entry.mode or "n", key, function()

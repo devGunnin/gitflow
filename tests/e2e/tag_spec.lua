@@ -427,11 +427,14 @@ T.run_suite("E2E: Tag Panel", {
 		)
 	end,
 
-	["gT keybinding wired to Plug(GitflowTag)"] = function()
+	["<leader>gt keybinding wired to Plug(GitflowTag)"] = function()
 		local maps = vim.api.nvim_get_keymap("n")
+		-- The default is `<leader>`-prefixed, and a map's lhs carries the real
+		-- leader character, not the placeholder.
+		local lhs = cfg.keybindings.tag:gsub("<leader>", vim.g.mapleader or "\\")
 		local found = false
 		for _, map in ipairs(maps) do
-			if map.lhs == cfg.keybindings.tag then
+			if map.lhs == lhs then
 				T.assert_contains(
 					map.rhs or "",
 					"GitflowTag",

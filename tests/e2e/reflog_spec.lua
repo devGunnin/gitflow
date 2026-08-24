@@ -383,11 +383,14 @@ T.run_suite("E2E: Reflog Panel", {
 		)
 	end,
 
-	["gF keybinding wired to Plug(GitflowReflog)"] = function()
+	["<leader>gF keybinding wired to Plug(GitflowReflog)"] = function()
 		local maps = vim.api.nvim_get_keymap("n")
+		-- The default is `<leader>`-prefixed, and a map's lhs carries the real
+		-- leader character, not the placeholder.
+		local lhs = cfg.keybindings.reflog:gsub("<leader>", vim.g.mapleader or "\\")
 		local found = false
 		for _, map in ipairs(maps) do
-			if map.lhs == cfg.keybindings.reflog then
+			if map.lhs == lhs then
 				T.assert_contains(
 					map.rhs or "",
 					"GitflowReflog",

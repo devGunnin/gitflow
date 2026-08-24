@@ -2,6 +2,7 @@
 -- and the notification center.
 local ui = require("gitflow.ui")
 local shared = require("gitflow.commands.shared")
+local help = require("gitflow.ui.help")
 local status_panel = require("gitflow.panels.status")
 local branch_panel = require("gitflow.panels.branch")
 local palette_panel = require("gitflow.panels.palette")
@@ -70,9 +71,14 @@ function M.register(ctx)
 		description = "Show Gitflow usage",
 		category = "UI",
 		run = function()
-			local usage = commands.usage()
-			shared.show_info(usage)
-			return usage
+			-- A buffer, not a notification: the list outgrows any message
+			-- area, and `?` inside a panel opens the same surface.
+			help.open(cfg, {
+				title = "Gitflow Help",
+				sections = commands.help_sections(cfg),
+				note = "? inside any panel lists that panel's own keys",
+			})
+			return commands.usage()
 		end,
 	})
 

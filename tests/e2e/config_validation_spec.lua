@@ -213,9 +213,9 @@ T.run_suite("config_validation_spec", {
 	end,
 
 	["duplicate keybindings are rejected"] = function()
-		local err = setup_error({ keybindings = { commit = "gs" } })
+		local err = setup_error({ keybindings = { commit = "<leader>gs" } })
 		T.assert_contains(err, "duplicate keybindings", "error should name the failure")
-		T.assert_contains(err, "gs", "error should name the colliding mapping")
+		T.assert_contains(err, "<leader>gs", "error should name the colliding mapping")
 		T.assert_contains(err, "commit", "error should name the colliding action")
 		T.assert_contains(err, "status", "error should name the shadowed action")
 	end,

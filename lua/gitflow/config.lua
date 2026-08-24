@@ -63,7 +63,8 @@ local utils = require("gitflow.utils")
 ---@field watch_interval integer  poll interval (ms, min 1000) for the actions panel's live-watch
 
 ---@class GitflowConfig
----@field keybindings table<string, string>
+---@field keybindings table<string, string|false>|false
+---@field panel_keybindings table<string, table<string, string|false>>
 ---@field ui GitflowUiConfig
 ---@field behavior GitflowBehaviorConfig
 ---@field git GitflowGitConfig
@@ -87,14 +88,17 @@ function M.defaults()
 			-- scripts/test_keybinding_docs.lua.
 			help = "<leader>gh",
 			open = "<leader>go",
-			refresh = "gr",
+			-- `<leader>`-prefixed because bare `gr` is Neovim 0.11's LSP
+			-- prefix and bare `gs`/`gc`/`gD` are built-in commands. Panels
+			-- refresh with plain `r` from inside, so this map is a fallback.
+			refresh = "<leader>gz",
 			close = "<leader>gq",
-			status = "gs",
-			commit = "gc",
+			status = "<leader>gs",
+			commit = "<leader>gc",
 			push = "<leader>gP",
 			pull = "<leader>gp",
 			fetch = "<leader>gf",
-			diff = "gD",
+			diff = "<leader>gd",
 			log = "gl",
 			stash = "gS",
 			stash_push = "gZ",
@@ -104,21 +108,25 @@ function M.defaults()
 			pr = "<leader>gr",
 			label = "<leader>gL",
 			conflict = "<leader>gm",
-			palette = "gP",
+			palette = "<leader>gx",
 			reset = "<leader>gR",
 			pr_review = "<leader>gG",
 			-- Additional actions for panels that pre-date their own doc entries.
-			revert = "gV",
-			tag = "gT",
+			revert = "<leader>gv",
+			tag = "<leader>gt",
 			blame = "gB",
 			blame_inline = "<leader>gB",
 			worktree = "gW",
-			reflog = "gF",
+			reflog = "<leader>gF",
 			cherry_pick = "gC",
-			rebase_interactive = "gI",
+			rebase_interactive = "<leader>gI",
 			actions = "gA",
-			notifications = "gN",
+			notifications = "<leader>gn",
 		},
+		-- Per-panel key overrides, keyed by the panel's registry name and then
+		-- by the DEFAULT key the panel advertises: a string moves the binding,
+		-- `false` removes it. `:Gitflow help` and every panel's `?` list both.
+		panel_keybindings = {},
 		ui = {
 			default_layout = "float",
 			-- Fixed width for panel rules; 0 adapts to the window.
@@ -196,6 +204,7 @@ M.current = M.defaults()
 --- there: highlight group names are arbitrary and user-defined.
 local OPEN_CONFIG_PATHS = {
 	highlights = true,
+	panel_keybindings = true,
 }
 
 ---Two actions bound to the same keys means one silently shadows the other,
@@ -205,8 +214,10 @@ local function validate_keybinding_collisions(keybindings)
 	local actions_by_mapping = {}
 	for _, action in ipairs(utils.sorted_keys(keybindings)) do
 		local mapping = keybindings[action]
-		actions_by_mapping[mapping] = actions_by_mapping[mapping] or {}
-		table.insert(actions_by_mapping[mapping], action)
+		if mapping ~= false then
+			actions_by_mapping[mapping] = actions_by_mapping[mapping] or {}
+			table.insert(actions_by_mapping[mapping], action)
+		end
 	end
 
 	local collisions = {}
@@ -228,22 +239,100 @@ local function validate_keybinding_collisions(keybindings)
 	end
 end
 
+---The global map set is opt-out at two grains: `keybindings = false` installs
+---none of them, and a single action set to `false` installs just that one
+---nowhere. Both matter — gitflow's maps are ordinary normal-mode mappings in
+---every buffer, so a user whose config already owns a key needs a way to say
+---so without restating all 32 defaults.
 ---@param config GitflowConfig
 local function validate_keybindings(config)
+	if config.keybindings == false then
+		return
+	end
 	if type(config.keybindings) ~= "table" then
-		error("gitflow config error: keybindings must be a table", 3)
+		error(
+			"gitflow config error: keybindings must be a table, or false to "
+				.. "install no global mappings",
+			3
+		)
 	end
 
 	for action, mapping in pairs(config.keybindings) do
 		if not utils.is_non_empty_string(action) then
 			error("gitflow config error: keybindings keys must be non-empty strings", 3)
 		end
-		if not utils.is_non_empty_string(mapping) then
-			error(("gitflow config error: keybinding '%s' must be a non-empty string"):format(action), 3)
+		if mapping ~= false and not utils.is_non_empty_string(mapping) then
+			error(
+				("gitflow config error: keybinding '%s' must be a non-empty "
+					.. "string, or false to disable it"):format(action),
+				3
+			)
 		end
 	end
 
 	validate_keybinding_collisions(config.keybindings)
+end
+
+---Per-panel key overrides. Keyed by the panel's registry name, then by the
+---default key label the panel advertises; the value is the replacement key,
+---or `false` to unbind it. A key label that matches no entry is reported
+---where it is applied (`ui/panel.lua`), not here: panels register their
+---registries on demand, well after `setup()` has run.
+---@param config GitflowConfig
+local function validate_panel_keybindings(config)
+	if type(config.panel_keybindings) ~= "table" then
+		error("gitflow config error: panel_keybindings must be a table", 3)
+	end
+
+	for panel_name, overrides in pairs(config.panel_keybindings) do
+		if not utils.is_non_empty_string(panel_name) then
+			error(
+				"gitflow config error: panel_keybindings keys must be panel names",
+				3
+			)
+		end
+		if type(overrides) ~= "table" then
+			error(
+				("gitflow config error: panel_keybindings.%s must be a table"):format(
+					panel_name
+				),
+				3
+			)
+		end
+
+		local claimed = {}
+		for default_key, replacement in pairs(overrides) do
+			if not utils.is_non_empty_string(default_key) then
+				error(
+					("gitflow config error: panel_keybindings.%s keys must be "
+						.. "the panel's default key labels"):format(panel_name),
+					3
+				)
+			end
+			if replacement ~= false and not utils.is_non_empty_string(replacement) then
+				error(
+					("gitflow config error: panel_keybindings.%s['%s'] must be a "
+						.. "non-empty string, or false to unbind it"):format(
+						panel_name, default_key
+					),
+					3
+				)
+			end
+			-- Two verbs on one key means the second silently shadows the first.
+			if replacement ~= false then
+				if claimed[replacement] then
+					error(
+						("gitflow config error: panel_keybindings.%s maps both "
+							.. "'%s' and '%s' onto '%s'"):format(
+							panel_name, claimed[replacement], default_key, replacement
+						),
+						3
+					)
+				end
+				claimed[replacement] = default_key
+			end
+		end
+	end
 end
 
 ---Reject options that no longer reach anything — a typo like
@@ -537,6 +626,7 @@ end
 ---@param config GitflowConfig
 function M.validate(config)
 	validate_keybindings(config)
+	validate_panel_keybindings(config)
 	validate_ui(config)
 	validate_behavior(config)
 	validate_git(config)
