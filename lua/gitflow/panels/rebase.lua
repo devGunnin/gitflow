@@ -528,6 +528,13 @@ function M.toggle_preview()
 	})
 	if not preview_winid then
 		-- open_float already notified why; nothing left to preview into.
+		-- Undo ensure_preview_buffer's side effect so state doesn't carry a
+		-- live buffer with no window (a shape the rest of the module never
+		-- otherwise produces).
+		if M.state.preview_bufnr and vim.api.nvim_buf_is_valid(M.state.preview_bufnr) then
+			pcall(vim.api.nvim_buf_delete, M.state.preview_bufnr, { force = true })
+		end
+		M.state.preview_bufnr = nil
 		return
 	end
 	M.state.preview_winid = preview_winid

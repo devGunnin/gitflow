@@ -5,7 +5,9 @@
 -- Every expected value below was captured by running the THREE separate,
 -- pre-refactor fuzzy_score/normalize implementations against these exact
 -- fixtures, so a passing run here means the unification did not silently
--- change ranking — only structure.
+-- change ranking — only structure. §2 also pins raw fuzzy_score numbers
+-- (§2b), not just final orderings, since none of these fixtures' orderings
+-- happen to depend on the score formula's streak-bonus term.
 --
 -- Run: nvim --headless -u NONE -l scripts/test_matcher_spec.lua
 
@@ -67,6 +69,23 @@ assert_true(
 	"matching is case-insensitive on both sides"
 )
 
+-- ── 2b. fuzzy_score pins the score FORMULA, not just final ordering ──
+-- Each additive term (contiguous-match streak bonus, skip-distance penalty
+-- floor) is pinned by its raw number, since the ordering-only fixtures in
+-- §4-§6 never happen to hinge on the streak term specifically.
+assert_equals(
+	matcher.fuzzy_score("main", "main"), 50,
+	"2b. a 4-char contiguous run pins the growing streak bonus: 11+12+13+14"
+)
+assert_equals(
+	matcher.fuzzy_score("develop", "dev"), 36,
+	"2b. a 3-char contiguous run pins the streak bonus: 11+12+13"
+)
+assert_equals(
+	matcher.fuzzy_score("develop", "dp"), 12,
+	"2b. one contiguous char plus one 5-skip pins the skip penalty floor: 11 + max(1, 6-5)"
+)
+
 -- ── 3. matcher.match_positions ──────────────────────────────────────
 
 assert_equals(
@@ -114,8 +133,16 @@ local desc_items = {
 	{ name = "charlie", description = "PM" },
 	{ name = "alicia", description = "QA" },
 }
-assert_names(list_picker.filter_items(desc_items, "ali"), "alice,alicia,charlie", "4g. list: ali (matches charlie via description)")
-assert_names(list_picker.filter_items(desc_items, "de"), "bob,alice", "4h. list: de ranks bob's description above alice's")
+assert_names(
+	list_picker.filter_items(desc_items, "ali"),
+	"alice,alicia,charlie",
+	"4g. list: ali (matches charlie via description)"
+)
+assert_names(
+	list_picker.filter_items(desc_items, "de"),
+	"bob,alice",
+	"4h. list: de ranks bob's description above alice's"
+)
 
 -- Leading/trailing whitespace on the item itself does not change matching
 -- (normalize trims both haystack and needle before scoring).
@@ -187,7 +214,11 @@ local padded_entries = {
 	{ name = "clean", description = "normal", category = "Git", keybinding = nil },
 }
 assert_names(palette.filter_entries(padded_entries, "pad"), "  padded", "6f. palette: padded name still matches")
-assert_names(palette.filter_entries(padded_entries, "trailing"), "  padded", "6g. palette: padded description still matches")
+assert_names(
+	palette.filter_entries(padded_entries, "trailing"),
+	"  padded",
+	"6g. palette: padded description still matches"
+)
 
 -- ── 7. Cross-module parity: the same shape scores the same way ──────
 -- list_picker and label_picker both go through picker.filter_items, which

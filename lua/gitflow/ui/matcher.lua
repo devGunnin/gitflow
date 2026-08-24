@@ -1,6 +1,9 @@
 --- Fuzzy substring matcher shared by list_picker, label_picker and the
---- command palette. Was three byte-identical copies (list_picker.lua,
---- label_picker.lua, palette.lua:92); this is the single implementation.
+--- command palette. Was two byte-identical copies (list_picker.lua,
+--- label_picker.lua) plus a palette variant that skipped `vim.trim` on its
+--- haystack; no shipped palette entry has padded fields, so collapsing onto
+--- the trimmed behavior is a no-op in practice. This is the single
+--- implementation.
 
 local M = {}
 

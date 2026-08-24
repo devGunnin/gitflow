@@ -576,7 +576,12 @@ end
 -- inside window.float_area(). A too-small terminal returns nil plus the
 -- reason from float_geometry, same contract as open_float.
 ---@param cfg GitflowConfig
----@return integer|nil width, integer|nil prompt_height, integer|nil list_height, integer|nil row, integer|nil col, string|nil err
+---@return integer|nil width
+---@return integer|nil prompt_height
+---@return integer|nil list_height
+---@return integer|nil row
+---@return integer|nil col
+---@return string|nil err
 local function compute_layout(cfg)
 	local area = ui.window.float_area()
 	local prompt_height = 3

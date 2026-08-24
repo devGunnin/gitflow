@@ -108,17 +108,21 @@ for _, shape in ipairs(shapes) do
 		{ name = "alpha", description = "first" },
 		{ name = "beta", description = "second" },
 	}
-	local submitted
+	-- Submission itself is exercised end-to-end in 5b/5d; this section only
+	-- covers what open/render/keymap wiring look like.
 	local state = shape.open(entries, {
 		title = "Contract Test",
-		on_submit = function(sel) submitted = sel end,
+		on_submit = function() end,
 	})
 
 	assert_true(state ~= nil, shape.name .. ": open should return a state")
 	assert_true(state.winid ~= nil, shape.name .. ": state.winid should be set")
 	assert_true(vim.api.nvim_win_is_valid(state.winid), shape.name .. ": window should be valid")
 	assert_true(state.bufnr ~= nil, shape.name .. ": state.bufnr should be set")
-	assert_true(type(state.items) == "table", shape.name .. ": state.items should be a table regardless of the call shape's key name")
+	assert_true(
+		type(state.items) == "table",
+		shape.name .. ": state.items should be a table regardless of the call shape's key name"
+	)
 	assert_equals(#state.items, 2, shape.name .. ": state.items should hold both entries")
 
 	local lines = vim.api.nvim_buf_get_lines(state.bufnr, 0, -1, false)
@@ -226,6 +230,34 @@ local single_state = list_picker.open({
 press(single_state.winid, "<CR>")
 wait_until(function() return single_submit ~= nil end, "5b. single-select <CR> should submit immediately")
 assert_equals(#single_submit, 1, "5b. single-select submits exactly one item")
+assert_equals(single_submit[1], "one", "5b. single-select submits the active row, not every row")
+
+-- 5d. Multi-select ACCUMULATES across several <Space> presses and only
+-- commits on <CR> -- this, not the state.multi_select flag alone, is what
+-- breaks if the engine's documented default (multi_select == nil -> true)
+-- silently flips, or if toggle_current's accumulate-vs-submit-immediately
+-- branch is neutered: either mutation makes the first <Space> submit early.
+local multi_submitted
+local multi_state = list_picker.open({
+	items = { { name = "alpha" }, { name = "beta" }, { name = "gamma" } },
+	on_submit = function(sel) multi_submitted = sel end,
+})
+press(multi_state.winid, "<Space>") -- toggle alpha (cursor starts on row 1)
+assert_true(multi_submitted == nil, "5d. multi-select must not submit on the first <Space> (accumulate, don't commit)")
+press(multi_state.winid, "j")
+press(multi_state.winid, "j") -- skip beta, land on gamma
+press(multi_state.winid, "<Space>") -- toggle gamma; beta stays untouched
+assert_true(multi_submitted == nil, "5d. multi-select must not submit before <CR>")
+press(multi_state.winid, "<CR>")
+wait_until(
+	function() return multi_submitted ~= nil end,
+	"5d. multi-select <CR> should submit the accumulated set", 1000
+)
+assert_equals(
+	#multi_submitted, 2, "5d. multi-select submits exactly the toggled items, not more or fewer"
+)
+assert_equals(multi_submitted[1], "alpha", "5d. multi-select submitted set includes alpha")
+assert_equals(multi_submitted[2], "gamma", "5d. multi-select submitted set includes gamma, excludes untouched beta")
 
 -- 5c. label_picker always multi-selects and colors the name chip per label.
 local label_state = label_picker.open({
@@ -246,5 +278,43 @@ end
 assert_true(has_color_chip, "5c. label_picker renders a color-derived highlight group on the name")
 pcall(vim.api.nvim_win_close, label_state.winid, true)
 pcall(vim.api.nvim_buf_delete, label_state.bufnr, { force = true })
+
+-- ── 6. Empty-results row renders through the shared components.empty
+-- grammar, per shape: an unhighlighted gutter, then the highlighted text --
+-- the same shape every other empty state in the plugin uses, not a
+-- hand-rolled one-off (coldstart review finding 4).
+for _, shape in ipairs(shapes) do
+	local state = shape.open({ { name = "only" } }, { on_submit = function() end })
+	local empty_text = state.spec.empty_text
+
+	press(state.winid, "/")
+	vim.api.nvim_buf_set_lines(state.bufnr, 0, 1, false, { "zzz-does-not-match-anything" })
+	vim.api.nvim_exec_autocmds("TextChanged", { buffer = state.bufnr })
+
+	local empty_line
+	wait_until(function()
+		local lines = vim.api.nvim_buf_get_lines(state.bufnr, 0, -1, false)
+		empty_line = find_line(lines, empty_text)
+		return empty_line ~= nil
+	end, shape.name .. ": empty-results row should render " .. empty_text, 1000)
+
+	local marks = vim.api.nvim_buf_get_extmarks(
+		state.bufnr, shape.namespace_hl, 0, -1, { details = true }
+	)
+	local text_span
+	for _, mark in ipairs(marks) do
+		if mark[2] == empty_line - 1 and mark[4] and mark[4].hl_group == "GitflowMeta" then
+			text_span = mark
+		end
+	end
+	assert_true(text_span ~= nil, shape.name .. ": empty row text should carry GitflowMeta")
+	assert_equals(
+		text_span[3], 2,
+		shape.name .. ": empty row highlight should start after the 2-col gutter (components.empty's grammar)"
+	)
+
+	pcall(vim.api.nvim_win_close, state.winid, true)
+	pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
+end
 
 print(("Picker-contract spec passed (%d assertions)"):format(passed))
