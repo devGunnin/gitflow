@@ -25,6 +25,9 @@ local icons = require("gitflow.icons")
 ---@field line_entries table<integer, table>
 ---@field mode "list"|"view"
 ---@field active_pr_number integer|nil
+---@field active_pr table|nil  the PR the detail view is painted from
+---@field view_cwd string|nil  cwd the detail view was fetched under
+---@field busy string|nil  in-flight mutation, single-flight guard
 
 local M = {}
 
@@ -46,6 +49,9 @@ M.state = {
 	line_entries = {},
 	mode = "list",
 	active_pr_number = nil,
+	active_pr = nil,
+	view_cwd = nil,
+	busy = nil,
 }
 
 -- Forward-declared: the "b" (back) keymap below closes over it before its
@@ -97,8 +103,20 @@ local P = panel.new({
 		{ key = "C", desc = "comment", hint = false, run = function()
 			M.comment_under_cursor()
 		end },
-		{ key = "m", desc = "merge", run = function()
+		{ key = "E", desc = "edit", run = function()
+			M.edit_under_cursor()
+		end },
+		{ key = "m", desc = "merge", destructive = true, run = function()
 			M.merge_under_cursor()
+		end },
+		{ key = "D", desc = "merge+del branch", destructive = true, run = function()
+			M.merge_delete_branch_under_cursor()
+		end },
+		{ key = "M", desc = "auto-merge", destructive = true, run = function()
+			M.auto_merge_under_cursor()
+		end },
+		{ key = "d", desc = "draft", run = function()
+			M.toggle_draft_under_cursor()
 		end },
 		{ key = "o", desc = "checkout", run = function()
 			M.checkout_under_cursor()
@@ -112,8 +130,14 @@ local P = panel.new({
 		{ key = "A", desc = "assign", run = function()
 			M.edit_assignees_under_cursor()
 		end },
+		{ key = "R", desc = "reviewers", run = function()
+			M.edit_reviewers_under_cursor()
+		end },
 		{ key = "x", desc = "close PR", destructive = true, run = function()
 			M.close_pr_under_cursor()
+		end },
+		{ key = "O", desc = "reopen", run = function()
+			M.reopen_under_cursor()
 		end },
 		-- Not n/p: n is search-next in a buffer users `/` through; shadows
 		-- CTRL-N/P motion instead, j/k still move. Tiered below the core verbs.
@@ -162,6 +186,17 @@ local function split_lines(text)
 	return vim.split(text, "\n", { plain = true, trimempty = false })
 end
 
+---`vim.json.decode` turns a JSON `null` into the truthy `vim.NIL`; treat that
+---(and Lua `nil`) as empty so it never prefills as a userdata address.
+---@param value any
+---@return string
+local function json_text(value)
+	if value == nil or value == vim.NIL then
+		return ""
+	end
+	return (tostring(value):gsub("\r\n", "\n"):gsub("\r", "\n"))
+end
+
 ---@param pr table
 ---@return string
 local function pr_state(pr)
@@ -200,6 +235,52 @@ end
 ---@return string
 local function pr_state_icon(state)
 	return icons.get("github", "pr_" .. state)
+end
+
+-- ── status checks (#423) ────────────────────────────────────────────────
+-- Same glyph/highlight vocabulary the actions panel uses for a run, so a
+-- green tick means the same thing wherever CI state appears.
+
+---@type table<string, string>
+local CHECK_GLYPHS = {
+	success = "✓",
+	failure = "✗",
+	pending = "●",
+	skipped = "⊘",
+	cancelled = "⊘",
+	unknown = "?",
+}
+
+---@type table<string, string>
+local CHECK_HIGHLIGHTS = {
+	success = "GitflowActionsPass",
+	failure = "GitflowActionsFail",
+	pending = "GitflowActionsPending",
+	skipped = "GitflowActionsCancelled",
+	cancelled = "GitflowActionsCancelled",
+	unknown = "Comment",
+}
+
+---Compact per-state roll-up chunks for a card's meta row, e.g. "✓3 ✗1 ●2".
+---Empty when the PR has no checks at all, so a repo without CI stays quiet.
+---@param pr table
+---@return table[]
+local function check_summary_chunks(pr)
+	local summary = gh_prs.checks_summary(gh_prs.normalize_checks(pr.statusCheckRollup))
+	if summary.total == 0 then
+		return {}
+	end
+
+	local chunks = { { components.separators.field .. "checks ", "GitflowMetaKey" } }
+	for _, state in ipairs({ "success", "failure", "pending", "skipped", "cancelled", "unknown" }) do
+		if summary[state] > 0 then
+			chunks[#chunks + 1] = {
+				("%s%d "):format(CHECK_GLYPHS[state], summary[state]),
+				CHECK_HIGHLIGHTS[state],
+			}
+		end
+	end
+	return chunks
 end
 
 ---@param review table
@@ -334,6 +415,9 @@ render_list = function(prs)
 					{ components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" }
 				meta[#meta + 1] = { assignees, "GitflowChip" }
 			end
+			for _, chunk in ipairs(check_summary_chunks(pr)) do
+				meta[#meta + 1] = chunk
+			end
 			local meta_line = B:push(meta)
 
 			line_entries[title_line] = pr
@@ -346,6 +430,8 @@ render_list = function(prs)
 
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
+	M.state.active_pr = nil
+	M.state.view_cwd = nil
 	if P:paint(B) then
 		M.state.line_entries = line_entries
 	else
@@ -405,6 +491,25 @@ local function render_view(pr, review_comments)
 		{ ("%d requested"):format(n_reqs), "GitflowMeta" },
 	})
 	B:blank()
+
+	local checks = gh_prs.normalize_checks(pr.statusCheckRollup)
+	if #checks > 0 then
+		local summary = gh_prs.checks_summary(checks)
+		components.section(
+			B, icons.get("ui", "check"),
+			("Checks (%d) — %s"):format(summary.total, summary.state)
+		)
+		for _, check in ipairs(checks) do
+			B:push({
+				{ components.spacing.indent, nil },
+				{ (CHECK_GLYPHS[check.state] or "?") .. "  ", CHECK_HIGHLIGHTS[check.state] or "Comment" },
+				{ check.name, "GitflowChip" },
+				{ components.separators.field, nil },
+				{ check.description, CHECK_HIGHLIGHTS[check.state] or "Comment" },
+			})
+		end
+		B:blank()
+	end
 
 	components.section(B, icons.get("ui", "comment"), "Body")
 	local body_lines = split_lines(tostring(pr.body or ""))
@@ -490,6 +595,10 @@ local function render_view(pr, review_comments)
 
 	M.state.mode = "view"
 	M.state.active_pr_number = tonumber(pr.number)
+	M.state.active_pr = pr
+	-- gh resolves the repo from the cwd; a verb must never fire against a
+	-- repo this detail did not come from.
+	M.state.view_cwd = vim.fn.getcwd()
 	P:paint(B)
 	-- No rows in the detail view: drop whatever the list left behind.
 	P:clear_entry_maps()
@@ -508,6 +617,62 @@ local function entry_under_cursor()
 
 	local line = vim.api.nvim_win_get_cursor(0)[1]
 	return M.state.line_entries[line]
+end
+
+---The PR a keypress acts on, resolved at press time — never a number cached
+---from an older paint. Returns nil when nothing is selected, or when the rows
+---on screen belong to a repo we have since left.
+---@return table|nil
+local function target_pr()
+	if M.state.mode == "view" then
+		if M.state.view_cwd ~= vim.fn.getcwd() then
+			return nil
+		end
+		return M.state.active_pr
+	end
+	if not scoped_cache() then
+		return nil
+	end
+	return entry_under_cursor()
+end
+
+---Run a confirm-gated, single-flight mutation. Declining fires no `gh` call
+---at all; a second press while one is in flight is refused rather than
+---queued, so a double-tap can never merge twice.
+---@param opts { confirm_message: string, in_progress_message: string, done_message: string, call: fun(cb: fun(err: string|nil)) }
+local function perform_mutation(opts)
+	if M.state.busy then
+		utils.notify(
+			("Already busy: %s — wait for it to finish"):format(M.state.busy),
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	local confirmed = input.confirm(opts.confirm_message, {
+		choices = { "&Yes", "&No" },
+		default_choice = 2,
+	})
+	if not confirmed then
+		return
+	end
+
+	M.state.busy = opts.in_progress_message
+	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
+
+	opts.call(function(err)
+		M.state.busy = nil
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		utils.notify(opts.done_message, vim.log.levels.INFO)
+		if M.state.mode == "view" and M.state.active_pr_number then
+			M.open_view(M.state.active_pr_number)
+		else
+			M.refresh()
+		end
+	end)
 end
 
 ---@param cfg GitflowConfig
@@ -1066,38 +1231,22 @@ local function comment_on_pr(number)
 end
 
 function M.comment_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local pr = target_pr()
+	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 	comment_on_pr(number)
 end
 
 function M.edit_labels_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local pr = target_pr()
+	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 
 	input.prompt({
 		prompt = "Labels (+bug,-wip,docs): ",
@@ -1152,20 +1301,12 @@ local function parse_assignee_patch(value)
 end
 
 function M.edit_assignees_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local pr = target_pr()
+	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 
 	input.prompt({
 		prompt = "Assignees (+user,-user,user): ",
@@ -1200,113 +1341,305 @@ function M.edit_assignees_under_cursor()
 	end)
 end
 
-function M.merge_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
-		utils.notify("No pull request selected", vim.log.levels.WARN)
-		return
-	end
-
+---Ask which merge strategy to use. Returns nil when the user backs out.
+---@param number integer|string
+---@return "merge"|"squash"|"rebase"|nil
+local function ask_merge_strategy(number)
 	local choice = vim.fn.confirm(
 		("Merge PR #%s with strategy:"):format(tostring(number)),
 		"&Merge\n&Squash\n&Rebase\n&Cancel",
 		1
 	)
-	if choice == 4 or choice == 0 then
+	if choice == 2 then
+		return "squash"
+	end
+	if choice == 3 then
+		return "rebase"
+	end
+	if choice == 1 then
+		return "merge"
+	end
+	return nil
+end
+
+---Where a PR lands, for confirm text that names exactly what will happen.
+---@param pr table
+---@return string
+local function refs_text(pr)
+	return ("%s → %s"):format(
+		components.maybe_text(pr.headRefName), components.maybe_text(pr.baseRefName)
+	)
+end
+
+---@param delete_branch boolean
+local function merge_selected_pr(delete_branch)
+	local pr = target_pr()
+	if not pr then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+	local number = pr.number
+	local head = components.maybe_text(pr.headRefName)
+	if delete_branch and head == "-" then
+		utils.notify(
+			("PR #%s has no head branch on record — refusing to merge with --delete-branch")
+				:format(tostring(number)),
+			vim.log.levels.ERROR
+		)
 		return
 	end
 
-	local strategy = "merge"
-	if choice == 2 then
-		strategy = "squash"
-	elseif choice == 3 then
-		strategy = "rebase"
+	local strategy = ask_merge_strategy(number)
+	if not strategy then
+		return
 	end
 
-	gh_prs.merge(number, strategy, {}, function(err)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		utils.notify(("Merged PR #%s (%s)"):format(tostring(number), strategy), vim.log.levels.INFO)
-		if M.state.mode == "view" then
-			M.open_view(number)
-		else
-			M.refresh()
-		end
-	end)
+	perform_mutation({
+		confirm_message = delete_branch
+			and ("Merge PR #%s (%s) by %s AND DELETE branch %s? Both are irreversible.")
+				:format(tostring(number), refs_text(pr), strategy, head)
+			or ("Merge PR #%s (%s) by %s? Branch %s is kept.")
+				:format(tostring(number), refs_text(pr), strategy, head),
+		in_progress_message = ("Merging PR #%s"):format(tostring(number)),
+		done_message = delete_branch
+			and ("Merged PR #%s (%s) and deleted %s"):format(tostring(number), strategy, head)
+			or ("Merged PR #%s (%s)"):format(tostring(number), strategy),
+		call = function(cb)
+			gh_prs.merge(number, {
+				strategy = strategy,
+				delete_branch = delete_branch,
+			}, {}, cb)
+		end,
+	})
 end
 
----@param number integer|string
-local function close_pr(number)
-	gh_prs.close(number, {}, function(err)
-		if err then
-			utils.notify(err, vim.log.levels.ERROR)
-			return
-		end
-		utils.notify(
-			("Closed PR #%s"):format(tostring(number)),
-			vim.log.levels.INFO
-		)
-		if M.state.mode == "view" then
-			M.open_view(number)
-		else
-			M.refresh()
-		end
-	end)
+function M.merge_under_cursor()
+	merge_selected_pr(false)
+end
+
+function M.merge_delete_branch_under_cursor()
+	merge_selected_pr(true)
+end
+
+---Enable or cancel auto-merge. Enabling arms a merge that will happen with no
+---further prompt, so the confirm spells that out.
+function M.auto_merge_under_cursor()
+	local pr = target_pr()
+	if not pr then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+	local number = pr.number
+
+	local _, choice = input.confirm(
+		("Auto-merge for PR #%s (%s):"):format(tostring(number), refs_text(pr)),
+		{ choices = { "&Enable", "&Disable", "&Cancel" }, default_choice = 3 }
+	)
+	if choice ~= 1 and choice ~= 2 then
+		return
+	end
+
+	if choice == 2 then
+		perform_mutation({
+			confirm_message = ("Cancel the queued auto-merge for PR #%s?")
+				:format(tostring(number)),
+			in_progress_message = ("Disabling auto-merge for PR #%s"):format(tostring(number)),
+			done_message = ("Auto-merge disabled for PR #%s"):format(tostring(number)),
+			call = function(cb)
+				gh_prs.disable_auto_merge(number, {}, cb)
+			end,
+		})
+		return
+	end
+
+	local strategy = ask_merge_strategy(number)
+	if not strategy then
+		return
+	end
+	perform_mutation({
+		confirm_message = ("Queue PR #%s (%s) to auto-merge by %s once checks pass?"
+			.. " It will then merge with no further confirmation.")
+			:format(tostring(number), refs_text(pr), strategy),
+		in_progress_message = ("Enabling auto-merge for PR #%s"):format(tostring(number)),
+		done_message = ("Auto-merge queued for PR #%s (%s)"):format(tostring(number), strategy),
+		call = function(cb)
+			gh_prs.merge(number, { strategy = strategy, auto = true }, {}, cb)
+		end,
+	})
 end
 
 function M.close_pr_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local pr = target_pr()
+	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 
-	local confirmed = input.confirm(
-		("Close PR #%s?"):format(tostring(number)),
-		{ choices = { "&Yes", "&No" }, default_choice = 2 }
-	)
-	if not confirmed then
+	perform_mutation({
+		confirm_message = ("Close PR #%s without merging?"):format(tostring(number)),
+		in_progress_message = ("Closing PR #%s"):format(tostring(number)),
+		done_message = ("Closed PR #%s"):format(tostring(number)),
+		call = function(cb)
+			gh_prs.close(number, {}, cb)
+		end,
+	})
+end
+
+---The inverse of `x`: bring a closed PR back.
+function M.reopen_under_cursor()
+	local pr = target_pr()
+	if not pr then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 
-	close_pr(number)
+	perform_mutation({
+		confirm_message = ("Reopen PR #%s?"):format(tostring(number)),
+		in_progress_message = ("Reopening PR #%s"):format(tostring(number)),
+		done_message = ("Reopened PR #%s"):format(tostring(number)),
+		call = function(cb)
+			gh_prs.reopen(number, {}, cb)
+		end,
+	})
+end
+
+---Flip a PR between draft and ready-for-review.
+function M.toggle_draft_under_cursor()
+	local pr = target_pr()
+	if not pr then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+	local number = pr.number
+	local to_draft = not pr.isDraft
+
+	perform_mutation({
+		confirm_message = to_draft
+			and ("Convert PR #%s back to a draft?"):format(tostring(number))
+			or ("Mark PR #%s ready for review?"):format(tostring(number)),
+		in_progress_message = to_draft
+			and ("Converting PR #%s to a draft"):format(tostring(number))
+			or ("Marking PR #%s ready"):format(tostring(number)),
+		done_message = to_draft
+			and ("PR #%s is now a draft"):format(tostring(number))
+			or ("PR #%s is ready for review"):format(tostring(number)),
+		call = function(cb)
+			gh_prs.set_draft(number, to_draft, {}, cb)
+		end,
+	})
+end
+
+---Edit a PR's title and body. Fetched fresh: the list cache has no body, and
+---a stale one would be written straight back to GitHub.
+function M.edit_under_cursor()
+	local pr = target_pr()
+	if not pr then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+	local number = pr.number
+
+	gh_prs.view(number, {}, function(err, fresh)
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			return
+		end
+		fresh = fresh or {}
+
+		form.open({
+			title = ("Edit PR #%s"):format(tostring(number)),
+			-- No draft_key: a stashed draft would outrank this fresh fetch on
+			-- reopen and could push a stale body back to GitHub.
+			fields = {
+				{
+					name = "Title",
+					key = "title",
+					required = true,
+					default = json_text(fresh.title),
+				},
+				{
+					name = "Body",
+					key = "body",
+					multiline = true,
+					default = json_text(fresh.body),
+					placeholder = "Describe the change… (Markdown supported)",
+				},
+			},
+			on_submit = function(values)
+				gh_prs.edit(number, {
+					title = values.title,
+					body = values.body,
+				}, {}, function(edit_err)
+					if edit_err then
+						utils.notify(edit_err, vim.log.levels.ERROR)
+						return
+					end
+					utils.notify(
+						("Updated PR #%s"):format(tostring(number)), vim.log.levels.INFO
+					)
+					if M.state.mode == "view" then
+						M.open_view(number)
+					else
+						M.refresh()
+					end
+				end)
+			end,
+		})
+	end)
+end
+
+---Add and remove reviewers with the same `+name,-name` patch grammar the
+---label and assignee prompts use.
+function M.edit_reviewers_under_cursor()
+	local pr = target_pr()
+	if not pr then
+		utils.notify("No pull request selected", vim.log.levels.WARN)
+		return
+	end
+	local number = pr.number
+
+	input.prompt({
+		prompt = "Reviewers (+user,-user,user): ",
+		completion = function(arglead, _, _)
+			return assignee_completion.complete_assignee_patch(arglead)
+		end,
+	}, function(value)
+		local add_reviewers, remove_reviewers = parse_assignee_patch(value)
+		if #add_reviewers == 0 and #remove_reviewers == 0 then
+			utils.notify("No reviewer edits provided", vim.log.levels.WARN)
+			return
+		end
+
+		gh_prs.edit(number, {
+			add_reviewers = add_reviewers,
+			remove_reviewers = remove_reviewers,
+		}, {}, function(err)
+			if err then
+				utils.notify(err, vim.log.levels.ERROR)
+				return
+			end
+			utils.notify(
+				("Updated reviewers for PR #%s"):format(tostring(number)),
+				vim.log.levels.INFO
+			)
+			if M.state.mode == "view" then
+				M.open_view(number)
+			else
+				M.refresh()
+			end
+		end)
+	end)
 end
 
 function M.checkout_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local pr = target_pr()
+	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 
 	gh_prs.checkout(number, {}, function(err)
 		if err then
@@ -1318,20 +1651,12 @@ function M.checkout_under_cursor()
 end
 
 function M.review_under_cursor()
-	local number = M.state.active_pr_number
-	if M.state.mode == "list" then
-		local entry = entry_under_cursor()
-		if not entry then
-			utils.notify("No pull request selected", vim.log.levels.WARN)
-			return
-		end
-		number = entry.number
-	end
-
-	if not number then
+	local pr = target_pr()
+	if not pr then
 		utils.notify("No pull request selected", vim.log.levels.WARN)
 		return
 	end
+	local number = pr.number
 
 	if not M.state.cfg then
 		utils.notify("Gitflow config unavailable for review panel", vim.log.levels.ERROR)
@@ -1346,6 +1671,9 @@ function M.close()
 	M.state.line_entries = {}
 	M.state.mode = "list"
 	M.state.active_pr_number = nil
+	M.state.active_pr = nil
+	M.state.view_cwd = nil
+	M.state.busy = nil
 end
 
 ---@return boolean
