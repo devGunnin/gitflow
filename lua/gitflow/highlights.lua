@@ -53,25 +53,81 @@ local ACCENT_SOURCES = {
 	accent_secondary = "Identifier",
 }
 
----Read a colorscheme group's resolved foreground as a hex string.
+---Read a colorscheme group's resolved attributes.
+---@param group string
+---@return table|nil
+local function resolved_hl(group)
+	local ok, attrs = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+	if not ok or type(attrs) ~= "table" then
+		return nil
+	end
+	return attrs
+end
+
+---Read a colorscheme group's *visible* foreground as a hex string. A
+---reverse/standout group paints its bg where fg would normally show, so that
+---half is read instead -- raw fg would return the hidden color.
 ---@param group string
 ---@return string|nil
 local function colorscheme_fg(group)
-	local ok, attrs = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
-	if not ok or type(attrs) ~= "table" or type(attrs.fg) ~= "number" then
+	local attrs = resolved_hl(group)
+	if not attrs then
 		return nil
 	end
-	return ("#%06X"):format(attrs.fg)
+	local value = (attrs.reverse or attrs.standout) and attrs.bg or attrs.fg
+	if type(value) ~= "number" then
+		return nil
+	end
+	return ("#%06X"):format(value)
+end
+
+---Perceived luminance of a "#RRGGBB" color, 0..1, or nil if unparseable.
+---@param hex string
+---@return number|nil
+local function hex_luminance(hex)
+	local h = hex:gsub("^#", "")
+	local r = tonumber(h:sub(1, 2), 16)
+	local g = tonumber(h:sub(3, 4), 16)
+	local b = tonumber(h:sub(5, 6), 16)
+	if not (r and g and b) then
+		return nil
+	end
+	return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+end
+
+-- Below this luminance gap an accent reads as the same color as the
+-- background -- mirrors the black-on-black guard devicons already has.
+local MIN_CONTRAST_GAP = 0.15
+
+---Does this accent read against the given background? Unparseable input never
+---blocks a color -- only a measured clash falls back to the hardcoded hex.
+---@param accent_hex string
+---@param background_hex string
+---@return boolean
+local function has_contrast(accent_hex, background_hex)
+	local accent_lum = hex_luminance(accent_hex)
+	local bg_lum = hex_luminance(background_hex)
+	if not accent_lum or not bg_lum then
+		return true
+	end
+	return math.abs(accent_lum - bg_lum) >= MIN_CONTRAST_GAP
 end
 
 ---Build the active palette: the background's chrome plus accents taken from
----the colorscheme, falling back to the hardcoded hexes when it defines none.
+---the colorscheme, falling back to the hardcoded hexes when it defines none
+---or when the result would be unreadable against Normal's background.
 ---@param background_palette table<string, string>
 ---@return table<string, string>
 local function derive_palette(background_palette)
 	local palette = vim.deepcopy(background_palette)
+	local normal = resolved_hl("Normal")
+	local editor_bg = (normal and type(normal.bg) == "number")
+		and ("#%06X"):format(normal.bg) or background_palette.backdrop_bg
 	for key, source in pairs(ACCENT_SOURCES) do
-		palette[key] = colorscheme_fg(source) or background_palette[key]
+		local derived = colorscheme_fg(source)
+		if derived and has_contrast(derived, editor_bg) then
+			palette[key] = derived
+		end
 	end
 	return palette
 end

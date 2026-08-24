@@ -124,6 +124,29 @@ assert_equals(
 	"a user override should beat the derived accent"
 )
 
+-- ── an accent invisible against Normal's background falls back ───────
+vim.o.background = "dark"
+vim.api.nvim_set_hl(0, "Normal", { fg = "#ffffff", bg = "#000000" })
+apply_colorscheme({ Special = "#000000", Identifier = "#83A598" })
+assert_equals(
+	highlights.PALETTE.accent_primary,
+	highlights.PALETTE_DARK.accent_primary,
+	"a black-on-black Special should fall back to the hardcoded accent"
+)
+assert_equals(
+	highlights.PALETTE.accent_secondary, "#83A598",
+	"a readable Identifier should still derive despite the primary fallback"
+)
+
+-- ── a reversed group's visible half (bg) is what gets checked/derived ─
+vim.api.nvim_set_hl(0, "Special", { fg = "#000000", bg = "#98C379", reverse = true })
+highlights.setup({})
+assert_equals(
+	highlights.PALETTE.accent_primary, "#98C379",
+	"a reversed Special should derive from its visible bg half, not the hidden fg"
+)
+
+vim.api.nvim_set_hl(0, "Normal", {})
 vim.o.background = original_background
 highlights.setup({})
 
