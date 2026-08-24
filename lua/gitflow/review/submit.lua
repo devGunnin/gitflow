@@ -14,6 +14,20 @@ local rstate = require("gitflow.review.state")
 local M = {}
 local state = rstate.state
 
+--- Drop the on-disk drafts of a review that has been accepted. A cache left
+--- behind comes back on the next open as comments that are already posted, so
+--- a failed delete is said out loud.
+---@param number integer
+local function clear_drafts(number)
+	local ok, err = cache.clear(number, state.repo_slug)
+	if ok then
+		return
+	end
+	rstate.notify_warn(("Review submitted, but its draft cache is still on disk: %s\n"
+		.. "Reopening this PR would restore comments that are already posted.")
+		:format(err or "unknown error"))
+end
+
 --- Split pending drafts into the reviews-batch payload (line/range comments)
 --- and file-level comments. File comments are returned separately because
 --- the reviews API rejects any comment without a line (→ 422); they're posted
@@ -142,7 +156,7 @@ local function submit_review_with_pending(mode, body, on_success_message)
 				return
 			end
 			state.pending_comments = {}
-			cache.clear(number, state.repo_slug)
+			clear_drafts(number)
 			rstate.notify_info(
 				("Review submitted (%s) with %d comment(s)"):format(mode, total))
 			refresh()
@@ -153,7 +167,7 @@ local function submit_review_with_pending(mode, body, on_success_message)
 		-- posted), don't submit an empty review — just clear and refresh.
 		if #api_comments == 0 and mode == "comment" and trimmed_body == "" then
 			state.pending_comments = {}
-			cache.clear(number, state.repo_slug)
+			clear_drafts(number)
 			rstate.notify_info(on_success_message)
 			refresh()
 			return

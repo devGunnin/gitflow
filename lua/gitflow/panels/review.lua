@@ -242,6 +242,15 @@ local function close_warning()
 			.. "Closing loses them. Close the review anyway?")
 			:format(count, M.state.draft_save_error)
 	end
+	if M.state.draft_save_error then
+		-- No drafts in hand, but the deletions never reached disk: the stale
+		-- file comes back on the next open.
+		return ("Saving review drafts to disk FAILED:\n"
+			.. "%s\n"
+			.. "The copy on disk is stale and will be restored on the next open.\n"
+			.. "Close the review anyway?")
+			:format(M.state.draft_save_error)
+	end
 	if count > 0 then
 		return ("You have %d pending comment(s). Cached drafts are kept on disk.\n"
 			.. "Discard the in-memory drafts and close the review?"):format(count)

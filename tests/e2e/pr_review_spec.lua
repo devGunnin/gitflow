@@ -12,7 +12,6 @@ local cfg = _G.TestConfig
 
 local gh_prs = require("gitflow.gh.prs")
 local input = require("gitflow.ui.input")
-local utils = require("gitflow.utils")
 local review_panel = require("gitflow.panels.review")
 local cache = require("gitflow.review.cache")
 local inline = require("gitflow.review.inline")
@@ -1070,6 +1069,40 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["close_with_guard still warns when the last draft was deleted mid-failure"] = function()
+		open_review(42)
+		T.drain_jobs(5000)
+
+		-- Deleting the last draft while the data dir is unwritable leaves
+		-- nothing in memory and a stale copy on disk that comes back.
+		review_panel.state.pending_comments = {}
+		review_panel.state.draft_save_error =
+			"could not open /nope/42.json for writing: Not a directory"
+
+		local confirm_message = nil
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					confirm_message = msg
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(confirm_message ~= nil,
+			"a failed save must still prompt with no drafts in memory")
+		T.assert_contains(confirm_message, "FAILED",
+			"it should say the save failed")
+		T.assert_contains(confirm_message, "Not a directory",
+			"and carry the reason")
+
+		cleanup_panels()
+	end,
+
 	-- ── Toggle command path ────────────────────────────────────────────
 
 	["toggle on an open review closes it"] = function()
@@ -1995,6 +2028,100 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 				"a prose comment must not render as a suggestion")
 			T.assert_true(row.text:find("suggested change", 1, true) == nil,
 				"a prose comment must not claim to be a suggestion")
+		end
+	end,
+
+	-- The slug lookup is a network round-trip, and a review opened from
+	-- another repo inside that window used to join it and be handed the first
+	-- repo's slug — hydrating one repo's unsent drafts into another repo's
+	-- review, submittable onto its PR.
+	["a review opened from another repo restores its own drafts"] = function()
+		local gh = require("gitflow.gh")
+		local real_run = gh.run
+		local SLUG_A, SLUG_B = "owner_repo_a", "owner_repo_b"
+
+		local function seed(pr_number, slug, body)
+			cache.save(pr_number, {
+				pr_number = pr_number,
+				comments = { {
+					id = 1,
+					path = "lua/gitflow/highlights.lua",
+					body = body,
+					new_line = 13,
+					created_at = "2026-01-01T00:00:00Z",
+				} },
+			}, slug)
+		end
+
+		-- Both repos have unsent drafts on PR 22; only repo B's belong in the
+		-- review opened from repo B.
+		cache.invalidate_repo_slug()
+		seed(22, SLUG_A, "repo A draft")
+		seed(22, SLUG_B, "repo B draft")
+
+		local original_cwd = vim.fn.getcwd()
+		local repo_b = vim.fn.tempname()
+		vim.fn.mkdir(repo_b, "p")
+
+		local held = {}
+		local ok, err = pcall(function()
+			with_temporary_patches({
+				{
+					table = gh,
+					key = "run",
+					value = function(args, opts, cb)
+						if args[1] == "repo" and args[2] == "view" then
+							held[#held + 1] = { cwd = vim.fn.getcwd(), cb = cb }
+							return
+						end
+						return real_run(args, opts, cb)
+					end,
+				},
+			}, function()
+				review_panel.open(cfg, 11)
+				T.drain_jobs(200)
+				vim.cmd.cd(repo_b)
+				review_panel.open(cfg, 22)
+				T.drain_jobs(200)
+
+				-- Answer each lookup with the repo it was actually launched
+				-- from. A shared lookup has only the first, and hands the
+				-- second review repo A's answer.
+				local slugs = { "owner/repo_a\n", "owner/repo_b\n" }
+				for index, lookup in ipairs(held) do
+					lookup.cb({ code = 0, stdout = slugs[index], stderr = "" })
+				end
+				T.drain_jobs(2000)
+			end)
+
+			T.assert_equals(review_panel.state.pr_number, 22,
+				"the second review is the open one")
+			local bodies = {}
+			for _, pc in ipairs(review_panel.state.pending_comments) do
+				bodies[#bodies + 1] = pc.body
+			end
+			T.assert_equals(table.concat(bodies, ", "), "repo B draft",
+				"it must restore its own repo's unsent comments, not another repo's")
+			T.assert_equals(review_panel.state.repo_slug, SLUG_B,
+				"and be named by its own repo")
+			T.assert_equals(#held, 2,
+				"each repo's slug needs its own lookup, not a shared one")
+			T.assert_true(held[1].cwd ~= held[2].cwd,
+				"and the two came from different working dirs")
+		end)
+
+		vim.cmd.cd(original_cwd)
+		pcall(vim.fn.delete, repo_b, "rf")
+		cache.clear(22, SLUG_A)
+		cache.clear(22, SLUG_B)
+		for _, slug in ipairs({ SLUG_A, SLUG_B }) do
+			pcall(vim.fn.delete,
+				("%s/gitflow/review/%s"):format(vim.fn.stdpath("data"), slug), "d")
+		end
+		cache.invalidate_repo_slug()
+		cleanup_panels()
+		if not ok then
+			error(err, 0)
 		end
 	end,
 

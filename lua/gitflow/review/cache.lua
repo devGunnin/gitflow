@@ -116,7 +116,10 @@ end
 
 --- Callbacks waiting on the resolve that is currently out, or nil when none
 --- is. Without this, every caller before the first answer spawns its own
---- `gh repo view`.
+--- `gh repo view`. Keyed by the cwd the lookup was launched from: a caller
+--- from another repo must never be handed this repo's slug, or it loads this
+--- repo's unsent drafts into that repo's review.
+---@type { cwd: string, [integer]: fun(slug: string) }|nil
 local pending_resolves = nil
 
 --- Resolve the slug without blocking the editor.
@@ -136,11 +139,14 @@ function M.resolve_repo_slug(cb)
 		cb(slug_cache.slug)
 		return
 	end
-	if pending_resolves then
+	if pending_resolves and pending_resolves.cwd == cwd then
 		pending_resolves[#pending_resolves + 1] = cb
 		return
 	end
-	pending_resolves = { cb }
+	-- A resolve out for another cwd keeps its own waiters; only the newest
+	-- one is joinable, so neither set is orphaned.
+	local waiting = { cwd = cwd, cb }
+	pending_resolves = waiting
 
 	local settled = false
 	---@param slug string
@@ -149,10 +155,11 @@ function M.resolve_repo_slug(cb)
 			return
 		end
 		settled = true
-		local waiters = pending_resolves or {}
-		pending_resolves = nil
+		if pending_resolves == waiting then
+			pending_resolves = nil
+		end
 		memoize(cwd, slug)
-		for _, waiter in ipairs(waiters) do
+		for _, waiter in ipairs(waiting) do
 			waiter(slug)
 		end
 	end
@@ -227,6 +234,16 @@ function M.load(pr_number, repo_slug)
 		or tonumber(pr_number) or 0
 	if type(decoded.comments) ~= "table" then
 		decoded.comments = {}
+	else
+		-- The writer only ever encodes tables; a hand-edited or corrupted
+		-- file can hold anything, and a scalar here crashes submit.
+		local comments = {}
+		for _, comment in ipairs(decoded.comments) do
+			if type(comment) == "table" then
+				comments[#comments + 1] = comment
+			end
+		end
+		decoded.comments = comments
 	end
 	decoded.updated_at = tostring(decoded.updated_at or "")
 	return decoded
@@ -243,10 +260,14 @@ function M.save(pr_number, state, repo_slug)
 		updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
 	}
 	local encoded = vim.json.encode(payload)
-	local file, open_err = io.open(path, "w")
+	-- Write beside the target and rename over it: opening the target itself
+	-- truncates, so a write that fails part-way would destroy the drafts
+	-- already on disk. Same directory, so the rename is atomic.
+	local tmp_path = path .. ".tmp"
+	local file, open_err = io.open(tmp_path, "w")
 	if not file then
 		return false, ("could not open %s for writing: %s"):format(
-			path, open_err or "unknown error")
+			tmp_path, open_err or "unknown error")
 	end
 	-- Buffered: a full disk usually surfaces at close, not at write.
 	local ok, write_err = file:write(encoded)
@@ -256,17 +277,42 @@ function M.save(pr_number, state, repo_slug)
 		file:close()
 	end
 	if not ok then
+		os.remove(tmp_path)
 		return false, ("could not write %s: %s"):format(
-			path, write_err or "unknown error")
+			tmp_path, write_err or "unknown error")
+	end
+
+	local renamed, rename_err = os.rename(tmp_path, path)
+	if not renamed then
+		os.remove(tmp_path)
+		return false, ("could not replace %s: %s"):format(
+			path, rename_err or "unknown error")
 	end
 	return true
 end
 
+--- Remove a PR's draft cache. A cache that survives a submitted review is
+--- re-hydrated on the next open as already-posted comments, so a delete that
+--- did not happen is reported rather than swallowed.
 ---@param pr_number integer|string
 ---@param repo_slug string|nil
+---@return boolean ok
+---@return string|nil err
 function M.clear(pr_number, repo_slug)
 	local path = M.path_for(pr_number, repo_slug)
-	pcall(vim.fn.delete, path)
+	if vim.fn.filereadable(path) == 0 then
+		return true
+	end
+	-- `vim.fn.delete` answers -1 rather than raising; the pcall is only for
+	-- the call itself failing.
+	local called, result = pcall(vim.fn.delete, path)
+	if not called then
+		return false, ("could not delete %s: %s"):format(path, tostring(result))
+	end
+	if result ~= 0 then
+		return false, ("could not delete %s"):format(path)
+	end
+	return true
 end
 
 return M

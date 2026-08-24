@@ -252,6 +252,87 @@ test("a draft cache that cannot be written is reported, not silently dropped", f
 	clean()
 end)
 
+-- ── a failed save must not destroy what is already on disk ────────────
+
+test("a save that cannot be completed leaves the previous drafts on disk", function()
+	-- Opening the target itself truncates it, so the write goes to a
+	-- neighbouring file and is renamed over. Failing the rename is the only
+	-- way to reach a half-done save from a test.
+	save({ { id = 1, path = "a.lua", body = "the good copy" } })
+
+	local real_rename = os.rename
+	os.rename = function()
+		return nil, "simulated failure"
+	end
+	local ok, err = save({ { id = 2, path = "b.lua", body = "the failed copy" } })
+	os.rename = real_rename
+
+	assert_true(not ok, "the save reports failure")
+	assert_true(tostring(err):find("simulated failure", 1, true) ~= nil,
+		"and carries the reason: " .. tostring(err))
+
+	local loaded = cache.load(TEST_PR, TEST_SLUG)
+	assert_equals(#loaded.comments, 1, "the drafts already on disk are still there")
+	assert_equals(loaded.comments[1].body, "the good copy",
+		"unchanged by the save that failed")
+	assert_equals(
+		vim.fn.filereadable(cache.path_for(TEST_PR, TEST_SLUG) .. ".tmp"), 0,
+		"and the half-written file is not left behind")
+	clean()
+end)
+
+-- ── a delete that did not happen is reported ──────────────────────────
+
+test("clearing a cache that is already gone is not a failure", function()
+	clean()
+	local ok, err = cache.clear(TEST_PR, TEST_SLUG)
+	assert_true(ok, "nothing to delete is nothing to report: " .. tostring(err))
+end)
+
+test("a draft cache that cannot be deleted is reported, not swallowed", function()
+	-- `vim.fn.delete` answers -1 rather than raising, so the failure is only
+	-- visible in its return value. A cache that survives a submit comes back
+	-- on the next open as comments that are already posted.
+	save({ { id = 1, path = "a.lua", body = "posted already" } })
+
+	local real_delete = vim.fn.delete
+	vim.fn.delete = function()
+		return -1
+	end
+	local ok, err = cache.clear(TEST_PR, TEST_SLUG)
+	vim.fn.delete = real_delete
+
+	assert_true(not ok, "a failed delete is reported")
+	assert_true(tostring(err):find(tostring(TEST_PR), 1, true) ~= nil,
+		"and names the file: " .. tostring(err))
+	clean()
+end)
+
+test("clearing a cache that is there answers success", function()
+	save({ { id = 1, path = "a.lua", body = "unsent" } })
+	local ok, err = cache.clear(TEST_PR, TEST_SLUG)
+	assert_true(ok, "a delete that happened is a success: " .. tostring(err))
+	assert_equals(#cache.load(TEST_PR, TEST_SLUG).comments, 0, "and the file is gone")
+end)
+
+-- ── an externally corrupted cache must not reach the submit path ──────
+
+test("cached comments that are not tables are dropped, not handed on", function()
+	local path = cache.path_for(TEST_PR, TEST_SLUG)
+	local file = assert(io.open(path, "w"))
+	file:write(vim.json.encode({
+		pr_number = TEST_PR,
+		comments = { 7, { id = 2, path = "a.lua", body = "real draft" }, "x" },
+		updated_at = "2026-08-24T00:00:00Z",
+	}))
+	file:close()
+
+	local loaded = cache.load(TEST_PR, TEST_SLUG)
+	assert_equals(#loaded.comments, 1, "only the draft-shaped entry survives")
+	assert_equals(loaded.comments[1].body, "real draft", "and it is intact")
+	clean()
+end)
+
 -- ── submitting clears the disk copy ────────────────────────────────────
 
 test("an accepted review leaves no drafts on disk", function()
@@ -301,6 +382,60 @@ test("an accepted review leaves no drafts on disk", function()
 	assert_equals(#rstate.state.pending_comments, 0, "nothing is left in memory")
 	assert_equals(#cache.load(TEST_PR, TEST_SLUG).comments, 0,
 		"and nothing on disk for the next open to re-post")
+
+	rstate.reset()
+	clean()
+end)
+
+test("a submit whose draft cache survives says so", function()
+	-- The drafts are posted; if the file is still there the next open
+	-- restores them and they can be posted a second time.
+	local rstate = require("gitflow.review.state")
+	local load = require("gitflow.review.load")
+	local submit = require("gitflow.review.submit")
+	local gh_prs = require("gitflow.gh.prs")
+	local utils = require("gitflow.utils")
+
+	rstate.reset()
+	rstate.state.cfg = {}
+	rstate.state.pr_number = TEST_PR
+	rstate.state.repo_slug = TEST_SLUG
+	rstate.state.pending_comments = {
+		{ id = 1, path = "a.lua", body = "please rename this", new_line = 12 },
+	}
+	rstate.state.file_diffs = {
+		["a.lua"] = { hunks = { { lines = { { new_line = 12 } } } } },
+	}
+
+	local real_clear, real_notify = cache.clear, utils.notify
+	local real_submit, real_refresh = gh_prs.submit_review, load.refresh
+	local notes = {}
+	cache.clear = function()
+		return false, "could not delete /nope/999901.json"
+	end
+	utils.notify = function(msg, level)
+		notes[#notes + 1] = { msg = tostring(msg), level = level }
+	end
+	gh_prs.submit_review = function(_, _, _, _, _, cb)
+		cb(nil)
+	end
+	load.refresh = function() end
+
+	local ok, err = pcall(submit.submit_review_direct, "approve", "lgtm")
+
+	cache.clear, utils.notify = real_clear, real_notify
+	gh_prs.submit_review, load.refresh = real_submit, real_refresh
+	assert_true(ok, tostring(err))
+
+	local warned = false
+	for _, note in ipairs(notes) do
+		if note.msg:find("still on disk", 1, true) then
+			warned = true
+			assert_equals(note.level, vim.log.levels.WARN,
+				"a surviving draft cache is a warning")
+		end
+	end
+	assert_true(warned, "the surviving draft cache is reported")
 
 	rstate.reset()
 	clean()
