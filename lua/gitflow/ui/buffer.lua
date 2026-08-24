@@ -1,6 +1,7 @@
 ---@class GitflowBufferCreateOpts
 ---@field lines? string[]
 ---@field filetype? string
+---@field ns? integer  highlight namespace to clear in the replaced range when re-creating over an existing buffer
 
 ---@class GitflowBufferRecord
 ---@field bufnr integer
@@ -135,7 +136,7 @@ function M.create(name, opts)
 	local existing = M.registry[name]
 	if existing and vim.api.nvim_buf_is_valid(existing.bufnr) then
 		if opts and opts.lines then
-			M.set_lines_diffed(existing.bufnr, opts.lines)
+			M.set_lines_diffed(existing.bufnr, opts.lines, opts.ns)
 		end
 		return existing.bufnr
 	end
@@ -162,14 +163,15 @@ end
 
 ---@param target string|integer
 ---@param lines string[]
+---@param ns integer|nil  highlight namespace to clear in the replaced range
 ---@return boolean
-function M.update(target, lines)
+function M.update(target, lines, ns)
 	local bufnr = resolve_buffer(target)
 	if not bufnr then
 		return false
 	end
 
-	M.set_lines_diffed(bufnr, lines)
+	M.set_lines_diffed(bufnr, lines, ns)
 	return true
 end
 
