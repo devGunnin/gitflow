@@ -69,10 +69,10 @@ end
 
 -- ── request generation ─────────────────────────────────────────────────
 -- Every async chain a panel starts captures the id current at its start and
--- drops its result if a newer one has begun. Bumping on open, refresh and on
--- either way a panel closes -- M.close() or the window going away under `:q`
--- -- is what stops a slow response from repainting a superseded view,
--- painting into an invisible buffer, or resurrecting a closed panel.
+-- drops its result if a newer one has begun. It is bumped on open, on refresh
+-- and both ways a panel closes — `M.close()` and the window going away under
+-- `:q` — so a slow response can neither repaint a superseded view, nor paint
+-- into a buffer nobody can see, nor resurrect a closed panel.
 
 ---Start a new request generation and return its id.
 ---@return integer
@@ -167,8 +167,8 @@ function Panel:keymap_entries(view)
 end
 
 ---Reduce `hints` to what fits `width`, dropping conveniences from the end.
----Never drops an `essential` -- a destructive verb or the way out stays
----advertised -- and never drops below one entry, so a surface too narrow for
+---Never drops an `essential` — a destructive verb or the way out stays
+---advertised — and never drops below one entry, so a surface too narrow for
 ---the essentials alone overflows rather than hiding one of them.
 ---@param hints table[]
 ---@param width integer|nil  nil for unlimited
@@ -453,7 +453,9 @@ function Panel:begin_render(title)
 end
 
 ---Push the generated hint bar. Splits get it in the buffer; floats already
----carry the same keys in their footer, so nothing is pushed there.
+---carry the same keys in their footer, so nothing is pushed there. Elided to
+---the split's width by the same rule the footer uses, so the two surfaces
+---agree even when the keys do not fit.
 ---@param B GitflowRenderBuilder
 ---@param view string|nil
 ---@param opts table|nil  { blank_before = boolean }
@@ -479,11 +481,11 @@ function Panel:paint(B)
 	return true
 end
 
----Drop the line->entry map a panel builds while rendering its list.
+---Drop the line→entry map a panel builds while rendering its list.
 ---
 ---A state render collapses the buffer, so a map built for the previous
 ---content would resolve a keypress on a hint or state line to an entry that
----is no longer on screen -- on the status panel, to `X discard changes`.
+---is no longer on screen — on the status panel, to `X discard changes`.
 ---`state.line_entries` is the base's name for that map: every adopting panel
 ---that keeps one uses it.
 function Panel:clear_line_entries()
