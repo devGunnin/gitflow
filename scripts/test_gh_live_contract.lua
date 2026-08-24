@@ -26,6 +26,26 @@ local function fail(message)
 	vim.cmd("cquit! 1")
 end
 
+-- gh.classify_failure() has no 5xx/rate-limit branch (both fall to
+-- "unknown"/"permission"), so an upstream outage would otherwise fail()
+-- here looking like drift. Detect those two transient conditions locally.
+---@param output string
+---@return string|nil reason
+local function transient_upstream_reason(output)
+	local text = (output or ""):lower()
+	local status = text:match("%(http (%d%d%d)%)")
+	if status and status:sub(1, 1) == "5" then
+		return ("HTTP %s"):format(status)
+	end
+	if
+		text:find("rate limit", 1, true)
+		or text:find("rate_limited", 1, true)
+	then
+		return "rate limit"
+	end
+	return nil
+end
+
 local gh = require("gitflow.gh")
 
 local ok, message = gh.ensure_prerequisites()
@@ -61,6 +81,12 @@ if call_result and call_result.code ~= 0 then
 	if kind == "network" or kind == "auth" then
 		skip(("gh label list exited %d (%s) — %s"):format(
 			call_result.code, kind, output
+		))
+	end
+	local transient = transient_upstream_reason(output)
+	if transient then
+		skip(("gh label list exited %d (upstream %s) — %s"):format(
+			call_result.code, transient, output
 		))
 	end
 	fail(("gh label list exited %d (%s) — %s"):format(call_result.code, kind, output))
