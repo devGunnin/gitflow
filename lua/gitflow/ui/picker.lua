@@ -12,6 +12,7 @@
 
 local ui_window = require("gitflow.ui.window")
 local render = require("gitflow.ui.render")
+local components = require("gitflow.ui.components")
 local matcher = require("gitflow.ui.matcher")
 local icons = require("gitflow.icons")
 
@@ -133,8 +134,9 @@ end
 ---@param state table
 ---@return table[]
 local function prompt_chunks(state)
+	local edge = render.spacing.edge
 	local chunks = {
-		{ " " .. icons.get("ui", "search") .. " ", "GitflowPickerPromptIcon" },
+		{ edge .. icons.get("ui", "search") .. edge, "GitflowPickerPromptIcon" },
 	}
 	if state.query ~= "" then
 		chunks[#chunks + 1] = { state.query, "GitflowPickerPrompt" }
@@ -154,13 +156,13 @@ local function count_chunks(state)
 		and ("%d/%d  ·  %d selected"):format(shown, total, selected_count(state))
 		or ("%d/%d"):format(shown, total)
 	local width = render.content_width({ winid = state.winid, bufnr = state.bufnr })
-	local left = "── "
+	local left = render.glyphs.rule .. render.glyphs.rule .. render.spacing.edge
 	local used = vim.fn.strdisplaywidth(left) + vim.fn.strdisplaywidth(label) + 1
-	local tail = string.rep("\u{2500}", math.max(0, width - used))
+	local tail = string.rep(render.glyphs.rule, math.max(0, width - used))
 	return {
 		{ left, "GitflowSeparator" },
 		{ label, "GitflowPickerCount" },
-		{ " ", "GitflowSeparator" },
+		{ render.spacing.edge, "GitflowSeparator" },
 		{ tail, "GitflowSeparator" },
 	}
 end
@@ -174,20 +176,21 @@ end
 local function push_item(B, state, item)
 	local name = vim.trim(tostring(item.name or ""))
 	local desc = vim.trim(tostring(item.description or ""))
-	local chunks = { { " ", nil } }
+	local edge, gutter = render.spacing.edge, render.spacing.gutter
+	local chunks = { { edge, nil } }
 	if state.multi_select then
 		if state.selected[name] then
 			chunks[#chunks + 1] = { "[x]", "GitflowPickerCheck" }
 		else
 			chunks[#chunks + 1] = { "[ ]", "GitflowPickerCheckOff" }
 		end
-		chunks[#chunks + 1] = { " ", nil }
+		chunks[#chunks + 1] = { edge, nil }
 	else
-		chunks[#chunks + 1] = { state.selected[name] and "> " or "  ", "GitflowPickerCheck" }
+		chunks[#chunks + 1] = { state.selected[name] and "> " or gutter, "GitflowPickerCheck" }
 	end
 	chunks[#chunks + 1] = { name, state.spec.name_highlight(item) }
 	if desc ~= "" then
-		chunks[#chunks + 1] = { "  " .. desc, "GitflowMeta" }
+		chunks[#chunks + 1] = { gutter .. desc, "GitflowMeta" }
 	end
 	local line_no = B:push(chunks)
 
@@ -209,12 +212,12 @@ local function build_hint(state)
 		return render.hint_chunks({
 			{ "j/k", "move" }, { "<Spc>", "toggle" }, { "/", "filter" },
 			{ "<CR>", "apply" }, { "q", "close" },
-		}, { leading = " " })
+		}, { leading = render.spacing.edge })
 	end
 	return render.hint_chunks({
 		{ "j/k", "move" }, { "<CR>", "select" }, { "/", "filter" },
 		{ "q", "close" },
-	}, { leading = " " })
+	}, { leading = render.spacing.edge })
 end
 
 ---Paint the active-line accent. It lives in its own namespace so moving the
@@ -250,7 +253,7 @@ local function render_all(state)
 
 	local line_entries = {}
 	if #state.filtered == 0 then
-		B:raw("   " .. state.spec.empty_text, "GitflowMeta")
+		components.empty(B, state.spec.empty_text)
 	else
 		for _, item in ipairs(state.filtered) do
 			local line_no = push_item(B, state, item)
@@ -299,7 +302,7 @@ local function render_results_only(state)
 	B:push(count_chunks(state))
 	local line_entries = {}
 	if #state.filtered == 0 then
-		B:raw("   " .. state.spec.empty_text, "GitflowMeta")
+		components.empty(B, state.spec.empty_text)
 	else
 		for _, item in ipairs(state.filtered) do
 			local line_no = push_item(B, state, item)
