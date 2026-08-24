@@ -4,25 +4,29 @@
 --- the right. Drives off any unified diff — a single commit, a commit range, or
 --- the working tree — so `git log`, `:Gitflow diff` and status all share one
 --- polished "review mode" surface (issue #369).
+---
+--- The file list is a `ui/panel.lua` panel: the base owns its keys, its hint
+--- chrome, its request generation and its line→entry map. The one thing it
+--- does not own is placement — the pane is a fixed-width vsplit inside this
+--- module's own tabpage — so the window is built here and handed over.
 
 local git = require("gitflow.git")
+local panel = require("gitflow.ui.panel")
+local components = require("gitflow.ui.components")
+local ui_render = require("gitflow.ui.render")
 local inline = require("gitflow.review.inline")
 local icons = require("gitflow.icons")
 local utils = require("gitflow.utils")
-local ui_render = require("gitflow.ui.render")
 
 local M = {}
 
 local FILE_LIST_WIDTH = 42
-local LIST_NS = vim.api.nvim_create_namespace("gitflow_diffview_list_hl")
 local DIFF_NS = vim.api.nvim_create_namespace("gitflow_diffview_diff_hl")
 local LINENR_NS = vim.api.nvim_create_namespace("gitflow_diffview_linenr")
 
 ---@type table
 M.state = {
 	tabpage = nil,
-	file_list_winid = nil,
-	file_list_bufnr = nil,
 	diff_winid = nil,
 	files = {},
 	file_diffs = {},
@@ -31,22 +35,53 @@ M.state = {
 	hunk_anchors = {},
 	title = "",
 	cfg = nil,
-	open_request_id = 0,
 }
 
----@return integer
-local function next_open_request_id()
-	M.state.open_request_id = (M.state.open_request_id or 0) + 1
-	return M.state.open_request_id
-end
+---Keys bound on the file-list pane and, minus the ones that only make sense
+---there, on every diff buffer the right pane shows. One declaration, so the
+---two can no longer disagree with each other or with the hint bar.
+---@type GitflowPanelKeymap[]
+local KEYMAPS = {
+	{ key = "<CR>/o", keys = { "<CR>", "o", "<2-LeftMouse>" }, desc = "open",
+		essential = true, list_only = true, run = function()
+			M.open_under_cursor()
+		end },
+	{ key = "]f/[f", keys = { "]f", "[f" }, desc = "file", run = function(key)
+		if key == "]f" then
+			M.next_file()
+		else
+			M.prev_file()
+		end
+	end },
+	{ key = "]c/[c", keys = { "]c", "[c" }, desc = "hunk", run = function(key)
+		if key == "]c" then
+			M.next_hunk()
+		else
+			M.prev_hunk()
+		end
+	end },
+	{ key = "r", desc = "refresh", list_only = true, run = function()
+		M.refresh()
+	end },
+	{ key = "q", desc = "close", essential = true, run = function()
+		M.close()
+	end },
+}
 
----@param request_id integer
----@return boolean
-local function is_active_open_request(request_id)
-	return M.state.open_request_id == request_id
-end
+local P = panel.new({
+	name = "diffview",
+	title = "Gitflow Diffview",
+	filetype = "gitflow-diffview",
+	loading = "Loading diff…",
+	state = M.state,
+	entry_maps = { "file_line_map" },
+	keymaps = KEYMAPS,
+})
 
 -- ── status glyphs ──────────────────────────────────────────────────────
+
+---@param status string|nil
+---@return string, string
 local function status_icon(status)
 	if status == "A" then
 		return icons.get("file_status", "A"), "GitflowAdded"
@@ -75,15 +110,12 @@ local function count_changes(hunks)
 end
 
 -- ── file list (left pane) ──────────────────────────────────────────────
+
 local function render_file_list()
-	local bufnr = M.state.file_list_bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+	if not P:bufnr() then
 		return
 	end
-
-	local lines = {}
-	local spans = {}
-	local file_line_map = {}
+	M.state.file_line_map = {}
 
 	local total_add, total_del = 0, 0
 	for _, f in ipairs(M.state.files) do
@@ -91,28 +123,17 @@ local function render_file_list()
 		total_del = total_del + (f.deletions or 0)
 	end
 
-	local function push(text, hls)
-		lines[#lines + 1] = text
-		if hls then
-			for _, h in ipairs(hls) do
-				h.line = #lines - 1
-				spans[#spans + 1] = h
-			end
-		end
-	end
-
-	push(" " .. M.state.title, { { col_start = 0, col_end = -1, hl = "GitflowTitle" } })
-	push(string.rep("\u{2500}", FILE_LIST_WIDTH - 2), { { col_start = 0, col_end = -1, hl = "GitflowSeparator" } })
-	local files_header = (" Files (%d)"):format(#M.state.files)
-	push(files_header .. ("  +%d -%d"):format(total_add, total_del), {
-		{ col_start = 0, col_end = #files_header, hl = "GitflowSectionTitle" },
-		{ col_start = #files_header, col_end = #files_header + #("  +" .. total_add), hl = "GitflowReviewCountAdd" },
-		{ col_start = #files_header + #("  +" .. total_add), col_end = -1, hl = "GitflowReviewCountDel" },
+	local B = P:begin_render(ui_render.spacing.edge .. M.state.title)
+	B:push({
+		{ ui_render.spacing.edge, nil },
+		{ ("Files (%d)"):format(#M.state.files), "GitflowSectionTitle" },
+		{ ("  +%d"):format(total_add), "GitflowReviewCountAdd" },
+		{ (" -%d"):format(total_del), "GitflowReviewCountDel" },
 	})
-	push("")
+	B:blank()
 
 	if #M.state.files == 0 then
-		push("   (no changes)", { { col_start = 0, col_end = -1, hl = "GitflowMeta" } })
+		components.empty(B, "(no changes)")
 	end
 
 	for idx, f in ipairs(M.state.files) do
@@ -120,41 +141,37 @@ local function render_file_list()
 		local dir, name = f.path:match("^(.*/)([^/]+)$")
 		dir = dir or ""
 		name = name or f.path
-		local active = M.state.active_idx == idx
-		local prefix = " " .. icon .. "  "
-		local counts = ("   +%d -%d"):format(f.additions or 0, f.deletions or 0)
-		local text = prefix .. dir .. name .. counts
-		local dir_start = #prefix
-		local name_start = dir_start + #dir
-		local counts_start = name_start + #name
-		local add_str = ("   +%d"):format(f.additions or 0)
-		push(text, {
-			{ col_start = 1, col_end = 1 + #icon, hl = icon_hl },
-			{ col_start = dir_start, col_end = name_start, hl = "GitflowMeta" },
-			{ col_start = name_start, col_end = counts_start, hl = active and "GitflowTitle" or "GitflowCardTitle" },
-			{ col_start = counts_start, col_end = counts_start + #add_str, hl = "GitflowReviewCountAdd" },
-			{ col_start = counts_start + #add_str, col_end = -1, hl = "GitflowReviewCountDel" },
-		})
-		file_line_map[#lines] = idx
+		M.state.file_line_map[B:push({
+			{ ui_render.spacing.edge, nil },
+			{ icon .. "  ", icon_hl },
+			{ dir, "GitflowMeta" },
+			{ name, M.state.active_idx == idx
+				and "GitflowTitle" or "GitflowCardTitle" },
+			{ ("   +%d"):format(f.additions or 0), "GitflowReviewCountAdd" },
+			{ (" -%d"):format(f.deletions or 0), "GitflowReviewCountDel" },
+		})] = idx
 	end
 
-	push("")
-	local hint = " <CR>/o open · ]f/[f file · ]c/[c hunk · r refresh · q close"
-	push(hint, { { col_start = 0, col_end = -1, hl = "GitflowReviewHint" } })
-
-	M.state.file_line_map = file_line_map
-
-	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	vim.api.nvim_buf_clear_namespace(bufnr, LIST_NS, 0, -1)
-	for _, sp in ipairs(spans) do
-		ui_render.highlight(bufnr, LIST_NS, sp.hl, sp.line, sp.col_start, sp.col_end)
-	end
+	P:push_hints(B)
+	P:paint(B)
 end
 
 -- ── diff pane (right) ──────────────────────────────────────────────────
+
+---@param bufnr integer
+local function bind_diff_keys(bufnr)
+	local opts = { buffer = bufnr, silent = true, nowait = true }
+	for _, entry in ipairs(KEYMAPS) do
+		if not entry.list_only then
+			for _, key in ipairs(panel.bound_keys(entry)) do
+				vim.keymap.set("n", key, function()
+					entry.run(key)
+				end, opts)
+			end
+		end
+	end
+end
+
 ---@param file table  { path, status }
 local function render_diff(file)
 	local file_diff = M.state.file_diffs[file.path]
@@ -167,39 +184,32 @@ local function render_diff(file)
 	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
 	vim.api.nvim_buf_set_name(bufnr, ("gitflow://diff/%s"):format(file.path))
 
-	local lines = {}
-	local spans = {}
-	local linenr = {} -- line_idx(0-based) -> {old, new}
+	local B = ui_render.builder()
+	local linenr = {} -- line_no(1-based) -> { old, new }
 	local hunk_anchors = {}
 
-	local function push(text, hl)
-		lines[#lines + 1] = text
-		if hl then
-			spans[#spans + 1] = { line = #lines - 1, hl = hl }
-		end
-	end
-
 	local icon = status_icon(file.status)
-	push(("%s  %s"):format(icon, file.path), "GitflowDiffFileHeader")
-	push("")
+	B:raw(("%s  %s"):format(icon, file.path), "GitflowDiffFileHeader")
+	B:blank()
 
 	if not file_diff or #(file_diff.hunks or {}) == 0 then
-		push("  (no textual changes)", "GitflowMeta")
+		components.empty(B, "(no textual changes)")
 	else
 		for _, hunk in ipairs(file_diff.hunks) do
-			push(hunk.header, "GitflowDiffHunkHeader")
-			hunk_anchors[#hunk_anchors + 1] = #lines
+			hunk_anchors[#hunk_anchors + 1] =
+				B:raw(hunk.header, "GitflowDiffHunkHeader")
 			for _, l in ipairs(hunk.lines or {}) do
-				local sign = l.kind == "add" and "+" or (l.kind == "del" and "-" or " ")
+				local sign = l.kind == "add" and "+"
+					or (l.kind == "del" and "-" or " ")
 				local hl = l.kind == "add" and "GitflowAdded"
 					or (l.kind == "del" and "GitflowRemoved" or "GitflowDiffContext")
-				push(sign .. " " .. (l.text or ""), hl)
-				linenr[#lines - 1] = { old = l.old_line, new = l.new_line }
+				linenr[B:raw(sign .. " " .. (l.text or ""), hl)] =
+					{ old = l.old_line, new = l.new_line }
 			end
 		end
 	end
 
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	B:flush(bufnr, bufnr, DIFF_NS)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
 	vim.api.nvim_set_option_value("filetype", "diff", { buf = bufnr })
 
@@ -207,29 +217,21 @@ local function render_diff(file)
 	M.state.diff_bufnr = bufnr
 	M.state.hunk_anchors = hunk_anchors
 
-	vim.api.nvim_buf_clear_namespace(bufnr, DIFF_NS, 0, -1)
-	for _, sp in ipairs(spans) do
-		ui_render.highlight(bufnr, DIFF_NS, sp.hl, sp.line, 0, -1)
-	end
-	-- old/new line numbers as dim virtual text on the left.
-	for line_idx, nums in pairs(linenr) do
+	-- old/new line numbers as dim virtual text on the left. Its own namespace:
+	-- the builder diffs DIFF_NS against a snapshot, so nothing else may write
+	-- there.
+	for line_no, nums in pairs(linenr) do
 		local label = ("%4s %4s"):format(
 			nums.old and tostring(nums.old) or "",
 			nums.new and tostring(nums.new) or ""
 		)
-		pcall(vim.api.nvim_buf_set_extmark, bufnr, LINENR_NS, line_idx, 0, {
+		pcall(vim.api.nvim_buf_set_extmark, bufnr, LINENR_NS, line_no - 1, 0, {
 			virt_text = { { label .. " ", "GitflowDiffLineNr" } },
 			virt_text_pos = "inline",
 		})
 	end
 
-	-- diff-pane keymaps
-	local kopts = { buffer = bufnr, silent = true, nowait = true }
-	vim.keymap.set("n", "]f", M.next_file, kopts)
-	vim.keymap.set("n", "[f", M.prev_file, kopts)
-	vim.keymap.set("n", "]c", M.next_hunk, kopts)
-	vim.keymap.set("n", "[c", M.prev_hunk, kopts)
-	vim.keymap.set("n", "q", M.close, kopts)
+	bind_diff_keys(bufnr)
 
 	local winbar = ("%%#GitflowTitle#  %s   %s "):format(M.state.title, file.path)
 	pcall(vim.api.nvim_set_option_value, "winbar", winbar, { win = diff_winid })
@@ -242,13 +244,12 @@ end
 ---Move the file-list cursor onto the row for file index `idx`.
 ---@param idx integer
 local function select_file_line(idx)
-	local winid = M.state.file_list_winid
-	if not winid or not vim.api.nvim_win_is_valid(winid) then
+	if not P:has_window() then
 		return
 	end
-	for line, file_idx in pairs(M.state.file_line_map or {}) do
+	for line, file_idx in pairs(M.state.file_line_map) do
 		if file_idx == idx then
-			pcall(vim.api.nvim_win_set_cursor, winid, { line, 0 })
+			pcall(vim.api.nvim_win_set_cursor, M.state.winid, { line, 0 })
 			return
 		end
 	end
@@ -266,10 +267,10 @@ function M.open_index(idx)
 end
 
 function M.open_under_cursor()
-	if not M.state.file_list_winid or not vim.api.nvim_win_is_valid(M.state.file_list_winid) then
+	if not P:has_window() then
 		return
 	end
-	local cursor = vim.api.nvim_win_get_cursor(M.state.file_list_winid)[1]
+	local cursor = vim.api.nvim_win_get_cursor(M.state.winid)[1]
 	local idx = M.state.file_line_map[cursor]
 	if idx then
 		M.open_index(idx)
@@ -298,29 +299,31 @@ function M.prev_file()
 	M.open_index(idx)
 end
 
+---@param forward boolean
 local function jump_hunk(forward)
 	local winid = M.state.diff_winid
-	if not winid or not vim.api.nvim_win_is_valid(winid) or #M.state.hunk_anchors == 0 then
+	local anchors = M.state.hunk_anchors
+	if not winid or not vim.api.nvim_win_is_valid(winid) or #anchors == 0 then
 		return
 	end
 	local cur = vim.api.nvim_win_get_cursor(winid)[1]
 	if forward then
-		for _, l in ipairs(M.state.hunk_anchors) do
+		for _, l in ipairs(anchors) do
 			if l > cur then
 				pcall(vim.api.nvim_win_set_cursor, winid, { l, 0 })
 				return
 			end
 		end
-		pcall(vim.api.nvim_win_set_cursor, winid, { M.state.hunk_anchors[1], 0 })
-	else
-		for i = #M.state.hunk_anchors, 1, -1 do
-			if M.state.hunk_anchors[i] < cur then
-				pcall(vim.api.nvim_win_set_cursor, winid, { M.state.hunk_anchors[i], 0 })
-				return
-			end
-		end
-		pcall(vim.api.nvim_win_set_cursor, winid, { M.state.hunk_anchors[#M.state.hunk_anchors], 0 })
+		pcall(vim.api.nvim_win_set_cursor, winid, { anchors[1], 0 })
+		return
 	end
+	for i = #anchors, 1, -1 do
+		if anchors[i] < cur then
+			pcall(vim.api.nvim_win_set_cursor, winid, { anchors[i], 0 })
+			return
+		end
+	end
+	pcall(vim.api.nvim_win_set_cursor, winid, { anchors[#anchors], 0 })
 end
 
 function M.next_hunk()
@@ -332,49 +335,40 @@ function M.prev_hunk()
 end
 
 -- ── layout ─────────────────────────────────────────────────────────────
+
 ---Drop the file-list buffer. It is `bufhidden = "hide"`, so closing its window
 ---is not enough — without this it leaks one buffer per open. Idempotent.
 local function delete_file_list_buffer()
-	local bufnr = M.state.file_list_bufnr
-	M.state.file_list_bufnr = nil
+	local bufnr = M.state.bufnr
+	M.state.bufnr = nil
+	M.state.winid = nil
 	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
 		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
 	end
-end
-
-local function ensure_file_list_buffer()
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_set_option_value("buftype", "nofile", { buf = bufnr })
-	vim.api.nvim_set_option_value("bufhidden", "hide", { buf = bufnr })
-	vim.api.nvim_set_option_value("swapfile", false, { buf = bufnr })
-	vim.api.nvim_set_option_value("filetype", "gitflow-diffview", { buf = bufnr })
-	M.state.file_list_bufnr = bufnr
-
-	local kopts = { buffer = bufnr, silent = true, nowait = true }
-	vim.keymap.set("n", "<CR>", M.open_under_cursor, kopts)
-	vim.keymap.set("n", "o", M.open_under_cursor, kopts)
-	vim.keymap.set("n", "<2-LeftMouse>", M.open_under_cursor, kopts)
-	vim.keymap.set("n", "]f", M.next_file, kopts)
-	vim.keymap.set("n", "[f", M.prev_file, kopts)
-	vim.keymap.set("n", "]c", M.next_hunk, kopts)
-	vim.keymap.set("n", "[c", M.prev_hunk, kopts)
-	vim.keymap.set("n", "r", M.refresh, kopts)
-	vim.keymap.set("n", "q", M.close, kopts)
-	return bufnr
 end
 
 local function build_tabpage()
 	vim.cmd("tabnew")
 	M.state.tabpage = vim.api.nvim_get_current_tabpage()
 
-	ensure_file_list_buffer()
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_set_option_value("buftype", "nofile", { buf = bufnr })
+	vim.api.nvim_set_option_value("bufhidden", "hide", { buf = bufnr })
+	vim.api.nvim_set_option_value("swapfile", false, { buf = bufnr })
+	vim.api.nvim_set_option_value("filetype", "gitflow-diffview", { buf = bufnr })
+	M.state.bufnr = bufnr
+	P:bind_keymaps(bufnr)
 
 	vim.cmd("topleft vsplit")
-	M.state.file_list_winid = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(M.state.file_list_winid, M.state.file_list_bufnr)
-	vim.api.nvim_win_set_width(M.state.file_list_winid, FILE_LIST_WIDTH)
-	for opt, val in pairs({ number = false, relativenumber = false, signcolumn = "no", wrap = false, winfixwidth = true, cursorline = true }) do
-		pcall(vim.api.nvim_set_option_value, opt, val, { win = M.state.file_list_winid })
+	M.state.winid = vim.api.nvim_get_current_win()
+	vim.api.nvim_win_set_buf(M.state.winid, bufnr)
+	vim.api.nvim_win_set_width(M.state.winid, FILE_LIST_WIDTH)
+	local options = {
+		number = false, relativenumber = false, signcolumn = "no",
+		wrap = false, winfixwidth = true, cursorline = true,
+	}
+	for opt, val in pairs(options) do
+		pcall(vim.api.nvim_set_option_value, opt, val, { win = M.state.winid })
 	end
 
 	vim.cmd("wincmd l")
@@ -382,14 +376,18 @@ local function build_tabpage()
 
 	local placeholder = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = placeholder })
-	vim.api.nvim_buf_set_lines(placeholder, 0, -1, false, {
-		"", "  Select a file on the left with <CR> to view its diff.",
-		"", "  ]f/[f next/prev file · ]c/[c next/prev hunk · q close",
+	local B = ui_render.builder()
+	B:blank()
+	components.empty(B, "Select a file on the left with <CR> to view its diff.")
+	B:blank()
+	components.hint_bar(B, {
+		{ "]f/[f", "file" }, { "]c/[c", "hunk" }, { "q", "close" },
 	})
+	B:flush(placeholder, placeholder, DIFF_NS)
 	vim.api.nvim_set_option_value("modifiable", false, { buf = placeholder })
 	vim.api.nvim_win_set_buf(M.state.diff_winid, placeholder)
 
-	vim.api.nvim_set_current_win(M.state.file_list_winid)
+	vim.api.nvim_set_current_win(M.state.winid)
 end
 
 -- ── entry points ───────────────────────────────────────────────────────
@@ -427,9 +425,11 @@ local function open_from_git(args, title, cfg, focus_path)
 
 	-- Two rapid opens race: without this the loser still builds a tabpage, and
 	-- it renders the winner's title over its own diff.
-	local request_id = next_open_request_id()
+	local request_id = P:next_request()
 	git.git(args, {}, function(result)
-		if not is_active_open_request(request_id) then
+		-- The generation alone, not `P:is_active`: the tabpage is built from
+		-- inside this callback, so the panel has no window yet to check.
+		if M.state.request_id ~= request_id then
 			return
 		end
 		if (result.code or 1) ~= 0 then
@@ -447,22 +447,22 @@ local function open_from_git(args, title, cfg, focus_path)
 		ingest(diff_text)
 		build_tabpage()
 		render_file_list()
-		if #M.state.files > 0 then
-			local target = 1
-			if focus_path then
-				for idx, f in ipairs(M.state.files) do
-					if f.path == focus_path then
-						target = idx
-						break
-					end
+		if #M.state.files == 0 then
+			return
+		end
+		local target = 1
+		if focus_path then
+			for idx, f in ipairs(M.state.files) do
+				if f.path == focus_path then
+					target = idx
+					break
 				end
 			end
-			M.open_index(target)
-			select_file_line(target)
-			if M.state.file_list_winid
-				and vim.api.nvim_win_is_valid(M.state.file_list_winid) then
-				vim.api.nvim_set_current_win(M.state.file_list_winid)
-			end
+		end
+		M.open_index(target)
+		select_file_line(target)
+		if P:has_window() then
+			vim.api.nvim_set_current_win(M.state.winid)
 		end
 	end)
 end
@@ -471,8 +471,8 @@ end
 ---@param cfg table|nil
 ---@param sha string
 function M.open_commit(cfg, sha)
-	local short = tostring(sha):sub(1, 8)
-	open_from_git({ "show", "--patch", "--no-color", sha }, ("Commit %s"):format(short), cfg)
+	open_from_git({ "show", "--patch", "--no-color", sha },
+		("Commit %s"):format(tostring(sha):sub(1, 8)), cfg)
 end
 
 ---Review the combined diff of a commit range (exclusive of `from`).
@@ -513,11 +513,10 @@ end
 
 function M.close()
 	-- Discard any in-flight open; its callback must not resurrect a tabpage.
-	next_open_request_id()
+	P:next_request()
 
 	local tabpage = M.state.tabpage
 	M.state.tabpage = nil
-	M.state.file_list_winid = nil
 	M.state.diff_winid = nil
 	M.state.files = {}
 	M.state.file_diffs = {}
