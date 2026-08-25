@@ -343,7 +343,6 @@ assert_true(has_revert_keymap, "status panel should map X for file revert")
 assert_true(has_push_commit_keymap, "status panel should map p for commit push")
 
 local status_lines = vim.api.nvim_buf_get_lines(status_buf, 0, -1, false)
-local expected_branch_line = ("Current branch: %s"):format(current_branch(repo_dir))
 local expected_staged_header = "Staged (1)"
 local expected_unstaged_header = "Unstaged (0)"
 local expected_untracked_header = "Untracked (0)"
@@ -365,10 +364,10 @@ local no_upstream_history = find_line(status_lines, "Commit History")
 assert_true(no_upstream_history == nil, "commit history should not appear without upstream")
 local staged_tracked_line = find_line(status_lines, "tracked.txt", staged_header_line + 1)
 assert_true(staged_tracked_line ~= nil, "staged tracked file should be visible")
-assert_equals(
-	status_lines[#status_lines],
-	expected_branch_line,
-	"status panel should display current branch at the bottom"
+-- The branch is named once, on the summary bar at the top.
+assert_true(
+	find_line(status_lines, current_branch(repo_dir)) ~= nil,
+	"status panel should name the current branch"
 )
 
 vim.api.nvim_set_current_win(status_panel.state.winid)
@@ -588,9 +587,9 @@ local diff_ready = vim.wait(5000, function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(diff_panel.state.bufnr, 0, -1, false)
-	return lines[#lines] == expected_branch_line
+	return find_line(lines, current_branch(repo_dir)) ~= nil
 end, 25)
-assert_true(diff_ready, "diff panel should display current branch at the bottom")
+assert_true(diff_ready, "diff panel should name the current branch")
 
 commands.dispatch({ "log" }, cfg)
 local log_ready = vim.wait(5000, function()
@@ -598,7 +597,7 @@ local log_ready = vim.wait(5000, function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(log_panel.state.bufnr, 0, -1, false)
-	return lines[#lines] == expected_branch_line
+	return find_line(lines, current_branch(repo_dir)) ~= nil
 end, 25)
 assert_true(log_ready, "log panel should display current branch at the bottom")
 
@@ -625,14 +624,14 @@ local stash_panel_ready = vim.wait(5000, function()
 		return false
 	end
 	local lines = vim.api.nvim_buf_get_lines(stash_panel.state.bufnr, 0, -1, false)
-	return find_line(lines, "Gitflow Stash") ~= nil and lines[#lines] == expected_branch_line
+	return find_line(lines, "Gitflow Stash") ~= nil
+		and find_line(lines, current_branch(repo_dir)) ~= nil
 end, 25)
 assert_true(stash_panel_ready, "stash panel should render")
 local stash_lines = vim.api.nvim_buf_get_lines(stash_panel.state.bufnr, 0, -1, false)
-assert_equals(
-	stash_lines[#stash_lines],
-	expected_branch_line,
-	"stash panel should display current branch at the bottom"
+assert_true(
+	find_line(stash_lines, current_branch(repo_dir)) ~= nil,
+	"stash panel should name the current branch"
 )
 assert_true(stash_panel.is_open(), "stash panel should report open state")
 

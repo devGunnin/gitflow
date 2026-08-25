@@ -393,13 +393,15 @@ test("diff panel shows file summary", function()
 	local lines = vim.api.nvim_buf_get_lines(
 		bufnr, 0, -1, false
 	)
+	-- The counts moved onto the panel's summary bar, in the same shape every
+	-- other panel uses: "<n> files    <n> hunks    <branch>".
 	assert_true(
-		find_line(lines, "Files:") ~= nil,
-		"diff panel should show file summary"
+		find_line(lines, "files") ~= nil or find_line(lines, "file") ~= nil,
+		"diff panel should show a file count"
 	)
 	assert_true(
-		find_line(lines, "Hunks:") ~= nil,
-		"diff panel should show hunk count"
+		find_line(lines, "hunk") ~= nil,
+		"diff panel should show a hunk count"
 	)
 end)
 

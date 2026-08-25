@@ -96,7 +96,9 @@ local function render(entries, merge_base_sha, current_branch)
 		for idx, entry in ipairs(entries) do
 			-- HEAD (first row) has no position marker; subsequent rows show
 			-- the [N] jump target offset from HEAD.
-			local position_marker = ""
+			-- Blank-padded to the marker's own width so the shas below and
+			-- above an unnumbered row still line up.
+			local position_marker = "    "
 			if idx >= 2 and idx <= 10 then
 				position_marker = ("[%d] "):format(idx - 1)
 			end

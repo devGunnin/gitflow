@@ -94,9 +94,7 @@ local function render(entries, current_branch)
 		end
 	end
 
-	B:blank()
-	P:push_hints(B, nil, { blank_before = false })
-	components.branch_footer(B, current_branch)
+	P:push_hints(B)
 
 	P:paint(B, line_entries)
 end

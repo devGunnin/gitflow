@@ -1,5 +1,4 @@
 local utils = require("gitflow.utils")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
 local panel = require("gitflow.ui.panel")
 local icons = require("gitflow.icons")
@@ -204,14 +203,6 @@ local function render(entries)
 	end
 
 	P:push_hints(B)
-
-	-- In-buffer footer: entry count only — never a branch label.
-	B:blank()
-	B:raw(ui_render.separator(P:render_opts()), "GitflowSeparator")
-	B:push({
-		{ components.spacing.gutter, nil },
-		{ ("%d entries"):format(#filtered), "GitflowFooter" },
-	})
 
 	if P:paint(B) then
 		M.state.line_context = line_context

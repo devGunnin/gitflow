@@ -133,7 +133,22 @@ do
 	local B = ui_render.builder()
 	local n = components.split_hint_bar(B, {}, { { "q", "close" } })
 	assert_true(n ~= nil, "split_hint_bar() should render in split layout")
-	assert_true(#B.lines >= 2, "split_hint_bar() should add a blank + hint line in split")
+	assert_equals(#B.lines, 1,
+		"split_hint_bar() should not open a buffer with a blank line")
+
+	-- One blank before the bar, whether or not the panel already ended on one.
+	local B_content = ui_render.builder()
+	B_content:push({ { "  row", nil } })
+	components.split_hint_bar(B_content, {}, { { "q", "close" } })
+	assert_equals(#B_content.lines, 3,
+		"split_hint_bar() should add one blank after content")
+
+	local B_blank = ui_render.builder()
+	B_blank:push({ { "  row", nil } })
+	B_blank:blank()
+	components.split_hint_bar(B_blank, {}, { { "q", "close" } })
+	assert_equals(#B_blank.lines, 3,
+		"split_hint_bar() should not add a second blank")
 
 	-- Float window → is_floating true, split_hint_bar suppresses output.
 	local buf = vim.api.nvim_create_buf(false, true)

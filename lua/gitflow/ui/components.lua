@@ -271,22 +271,12 @@ function M.split_hint_bar(B, render_opts, pairs, opts)
 		return nil
 	end
 	opts = opts or {}
-	if opts.blank_before ~= false then
+	-- One blank, never two: most panels end their last section with a blank
+	-- already, and the gap above the bar has to be the same in every panel.
+	if opts.blank_before ~= false and not B:ends_blank() then
 		B:blank()
 	end
 	return M.hint_bar(B, pairs)
-end
-
----Push a final "Current branch: <branch>" footer line. Must be the LAST line
----pushed (some panels/tests read the last buffer line).
----@param B GitflowRenderBuilder
----@param branch string|nil
----@return integer line_no
-function M.branch_footer(B, branch)
-	return B:push({
-		{ "Current branch: ", "GitflowMetaKey" },
-		{ tostring(branch or ""), "GitflowBranchCurrent" },
-	})
 end
 
 ---Toggle cursorline on a window (best-effort).

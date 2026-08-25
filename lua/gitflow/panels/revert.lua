@@ -92,7 +92,9 @@ local function render(entries, merge_base_sha, current_branch)
 		components.empty(B, "no commits found")
 	else
 		for idx, entry in ipairs(entries) do
-			local position_marker = ""
+			-- Blank-padded to the marker's own width so the shas below and
+			-- above an unnumbered row still line up.
+			local position_marker = "    "
 			if idx <= 9 then
 				position_marker = ("[%d] "):format(idx)
 			end

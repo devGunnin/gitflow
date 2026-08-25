@@ -391,12 +391,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		B:blank()
 	end
 
-	-- Hints sit above the branch footer so the final line stays the exact
-	-- "Current branch: <branch>" string other panels and tests rely on.
 	P:push_hints(B)
-
-	-- Final line must be exactly "Current branch: <branch>".
-	components.branch_footer(B, current_branch)
 
 	P:paint(B, line_entries)
 end

@@ -8,6 +8,7 @@
 
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local icons = require("gitflow.icons")
 local panel = require("gitflow.ui.panel")
 local utils = require("gitflow.utils")
 local git_diff = require("gitflow.git.diff")
@@ -208,14 +209,19 @@ local function render(title, text, current_branch)
 	local diff_lines = to_lines(text)
 	local B = P:begin_render(title)
 
-	-- Build file summary section
 	local preview_files, preview_hunks = git_diff.collect_markers(diff_lines, 1)
-	if #preview_files > 0 then
-		B:raw(
-			("Files: %d  Hunks: %d"):format(#preview_files, #preview_hunks),
-			"GitflowTitle"
-		)
+	local extras = {
+		{ key = ("%d hunk%s"):format(
+			#preview_hunks, #preview_hunks == 1 and "" or "s") },
+	}
+	if current_branch and current_branch ~= "" then
+		extras[#extras + 1] =
+			{ key = icons.get("branch", "current"), value = current_branch }
 	end
+	components.summary(B, icons.get("git_state", "modified"),
+		("%d file%s"):format(#preview_files, #preview_files == 1 and "" or "s"),
+		extras)
+	B:blank()
 
 	local diff_start_idx = B:count() + 1
 	for _, line in ipairs(diff_lines) do
@@ -227,10 +233,6 @@ local function render(title, text, current_branch)
 		git_diff.collect_markers(diff_lines, diff_start_idx)
 
 	P:push_hints(B)
-	if current_branch then
-		B:raw(ui_render.separator(P:render_opts()), "GitflowSeparator")
-		components.branch_footer(B, current_branch)
-	end
 
 	local bufnr = P:bufnr()
 	if not P:paint(B) then
