@@ -381,7 +381,7 @@ local function push_issue_card(B, issue, width, line_entries)
 	local state_icon = icons.get("github", "issue_" .. state)
 	local title = components.maybe_text(issue.title)
 	local time = components.relative_time(issue.updatedAt)
-	local left = (" %s  #%s  "):format(state_icon, number)
+	local left = ("  %s  #%s  "):format(state_icon, number)
 	local left_w = vim.fn.strdisplaywidth(left)
 	local time_w = vim.fn.strdisplaywidth(time)
 	local title_max = math.max(8, width - left_w - time_w - 2)
@@ -392,7 +392,7 @@ local function push_issue_card(B, issue, width, line_entries)
 	local title_group = state == "closed"
 		and "GitflowCardTitleDim" or "GitflowCardTitle"
 	local title_line = B:push({
-		{ components.spacing.edge, nil },
+		{ components.spacing.gutter, nil },
 		{ state_icon .. "  ", issue_highlight_group(state) },
 		{ "#" .. number, "GitflowNumber" },
 		{ "  ", nil },
@@ -402,7 +402,7 @@ local function push_issue_card(B, issue, width, line_entries)
 	})
 
 	local meta = {
-		{ components.spacing.gutter .. components.spacing.indent, nil },
+		{ components.spacing.indent, nil },
 		{ icons.get("ui", "author") .. " ", "GitflowMeta" },
 		{
 			issue.author and components.maybe_text(issue.author.login) or "\u{2014}",

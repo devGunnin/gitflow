@@ -172,7 +172,7 @@ local function render(entries)
 			local message_lines = split_message_lines(entry.message)
 
 			local chunks = {
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ level_icon(entry.level) .. "  ", hl },
 				{ ts .. "  ", "GitflowRelTime" },
 				{ ("[%s]"):format(severity), hl },

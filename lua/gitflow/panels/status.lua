@@ -161,7 +161,7 @@ local function append_file_section(B, title, entries, line_entries, diff_staged)
 
 		-- ●  <ft-icon>  [CODE  ]<dir><name>
 		local chunks = {
-			{ components.spacing.gutter .. " ", nil },
+			{ components.spacing.gutter, nil },
 			{ "\u{25cf}  ", state_hl },
 			{ glyph .. "  ", glyph_hl },
 		}
@@ -211,7 +211,7 @@ local function append_commit_section(B, title, entries, line_entries, pushable)
 			summary = summary:gsub("^" .. vim.pesc(sha) .. "%s*", "")
 		end
 		local line_no = B:push({
-			{ components.spacing.edge, nil },
+			{ components.spacing.gutter, nil },
 			{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
 			{ sha ~= "" and (sha .. "  ") or "", "GitflowLogHash" },
 			{ summary, "GitflowCardTitle" },

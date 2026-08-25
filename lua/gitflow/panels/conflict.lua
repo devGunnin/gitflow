@@ -166,7 +166,7 @@ local function render(files, operation)
 	else
 		for _, item in ipairs(files) do
 			local line_no = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ icons.get("git_state", "conflict") .. "  ", "GitflowConflictRemote" },
 				{ item.path, "GitflowCardTitle" },
 				{ ("   (%d hunk%s)"):format(
@@ -177,7 +177,7 @@ local function render(files, operation)
 
 			if item.marker_error then
 				B:push({
-					{ components.spacing.indent .. components.spacing.edge, nil },
+					{ components.spacing.indent, nil },
 					{ icons.get("ui", "error") .. " ", "GitflowStateErrorIcon" },
 					{ item.marker_error, "GitflowStateError" },
 				})

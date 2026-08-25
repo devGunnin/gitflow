@@ -108,7 +108,7 @@ local function render(entries, merge_base_sha, current_branch)
 				summary = vim.trim(summary:sub(#entry.short_sha + 1))
 			end
 			local line_no = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ position_marker, "GitflowNumber" },
 				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
 				{ entry.short_sha .. components.spacing.gutter, "GitflowLogHash" },

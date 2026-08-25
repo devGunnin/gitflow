@@ -140,13 +140,13 @@ local function render_list(labels)
 			-- Name line: text MUST contain "<name> (#<color>)" exactly so the
 			-- colored highlight can target the name and tests can locate it.
 			local name_line = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
 				{ name, "GitflowCardTitle" },
 				{ (" (#%s)"):format(color), "GitflowMeta" },
 			})
 			local desc_line = B:push({
-				{ components.spacing.indent .. components.spacing.gutter, nil },
+				{ components.spacing.indent, nil },
 				{ description, "GitflowMeta" },
 			})
 

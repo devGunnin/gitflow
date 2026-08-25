@@ -91,7 +91,7 @@ end
 ---@param ctx table  { B, threads, pending }
 local function render_tree_node(node, depth, prefix, ctx)
 	local B = ctx.B
-	local indent = ui_render.spacing.edge
+	local indent = ui_render.spacing.gutter
 		.. string.rep(ui_render.spacing.gutter, depth)
 
 	local dnames = vim.deepcopy(node.dir_order)

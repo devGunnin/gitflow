@@ -144,7 +144,7 @@ local function render_file_list()
 		dir = dir or ""
 		name = name or f.path
 		M.state.file_line_map[B:push({
-			{ ui_render.spacing.edge, nil },
+			{ ui_render.spacing.gutter, nil },
 			{ icon .. "  ", icon_hl },
 			{ dir, "GitflowMeta" },
 			{ name, M.state.active_idx == idx

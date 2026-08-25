@@ -123,7 +123,7 @@ local function render(entries, current_branch)
 			-- field highlighted distinctly and padding kept un-highlighted so
 			-- the colored spans land exactly on their text.
 			local line_no = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ commit_icon ~= "" and (commit_icon .. " ") or "", "GitflowLogHash" },
 				{ entry.short_sha, "GitflowBlameHash" },
 				{ pad_spaces(entry.short_sha, max_sha) .. "  ", nil },

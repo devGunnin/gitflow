@@ -96,7 +96,7 @@ local function render(entries, current_branch)
 			local marked = marks[entry.sha]
 			local line_no = B:push({
 				{
-					marked and (" \u{2503} ") or (components.spacing.gutter .. " "),
+					marked and ("\u{2503} ") or components.spacing.gutter,
 					marked and "GitflowNumber" or nil,
 				},
 				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },

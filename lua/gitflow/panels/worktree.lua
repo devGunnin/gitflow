@@ -178,7 +178,7 @@ local function render(entries)
 
 			-- Line 1: icon + branch/ref + state badges
 			local line1_chunks = {
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ icons.get("branch", icon_name) .. "  ", ref_group },
 				{ ref, ref_group },
 			}
@@ -205,7 +205,6 @@ local function render(entries)
 			-- Line 2: sha · subject · rel_time · path (dim meta row)
 			local short_sha = (entry.sha ~= "" and entry.sha:sub(1, 7)) or nil
 			local card_indent = components.spacing.indent
-				.. components.spacing.gutter .. components.spacing.edge
 			local line2_chunks = { { card_indent, nil } }
 
 			if entry.is_bare then

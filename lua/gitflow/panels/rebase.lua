@@ -285,10 +285,9 @@ render_todo = function()
 			-- (item 6: squash/fixup chain indentation).
 			local is_chain = entry.action == "squash"
 				or entry.action == "fixup"
-			local edge, gutter = components.spacing.edge, components.spacing.gutter
-			local lead = is_chain and (edge .. gutter) or edge
-			local lead2 = is_chain and (components.spacing.indent .. gutter .. edge)
-				or (components.spacing.indent .. edge)
+			local gutter, indent = components.spacing.gutter, components.spacing.indent
+			local lead = is_chain and indent or gutter
+			local lead2 = is_chain and (indent .. gutter) or indent
 
 			-- Line 1: glyph badge + sha + subject (items 1 & 2).
 			local line1 = B:push({
@@ -328,7 +327,7 @@ render_todo = function()
 		})
 	else
 		B:push({
-			{ components.spacing.gutter .. components.spacing.edge, nil },
+			{ components.spacing.gutter, nil },
 			{ "move cursor to a commit to inspect", "GitflowMeta" },
 		})
 	end
@@ -380,7 +379,7 @@ render_normal = function()
 		for _, entry in ipairs(M.state.entries) do
 			-- Line 1: sha + subject.
 			local line1 = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ commit_icon .. " ", "GitflowRebaseHash" },
 				{ entry.short_sha, "GitflowRebaseHash" },
 				{ components.spacing.gutter .. (entry.subject or ""), "GitflowCardTitle" },
@@ -389,7 +388,7 @@ render_normal = function()
 
 			-- Line 2: author + relative time, dimmed.
 			local line2 = B:push({
-				{ components.spacing.indent .. components.spacing.edge, nil },
+				{ components.spacing.indent, nil },
 				{ entry.author or "", "GitflowMeta" },
 				{ " " .. components.glyphs.bullet .. " ", "GitflowMetaKey" },
 				{ entry.relative_time or "", "GitflowMeta" },
@@ -603,7 +602,7 @@ local function render_base_picker(branches)
 				group = "GitflowCardTitle"
 			end
 			local chunks = {
-				{ components.spacing.indent, nil },
+				{ components.spacing.gutter, nil },
 				{ (icon ~= "" and icon .. "  " or ""), group },
 				{ entry.name, group },
 			}

@@ -414,7 +414,7 @@ render_list = function(prs)
 			local state_icon = pr_state_icon(state)
 			local title = components.maybe_text(pr.title)
 			local time = components.relative_time(pr.updatedAt)
-			local left = (" %s  #%s  "):format(state_icon, number)
+			local left = ("  %s  #%s  "):format(state_icon, number)
 			local left_w = vim.fn.strdisplaywidth(left)
 			local time_w = vim.fn.strdisplaywidth(time)
 			local title_max = math.max(8, width - left_w - time_w - 2)
@@ -425,7 +425,7 @@ render_list = function(prs)
 			local title_group = (state == "merged" or state == "closed")
 				and "GitflowCardTitleDim" or "GitflowCardTitle"
 			local title_line = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ state_icon .. "  ", pr_highlight_group(state) },
 				{ "#" .. number, "GitflowNumber" },
 				{ "  ", nil },
@@ -435,7 +435,7 @@ render_list = function(prs)
 			})
 
 			local meta = {
-				{ components.spacing.gutter .. components.spacing.indent, nil },
+				{ components.spacing.indent, nil },
 				{ icons.get("ui", "ref") .. " ", "GitflowMeta" },
 				{ components.maybe_text(pr.headRefName), "GitflowChip" },
 				{ " " .. components.glyphs.arrow .. " ", "GitflowMeta" },

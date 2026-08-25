@@ -84,7 +84,7 @@ local function render(entries, current_branch)
 			-- The ref chunk ("stash@{0}") carries GitflowStashRef so the span
 			-- lands exactly on the ref portion; the description follows it dim.
 			local line_no = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ stash_icon .. "  ", "GitflowSectionIcon" },
 				{ entry.ref, "GitflowStashRef" },
 				{ components.spacing.gutter, nil },

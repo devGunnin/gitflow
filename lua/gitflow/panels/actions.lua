@@ -63,9 +63,7 @@ local PAGE_STEP = 20
 
 local SPACING = ui_render.spacing
 local SEPARATORS = ui_render.separators
--- Content rows carry a status icon in the gutter, so their metadata lines up
--- one indent step plus that icon's column. No token is five columns wide.
-local ROW_META_INDENT = SPACING.indent .. SPACING.edge
+local ROW_META_INDENT = SPACING.indent
 
 -- Rendered-line cap for one log. Formatting + painting is linear and
 -- blocking (~0.3s for a 100k-line, 8.8MB log), so this is passed to
@@ -604,7 +602,7 @@ local function render_list(runs, current_branch, cache_scope_key)
 			local status_hl = gh_actions.status_highlight(run)
 			local name = run_title(run)
 			local time = ui_render.relative_time(run.created_at)
-			local left = " " .. icon .. "  "
+			local left = SPACING.gutter .. icon .. "  "
 			local left_w = vim.fn.strdisplaywidth(left)
 			local time_w = vim.fn.strdisplaywidth(time)
 			local name_max = math.max(8, width - left_w - time_w - 2)
@@ -613,7 +611,7 @@ local function render_list(runs, current_branch, cache_scope_key)
 				2, width - left_w - vim.fn.strdisplaywidth(name) - time_w
 			)
 			local title_line = B:push({
-				{ SPACING.edge, nil },
+				{ SPACING.gutter, nil },
 				{ icon .. "  ", status_hl },
 				{ name, "GitflowCardTitle" },
 				{ string.rep(" ", gap), nil },

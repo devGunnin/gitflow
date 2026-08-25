@@ -89,7 +89,7 @@ local function render(entries, current_branch)
 			local accent = annotated and "GitflowTagAnnotated" or "GitflowChip"
 			local type_marker = annotated and "[annotated]" or "[lightweight]"
 			local chunks = {
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ tag_icon .. "  ", accent },
 				{ entry.name, accent },
 				{ components.spacing.gutter .. type_marker, "GitflowMeta" },
