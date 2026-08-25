@@ -252,9 +252,7 @@ local function render(entries)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---Fire async enrichment for each non-bare worktree: commit subject + relative

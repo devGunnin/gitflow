@@ -1041,6 +1041,71 @@ test("a destructive hint is drawn in the destructive colour", function()
 	assert_true(marked, "the rebase bar should carry X execute")
 end)
 
+-- ── cursor identity across a repaint ───────────────────────────────────
+
+---A throwaway panel whose render is a plain list of `{ sha = ... }` rows.
+---@param shas string[]
+---@return table panel
+local function paint_shas(P, shas)
+	local B = render.builder()
+	local entries = {}
+	for _, sha in ipairs(shas) do
+		entries[B:push({ { "  ", nil }, { sha, nil } })] = { sha = sha }
+	end
+	P:paint(B, entries)
+end
+
+test("entry_identity keys a row by its first stable field", function()
+	assert_equals(panel.entry_identity({ sha = "abc" }), "sha=abc", "sha")
+	assert_equals(panel.entry_identity({ number = 7 }), "number=7", "number")
+	assert_equals(
+		panel.entry_identity({ kind = "file", entry = { path = "a.lua" } }),
+		"file:path=a.lua", "wrapped entry"
+	)
+	assert_equals(panel.entry_identity({ untitled = true }), nil, "no identity")
+end)
+
+test("the cursor follows its entry when a repaint shifts the rows", function()
+	local P = panel.new({ name = "gitflow_test_cursor", title = "Cursor Test" })
+	P:ensure_window(gitflow.get_config())
+	paint_shas(P, { "aaa", "bbb", "ccc" })
+	vim.api.nvim_win_set_cursor(P.state.winid, { 2, 0 })
+	assert_equals(P:cursor_identity(), "sha=bbb", "cursor should start on bbb")
+
+	-- Two commits land on top: bbb moves from line 2 to line 4.
+	paint_shas(P, { "yyy", "zzz", "aaa", "bbb", "ccc" })
+	assert_equals(
+		vim.api.nvim_win_get_cursor(P.state.winid)[1], 4,
+		"cursor should have followed bbb down"
+	)
+	assert_equals(P:cursor_identity(), "sha=bbb", "still on bbb")
+
+	-- The entry the cursor was on is gone: it stays put rather than jumping.
+	paint_shas(P, { "yyy", "zzz", "aaa", "ccc", "ddd" })
+	assert_equals(
+		vim.api.nvim_win_get_cursor(P.state.winid)[1], 4,
+		"a vanished entry leaves the cursor where it was"
+	)
+	P:close()
+end)
+
+test("paint without an entry map leaves the cursor alone", function()
+	local P = panel.new({ name = "gitflow_test_cursor_plain", title = "Plain" })
+	P:ensure_window(gitflow.get_config())
+	paint_shas(P, { "aaa", "bbb", "ccc" })
+	vim.api.nvim_win_set_cursor(P.state.winid, { 3, 0 })
+	local B = render.builder()
+	for _, sha in ipairs({ "zzz", "aaa", "bbb", "ccc" }) do
+		B:push({ { "  ", nil }, { sha, nil } })
+	end
+	P:paint(B)
+	assert_equals(
+		vim.api.nvim_win_get_cursor(P.state.winid)[1], 3,
+		"no map means no identity tracking"
+	)
+	P:close()
+end)
+
 print(("=== Results: %d passed, %d failed ==="):format(passed, failed))
 if failed > 0 then
 	os.exit(1)

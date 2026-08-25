@@ -124,8 +124,7 @@ local function render(entries, merge_base_sha, current_branch)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
+	if P:paint(B, line_entries) then
 		M.state.merge_base_sha = merge_base_sha
 	end
 end

@@ -397,9 +397,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	-- Final line must be exactly "Current branch: <branch>".
 	components.branch_footer(B, current_branch)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 --- True once a newer refresh has started, meaning this chain's result is stale

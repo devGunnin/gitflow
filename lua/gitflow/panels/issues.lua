@@ -488,8 +488,7 @@ local function render_list(groups, total)
 	M.state.active_issue_number = nil
 	M.state.active_issue = nil
 	M.state.view_cwd = nil
-	if P:paint(B) then
-		M.state.line_entries = line_entries
+	if P:paint(B, line_entries) then
 		M.state.line_groups = line_groups
 	else
 		-- Never leave the new mode paired with the old maps.

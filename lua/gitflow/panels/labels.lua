@@ -172,9 +172,7 @@ local function render_list(labels)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	else
+	if not P:paint(B, line_entries) then
 		-- A failed paint must not leave the previous rows resolvable.
 		P:clear_entry_maps()
 	end

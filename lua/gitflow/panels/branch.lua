@@ -192,9 +192,7 @@ local function render_list(entries)
 	P:push_hints(B, "list")
 
 	clear_graph_highlights(M.state.bufnr)
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 -- ── Graph rendering ──────────────────────────────────────────────────

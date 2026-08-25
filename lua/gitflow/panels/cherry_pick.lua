@@ -170,9 +170,7 @@ local function render_commits(commits, source_branch, current_branch)
 	B:blank()
 	P:push_hints(B, nil, { blank_before = false })
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowCherryPickEntry|nil

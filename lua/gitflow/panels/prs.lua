@@ -470,9 +470,7 @@ render_list = function(prs)
 	M.state.active_pr_number = nil
 	M.state.active_pr = nil
 	M.state.view_cwd = nil
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	else
+	if not P:paint(B, line_entries) then
 		-- Never leave the new mode paired with the old map.
 		P:clear_entry_maps()
 	end

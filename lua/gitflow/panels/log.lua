@@ -112,9 +112,7 @@ local function render(entries, current_branch)
 	P:push_hints(B)
 	components.branch_footer(B, current_branch)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowLogEntry|nil

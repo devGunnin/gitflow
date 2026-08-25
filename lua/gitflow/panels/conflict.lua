@@ -189,9 +189,7 @@ local function render(files, operation)
 
 	M.state.files = files
 	M.state.active_operation = operation
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowConflictFileEntry|nil

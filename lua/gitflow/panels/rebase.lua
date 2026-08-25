@@ -334,9 +334,7 @@ render_todo = function()
 
 	P:push_hints(B, "todo")
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 	refresh_float_footer()
 end
 
@@ -406,9 +404,7 @@ render_normal = function()
 
 	P:push_hints(B, "normal")
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 	refresh_float_footer()
 end
 
