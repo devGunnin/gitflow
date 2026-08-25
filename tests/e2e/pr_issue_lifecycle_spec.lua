@@ -106,11 +106,13 @@ T.run_suite("E2E: PR and issue lifecycle verbs", {
 		)
 	end,
 
+	-- The Ex command keeps the API's `not_planned` vocabulary; gh's own flag
+	-- enum is {completed|not planned|duplicate} and rejects the underscore.
 	["issue close carries its reason"] = function()
 		T.assert_contains(
 			gh_log_for({ "issue", "close", "7", "not_planned" }),
-			"issue close 7 --reason not_planned",
-			"the close reason should reach gh"
+			"issue close 7 --reason not planned",
+			"the close reason should reach gh in gh's own spelling"
 		)
 	end,
 
