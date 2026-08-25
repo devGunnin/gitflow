@@ -51,6 +51,21 @@ local function transient_upstream_reason(output)
 	return nil
 end
 
+-- CI runs this suite under `${{ github.token }}` — a repo-installation token
+-- with no user identity, so `/user` (and anything else `@me`-scoped) 403s
+-- there even though a real user's `gh` sails through. GitHub's own wording
+-- for that gap is stable, so treat it as an environment limit like
+-- no-auth/network/5xx/rate-limit, not as drift in this repo's argv.
+---@param output string
+---@return string|nil reason
+local function integration_token_reason(output)
+	local text = (output or ""):lower()
+	if text:find("resource not accessible by integration", 1, true) then
+		return "no user identity for this token (installation/integration token)"
+	end
+	return nil
+end
+
 local gh = require("gitflow.gh")
 
 local ok, message = gh.ensure_prerequisites()
@@ -88,6 +103,11 @@ local function live(name, invoke)
 		local transient = transient_upstream_reason(output)
 		if transient then
 			skipped[#skipped + 1] = ("%s: upstream %s — %s"):format(name, transient, output)
+			return false, nil
+		end
+		local no_identity = integration_token_reason(output)
+		if no_identity then
+			skipped[#skipped + 1] = ("%s: %s — %s"):format(name, no_identity, output)
 			return false, nil
 		end
 		fail(("%s rejected by gh/GitHub (%s) — %s"):format(name, kind, output))
