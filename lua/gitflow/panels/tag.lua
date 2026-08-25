@@ -27,6 +27,14 @@ local P = panel.new({
 	filetype = "gitflowtag",
 	loading = "Loading tags…",
 	state = M.state,
+	-- Every lightweight tag carries an empty `sha`, and annotated tags share
+	-- one when they point at the same commit; the tag name is the real key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.name) == "string" then
+			return "name=" .. entry.name
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "c", desc = "create", essential = true, run = function()
 			M.create_tag()

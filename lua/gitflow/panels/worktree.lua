@@ -40,6 +40,14 @@ local P = panel.new({
 	filetype = "gitflowworktree",
 	loading = "Loading worktrees…",
 	state = M.state,
+	-- A bare worktree has an empty `sha`, and two worktrees on the same
+	-- commit share one; the checkout path is the real key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.path) == "string" then
+			return "path=" .. entry.path
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "<CR>", desc = "switch", essential = true, run = function()
 			M.switch_under_cursor()

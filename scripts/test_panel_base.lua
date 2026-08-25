@@ -1174,6 +1174,98 @@ test("panels whose rows share an inferred key declare their real one", function(
 			~= blame:identity_of({ sha = "deadbee", line_number = 5 }),
 		"blame must tell two lines of the same commit apart"
 	)
+
+	-- A lightweight tag has no dereferenced object, so `sha` is empty for
+	-- every one of them; two annotated tags on one commit collide as well.
+	local tag = panel_object("gitflow.panels.tag")
+	local nightly = { name = "nightly", sha = "", is_annotated = false }
+	local latest = { name = "latest", sha = "", is_annotated = false }
+	assert_equals(
+		panel.entry_identity(nightly), panel.entry_identity(latest),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		tag:identity_of(nightly) ~= tag:identity_of(latest),
+		"tag must tell two lightweight tags apart"
+	)
+
+	-- A bare worktree has no HEAD line, so `sha` is empty; two worktrees on
+	-- the same commit collide too.
+	local worktree = panel_object("gitflow.panels.worktree")
+	local bare = { path = "/repo.git", sha = "" }
+	local checkout = { path = "/repo/feature", sha = "" }
+	assert_equals(
+		panel.entry_identity(bare), panel.entry_identity(checkout),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		worktree:identity_of(bare) ~= worktree:identity_of(checkout),
+		"worktree must tell two checkouts apart"
+	)
+end)
+
+test("the tag cursor stays on its tag when new tags shift the rows", function()
+	local git_tag = require("gitflow.git.tag")
+	local git_branch = require("gitflow.git.branch")
+	local tag_panel = require("gitflow.panels.tag")
+	local real_list, real_current = git_tag.list, git_branch.current
+
+	---@param names string[]
+	local function lightweight(names)
+		local entries = {}
+		for _, name in ipairs(names) do
+			entries[#entries + 1] =
+				{ name = name, sha = "", subject = nil, is_annotated = false }
+		end
+		return entries
+	end
+
+	local tags = lightweight({ "nightly", "latest", "stable" })
+	git_branch.current = function(_, cb)
+		cb(nil, "main")
+	end
+	git_tag.list = function(_, cb)
+		cb(nil, tags)
+	end
+
+	local ok, err = pcall(function()
+		tag_panel.open(gitflow.get_config())
+		local P = panel_object("gitflow.panels.tag")
+
+		local stable_line
+		for line, entry in pairs(tag_panel.state.line_entries) do
+			if entry.name == "stable" then
+				stable_line = line
+			end
+		end
+		assert_true(stable_line ~= nil, "the tag list should render `stable`")
+		vim.api.nvim_win_set_cursor(P.state.winid, { stable_line, 0 })
+
+		-- Three annotated tags land on top (the list is newest-first), so
+		-- every lightweight row moves down.
+		tags = {
+			{ name = "v3.0", sha = "cafe123", is_annotated = true },
+			{ name = "v2.0", sha = "cafe123", is_annotated = true },
+			{ name = "v1.0", sha = "beef456", is_annotated = true },
+		}
+		for _, entry in ipairs(lightweight({ "nightly", "latest", "stable" })) do
+			tags[#tags + 1] = entry
+		end
+		tag_panel.refresh()
+
+		local under_cursor = tag_panel.state.line_entries[
+			vim.api.nvim_win_get_cursor(P.state.winid)[1]
+		]
+		assert_equals(
+			under_cursor and under_cursor.name, "stable",
+			"the cursor must stay on the tag `D` would delete"
+		)
+	end)
+
+	tag_panel.close()
+	git_tag.list = real_list
+	git_branch.current = real_current
+	assert_true(ok, tostring(err))
 end)
 
 print(("=== Results: %d passed, %d failed ==="):format(passed, failed))
