@@ -319,6 +319,25 @@ T.run_suite("E2E: Worktree Panel", {
 		T.cleanup_panels()
 	end,
 
+	["no worktree row is wider than the panel"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		local width = vim.api.nvim_win_get_width(worktree_panel.state.winid)
+		for index, line in ipairs(T.buf_lines(worktree_panel.state.bufnr)) do
+			T.assert_true(
+				vim.fn.strdisplaywidth(line) <= width,
+				("line %d wraps: %q (width %d, panel %d)"):format(
+					index, line, vim.fn.strdisplaywidth(line), width
+				)
+			)
+		end
+
+		worktree_panel.close()
+		T.cleanup_panels()
+	end,
+
 	["worktree prune dispatches git worktree prune"] = function()
 		with_temp_git_log(function(log_path)
 			commands.dispatch({ "worktree", "prune" }, cfg)

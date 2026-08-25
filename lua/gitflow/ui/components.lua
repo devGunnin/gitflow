@@ -33,15 +33,17 @@ function M.maybe_text(value)
 	return text
 end
 
----Push a panel header: an inline title for splits (floats already show it in
----their frame chrome) followed by the panel rule.
+---Push a panel header: a title and the rule under it. A float already draws
+---both in its frame chrome, so it gets neither — a rule immediately under the
+---border read as a second, thinner border and cost a line of content.
 ---@param B GitflowRenderBuilder
 ---@param title string
 ---@param render_opts table|nil  { winid?, bufnr? }
 function M.header(B, title, render_opts)
-	if ui_render.wants_inline_title(render_opts) then
-		B:raw(title, "GitflowTitle")
+	if not ui_render.wants_inline_title(render_opts) then
+		return
 	end
+	B:raw(title, "GitflowTitle")
 	B:raw(ui_render.separator(render_opts), "GitflowSeparator")
 end
 
