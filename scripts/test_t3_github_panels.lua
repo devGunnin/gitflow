@@ -704,6 +704,49 @@ for _, case in ipairs(DESTRUCTIVE_HINTS) do
 	end)
 end
 
+-- ── #H1 audit: open_view resolves the PR number before fetching comments ──
+-- `:Gitflow pr view <branch|url>` reaches open_view with free text, not a
+-- number (commands/github.lua "view" action, via first_positional_from).
+-- review_comments needs the real number for its REST path, so open_view must
+-- use the fetched pr.number — passing the raw arg through built a nonsense
+-- endpoint and, once the path-number guard stopped tolerating that
+-- silently, would have delivered/raised an error instead of loading
+-- comments at all.
+
+test("prs: open_view fetches review comments by the resolved pr.number, not the raw arg", function()
+	local mod = require("gitflow.panels.prs")
+	local gh_mod = require("gitflow.gh.prs")
+	local real_view, real_review_comments = gh_mod.view, gh_mod.review_comments
+
+	mod.close()
+	mod.state.cache = nil
+
+	local ok, err = pcall(function()
+		gh_mod.view = function(_, _, cb)
+			cb(nil, { number = 42, title = "Detail PR", state = "open", body = "" })
+		end
+		local seen_number
+		gh_mod.review_comments = function(number, _, cb)
+			seen_number = number
+			cb(nil, {})
+		end
+
+		mod.open_view("feature/x", cfg)
+
+		assert_true(
+			seen_number == 42,
+			("review_comments should be called with the resolved PR number 42,"
+				.. " got %s"):format(tostring(seen_number))
+		)
+	end)
+
+	gh_mod.view = real_view
+	gh_mod.review_comments = real_review_comments
+	mod.close()
+	mod.state.cache = nil
+	assert_true(ok, tostring(err))
+end)
+
 print(("T3 github-panels tests: %d/%d passed"):format(passed, passed + failed))
 if failed > 0 then
 	vim.cmd("cquit! 1")

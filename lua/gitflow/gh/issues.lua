@@ -251,7 +251,9 @@ function M.close(number, options, opts, cb)
 		local flag_value = CLOSE_REASON_FLAGS[reason]
 		if not flag_value then
 			error(
-				"gitflow gh issue error: close reason must be completed|not_planned",
+				"gitflow gh issue error: close reason must be completed|not_planned"
+					.. " (gh's own enum also has duplicate; gitflow does not"
+					.. " expose it)",
 				2
 			)
 		end

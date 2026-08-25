@@ -104,6 +104,35 @@ local function expect_refused(name, invoke)
 	end
 end
 
+--- A rejected REST path number (a URL/branch fed to a `gh api` path builder)
+--- must be a VISIBLE, handled error delivered through the callback — never a
+--- raise, which several of these builders are reached from inside another
+--- call's async callback, where an uncaught raise is a traceback in the
+--- user's editor rather than a caught one (#H1 audit).
+---@param name string
+---@param invoke fun(cb: fun(err: string|nil, ...: unknown))
+local function expect_number_guard_error(name, invoke)
+	recorded = nil
+	local delivered_err
+	local ok, raised = pcall(invoke, function(err)
+		delivered_err = err
+	end)
+	if not ok then
+		record_failure(("%s: raised %s — must deliver through the callback instead"):format(
+			name, tostring(raised)
+		))
+		return
+	end
+	if recorded then
+		record_failure(("%s: a rejected number must not reach gh (ran %s)"):format(
+			name, render(recorded.cmd)
+		))
+	end
+	if not delivered_err then
+		record_failure(("%s: expected an error delivered through the callback"):format(name))
+	end
+end
+
 local function noop() end
 
 -- ── the effective HTTP method of a `gh api` argv ────────────────────────
@@ -462,9 +491,20 @@ else
 end
 
 -- A REST path segment must be a number; `gh pr <verb>` also accepts a URL or
--- branch name, which would silently build a nonsense endpoint.
-expect_refused("api pulls path (branch name as number)", function()
-	gh_prs.list_files("feature/x", nil, noop)
+-- branch name, which would silently build a nonsense endpoint. Rejected as a
+-- delivered error, never a raise (#H1: gh_prs.view + this call is exactly
+-- panels/prs.lua open_view's chain, and the second call runs inside the
+-- first's async callback).
+expect_number_guard_error("api pulls path (branch name as number)", function(cb)
+	gh_prs.list_files("feature/x", nil, cb)
+end)
+
+-- The URL/branch form itself must still work end to end for the call that
+-- accepts free text: `gh pr view` does not path-interpolate its argument.
+expect_argv("pr view (branch name)", {
+	"gh", "pr", "view", "feature/x", "--json", PR_VIEW_FIELDS,
+}, function()
+	gh_prs.view("feature/x", nil, noop)
 end)
 
 -- The label-only `gh api` fallback, opened by the projects-classic
@@ -488,6 +528,38 @@ expect_argv("api issues/labels (fallback remove)", {
 	scripted = { { code = 1, stdout = "", stderr = PROJECT_CARDS_ERROR } }
 	gh_prs.edit(9, { remove_labels = { "needs triage" } }, nil, noop)
 end)
+
+-- `:Gitflow pr edit <url> add=…` reaches `gh pr edit <url>` directly — that
+-- primary path takes free text end to end, no path builder involved.
+expect_argv("pr edit (branch name, primary path)", {
+	"gh", "pr", "edit", "feature/x", "--add-label", "bug",
+}, function()
+	gh_prs.edit("feature/x", { add_labels = { "bug" } }, nil, noop)
+end)
+
+-- Same URL/branch input, but routed into the label-only fallback (second
+-- route in the #H1 audit): the primary `gh pr edit feature/x` legitimately
+-- reaches gh and fails with the deprecation error, which opens the fallback
+-- — that fallback's own path-number guard must deliver its failure through
+-- the callback, never raise (not `expect_number_guard_error`: a prior gh call
+-- here is expected, so its "nothing reached gh" check does not apply).
+do
+	scripted = { { code = 1, stdout = "", stderr = PROJECT_CARDS_ERROR } }
+	local delivered_err
+	local ok, raised = pcall(function()
+		gh_prs.edit("feature/x", { add_labels = { "bug" } }, nil, function(err)
+			delivered_err = err
+		end)
+	end)
+	local name = "api issues/labels fallback (branch name)"
+	if not ok then
+		record_failure(("%s: raised %s — must deliver through the callback instead"):format(
+			name, tostring(raised)
+		))
+	elseif not delivered_err then
+		record_failure(("%s: expected an error delivered through the callback"):format(name))
+	end
+end
 
 -- The fallback can only re-apply labels. With a title/body/assignee edit in
 -- the same batch it would report success while dropping it, so it must not

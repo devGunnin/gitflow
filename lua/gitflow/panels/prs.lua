@@ -887,7 +887,9 @@ function M.open_view(number, cfg)
 		end
 		-- Bound to the same scope as the `pr view` above: the two answers are
 		-- painted as one record, so they must not come from two repositories.
-		gh_prs.review_comments(number, in_scope(requested_cwd), function(rc_err, rc)
+		-- `pr.number` (not the raw `number` arg): `open_view` also accepts a
+		-- URL or branch name, and the REST path below needs the real number.
+		gh_prs.review_comments(pr.number, in_scope(requested_cwd), function(rc_err, rc)
 			if not P:is_active(request_id) then
 				return
 			end
