@@ -7,10 +7,14 @@
 # Set GITFLOW_GH_DELAY=<seconds> to hold every answer open, so a test can slip
 # a `cd` into the round trip.
 #
-# This stub REJECTS malformed invocations rather than blessing them. A canned
-# answer to any method is how `gh api <list> --paginate -f state=all` shipped
-# green and then 422'd against real GitHub (#429): `gh api` with -f/-F defaults
-# to POST, so that argv hit create-a-milestone. See validate_api below.
+# This stub REJECTS malformed invocations (validate_api below) rather than
+# blessing them with a canned answer. #429 (`gh api …/milestones --paginate
+# -f state=all` shipping as a POST, 422'ing against real GitHub) was NOT this
+# stub blessing a wrong method: nothing ever routed that argv through it —
+# mutation-tested, only scripts/test_gh_argv_contract.lua's pinned argv caught
+# it, and the live GET is checked by scripts/test_gh_live_contract.lua. This
+# validation is still real defense-in-depth for whatever argv DOES reach it —
+# see tests/e2e/issues_panel_spec.lua's milestone-picker test for one that does.
 set -eu
 
 if [ -n "${GITFLOW_GH_LOG:-}" ]; then
@@ -45,13 +49,17 @@ FIXTURE_DIR="$SCRIPT_DIR/../gh"
 # Allow forcing failure for any subcommand
 fail_cmd="${GITFLOW_GH_FAIL:-}"
 
-# ── argv validation (mirrors what real gh/GitHub reject) ───────────────
+# ── argv validation ──────────────────────────────────────────────────
 # Endpoints gitflow only ever reads. GitHub routes a non-GET here to a
 # different operation entirely (POST /milestones is create-a-milestone).
 is_read_only_endpoint() {
   case "$1" in
     */milestones|*/milestones\?*) return 0 ;;
-    */assignees|*/assignees\?*)   return 0 ;;
+    # The repo-level collection only: completion/assignees.lua's GET. NOT
+    # */assignees generally — issues/{n}/assignees is a real, legitimately
+    # writable add-assignees POST endpoint gitflow does not call today, and
+    # this pattern must not refuse it if a future call site adds it.
+    repos/{owner}/{repo}/assignees|repos/{owner}/{repo}/assignees\?*) return 0 ;;
     */pulls/*/files|*/pulls/*/commits) return 0 ;;
     user|user\?*) return 0 ;;
     *) return 1 ;;
@@ -97,6 +105,12 @@ validate_api() {
   endpoint="$1"
   shift
   method="$(api_effective_method "$@")"
+  # STRICTER than real gh here: gh only refuses --paginate when -X/--method is
+  # an EXPLICIT non-GET, and lets an IMPLICIT POST (from -f/-F with no -X)
+  # through with --paginate — that implicit-POST case is exactly how #429
+  # reached GitHub. This rule refuses both; no legitimate call is refused
+  # either way, since a genuine implicit-POST + --paginate is nonsense gh
+  # itself would never route usefully.
   if [ "$method" != "GET" ] && api_has_paginate "$@"; then
     echo "gh stub: --paginate on a $method request to '$endpoint'" \
       "— pagination is GET-only; pass -X GET" >&2

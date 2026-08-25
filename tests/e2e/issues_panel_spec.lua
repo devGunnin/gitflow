@@ -848,6 +848,33 @@ T.run_suite("issues_panel_spec", {
 		)
 	end,
 
+	-- #429 shipped as a POST because nothing ever drove `list_milestones`
+	-- through the real subprocess + fixture stub — only an offline recorder.
+	-- This puts it on a path the e2e suite actually runs, so the stub's
+	-- read-only-endpoint rule has something to catch (H2 audit finding).
+	["the milestone picker GETs the repo's milestones"] = function()
+		reset_gh_log()
+		local bufnr = open_and_wait()
+
+		local card = T.find_line(T.buf_lines(bufnr), "Setup CI pipeline")
+		T.assert_true(card ~= nil, "the card should render")
+		vim.api.nvim_set_current_buf(bufnr)
+		vim.api.nvim_win_set_cursor(0, { card, 0 })
+
+		issues_panel.set_milestone_under_cursor()
+		T.drain_jobs()
+
+		T.assert_true(
+			gh_call_count("api repos/{owner}/{repo}/milestones") == 1,
+			"the milestone picker should list the repo's milestones: " .. vim.inspect(gh_calls())
+		)
+		T.assert_true(
+			gh_call_count("-X GET") == 1,
+			"the milestone list must be an explicit GET, not gh's -f default of POST: "
+				.. vim.inspect(gh_calls())
+		)
+	end,
+
 	-- ── #381 branch from an issue ──────────────────────────────────────
 
 	["the suggested branch name derives from number and title"] = function()
