@@ -98,7 +98,7 @@ local function render(entries, current_branch)
 				chunks[#chunks + 1] = { components.spacing.gutter .. entry.subject, "GitflowCardTitle" }
 			end
 			if entry.sha and entry.sha ~= "" then
-				chunks[#chunks + 1] = { components.spacing.gutter .. " " .. entry.sha, "GitflowLogHash" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. " " .. entry.sha, "GitflowMeta" }
 			end
 			local line_no = B:push(chunks)
 			line_entries[line_no] = entry

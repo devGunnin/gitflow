@@ -85,7 +85,7 @@ local function render(entries, current_branch)
 			-- lands exactly on the ref portion; the description follows it dim.
 			local line_no = B:push({
 				{ components.spacing.gutter, nil },
-				{ stash_icon .. "  ", "GitflowSectionIcon" },
+				{ stash_icon .. "  ", "GitflowMeta" },
 				{ entry.ref, "GitflowStashRef" },
 				{ components.spacing.gutter, nil },
 				{ components.maybe_text(entry.description), "GitflowCardTitle" },

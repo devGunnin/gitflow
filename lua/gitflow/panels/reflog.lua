@@ -119,7 +119,7 @@ local function render(entries, current_branch)
 			local icon = action_icon(action)
 			local chunks = {
 				{ components.spacing.gutter, nil },
-				{ icon ~= "" and (icon .. "  ") or "", "GitflowSectionIcon" },
+				{ icon ~= "" and (icon .. "  ") or "", "GitflowMeta" },
 				{ marker, "GitflowNumber" },
 				{ sha, "GitflowReflogHash" },
 				{ components.spacing.gutter, nil },

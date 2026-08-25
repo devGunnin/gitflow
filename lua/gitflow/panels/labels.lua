@@ -141,7 +141,7 @@ local function render_list(labels)
 			-- colored highlight can target the name and tests can locate it.
 			local name_line = B:push({
 				{ components.spacing.gutter, nil },
-				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
+				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowMeta" },
 				{ name, "GitflowCardTitle" },
 				{ (" (#%s)"):format(color), "GitflowMeta" },
 			})

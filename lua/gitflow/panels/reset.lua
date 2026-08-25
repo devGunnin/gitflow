@@ -116,7 +116,7 @@ local function render(entries, merge_base_sha, current_branch)
 			local line_no = B:push({
 				{ components.spacing.gutter, nil },
 				{ position_marker, "GitflowNumber" },
-				{ commit_icon .. "  ", "GitflowLogHash" },
+				{ commit_icon .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowLogHash" },
 				{ summary ~= "" and (components.spacing.gutter .. summary) or "", "GitflowCardTitle" },
 			})

@@ -99,7 +99,7 @@ local function render(entries, current_branch)
 					marked and ("\u{2503} ") or components.spacing.gutter,
 					marked and "GitflowNumber" or nil,
 				},
-				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowLogHash" },
 				{ summary ~= "" and (components.spacing.gutter .. summary) or "", "GitflowCardTitle" },
 			})

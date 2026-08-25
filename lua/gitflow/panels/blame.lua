@@ -124,7 +124,7 @@ local function render(entries, current_branch)
 			-- the colored spans land exactly on their text.
 			local line_no = B:push({
 				{ components.spacing.gutter, nil },
-				{ commit_icon ~= "" and (commit_icon .. " ") or "", "GitflowLogHash" },
+				{ commit_icon ~= "" and (commit_icon .. " ") or "", "GitflowMeta" },
 				{ entry.short_sha, "GitflowBlameHash" },
 				{ pad_spaces(entry.short_sha, max_sha) .. "  ", nil },
 				{ author_display, "GitflowBlameAuthor" },

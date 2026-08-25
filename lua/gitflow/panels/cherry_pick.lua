@@ -156,7 +156,7 @@ local function render_commits(commits, source_branch, current_branch)
 			local chunks = {
 				{ components.spacing.gutter, nil },
 				{ marker, "GitflowNumber" },
-				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowCherryPickHash" },
 			}
 			if summary ~= "" then

@@ -181,7 +181,7 @@ local function render(entries)
 			if has_linked_context(entry.context) then
 				chunks[#chunks + 1] = { components.spacing.indent, nil }
 				chunks[#chunks + 1] = {
-					icons.get("ui", "chevron") .. " ", "GitflowHintKey",
+					icons.get("ui", "chevron") .. " ", "GitflowMetaKey",
 				}
 				chunks[#chunks + 1] = {
 					context_label(entry.context), "GitflowMeta",

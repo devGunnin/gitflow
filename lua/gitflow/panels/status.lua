@@ -209,7 +209,7 @@ local function append_commit_section(B, title, entries, line_entries, pushable)
 		end
 		local line_no = B:push({
 			{ components.spacing.gutter, nil },
-			{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+			{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 			{ sha ~= "" and (sha .. "  ") or "", "GitflowLogHash" },
 			{ summary, "GitflowCardTitle" },
 		})
