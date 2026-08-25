@@ -227,6 +227,27 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.cleanup_panels()
 	end,
 
+	["step 2: reopening the status panel paints from the last render"] = function()
+		T.cleanup_panels()
+		status_panel.open(cfg, {})
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return T.find_line(T.buf_lines(ui.buffer.get("status")), "Unstaged") ~= nil
+		end, "status panel should render its sections", 5000)
+		T.cleanup_panels()
+
+		-- Reopen and read the buffer BEFORE draining: the first frame must
+		-- already carry content, not a loading line.
+		status_panel.open(cfg, {})
+		local first_frame = T.buf_lines(ui.buffer.get("status"))
+		T.assert_true(
+			T.find_line(first_frame, "Unstaged") ~= nil,
+			"a reopen should paint the previous content in the first frame"
+		)
+		T.drain_jobs(5000)
+		T.cleanup_panels()
+	end,
+
 	["step 2: staging paints before git answers, and reverts if it fails"] = function()
 		T.cleanup_panels()
 		status_panel.open(cfg, {})

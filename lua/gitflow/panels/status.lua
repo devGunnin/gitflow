@@ -60,9 +60,6 @@ local P = panel.new({
 	filetype = "gitflowstatus",
 	loading = "Loading git status…",
 	state = M.state,
-	on_close = function()
-		M.state.last = nil
-	end,
 	keymaps = {
 		{ key = "s/u", keys = { "s", "u" }, desc = "stage/unstage",
 			essential = true, run = function(key)
@@ -335,6 +332,9 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	-- Remember the commit-section data so a files-only refresh can reuse it
 	-- without re-querying upstream + git log (#362).
 	M.state.last = {
+		-- The cwd this was true for: git resolves the repo from it, so an
+		-- unkeyed reopen would paint another repository's files.
+		cwd = vim.fn.getcwd(),
 		grouped = grouped,
 		outgoing = outgoing_entries,
 		incoming = incoming_entries,
@@ -602,6 +602,16 @@ function M.open(cfg, opts)
 	if not P:ensure_window(cfg) then
 		return
 	end
+
+	-- Paint what was last true for this repo in the first frame, then refresh
+	-- underneath. Five subprocesses of "Loading git status…" is the longest
+	-- open-to-content gap in the plugin; the prs/issues/labels/actions panels
+	-- already open this way.
+	local last = M.state.last
+	if last and last.grouped and last.cwd == vim.fn.getcwd() then
+		render(last.grouped, last.outgoing or {}, last.incoming or {},
+			last.upstream_name, last.branch or "(unknown)")
+	end
 	M.refresh()
 end
 
@@ -620,8 +630,12 @@ function M.refresh(opts)
 	-- commit history and upstream are unchanged, so reuse the cached commit
 	-- data and just re-read `git status` (#362). One subprocess instead of
 	-- five (branch + status + upstream + two git logs).
-	if opts and opts.files_only and M.state.last then
-		local last = M.state.last
+	local cached = M.state.last
+	if cached and cached.cwd ~= vim.fn.getcwd() then
+		cached = nil
+	end
+	if opts and opts.files_only and cached then
+		local last = cached
 		git_status.fetch({}, function(err, _, grouped)
 			if superseded(generation) then
 				return
@@ -975,7 +989,9 @@ function M.close()
 	P:close()
 	M.state.cfg = nil
 	M.state.line_entries = {}
-	M.state.last = nil
+	-- state.last survives the close on purpose: it is what the next open
+	-- paints in its first frame. It carries the cwd it was true for, so it
+	-- can only ever be reused in the repo it came from.
 end
 
 ---@return boolean
