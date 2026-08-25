@@ -74,6 +74,7 @@ M.state = {
 -- Forward-declared: the "b" (back) keymap below closes over it before its
 -- definition later in the file.
 local render_derived
+local repaint_list_from_cache
 -- Forward-declared: M.refresh calls it before its definition below.
 local refresh_links
 
@@ -105,6 +106,35 @@ local function scoped_cache()
 		return nil
 	end
 	return M.state.cache
+end
+
+repaint_list_from_cache = function()
+	if M.is_open() and M.state.mode == "list" and scoped_cache() then
+		render_derived()
+	end
+end
+
+---Replace `entry` in the cache with a copy carrying `patch`, and return the
+---undo. A copy rather than an in-place write: the row object is also held by
+---line_entries and by the detail view, and a guess about what GitHub will do
+---must not leak into anything already pointing at it.
+---@param entry table
+---@param patch table
+---@return fun()|nil  the undo, or nil when the row is not in the cache
+local function patch_cached(entry, patch)
+	local cached = M.state.cache
+	if type(cached) ~= "table" then
+		return nil
+	end
+	for index, candidate in ipairs(cached) do
+		if candidate == entry then
+			cached[index] = vim.tbl_extend("force", {}, entry, patch)
+			return function()
+				cached[index] = entry
+			end
+		end
+	end
+	return nil
 end
 
 local P = panel.new({
@@ -1074,11 +1104,20 @@ local function perform_mutation(opts)
 	M.state.busy = opts.in_progress_message
 	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
 
+	local revert = opts.optimistic and opts.optimistic() or nil
+	if revert then
+		repaint_list_from_cache()
+	end
+
 	-- The scope is handed to the call rather than left for it to remember: a
 	-- mutation that spawns again after a round trip must land in the same repo.
 	opts.call(in_scope(opts.scope), function(err)
 		M.state.busy = nil
 		if err then
+			if revert then
+				revert()
+				repaint_list_from_cache()
+			end
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
@@ -1642,6 +1681,9 @@ function M.close_under_cursor()
 		confirm_message = ("Close issue #%s as %s?"):format(tostring(number), reason),
 		in_progress_message = ("Closing issue #%s"):format(tostring(number)),
 		done_message = ("Closed issue #%s as %s"):format(tostring(number), reason),
+		optimistic = function()
+			return patch_cached(issue, { state = "CLOSED" })
+		end,
 		call = function(run_opts, cb)
 			gh_issues.close(number, { reason = reason }, run_opts, cb)
 		end,
@@ -1662,6 +1704,9 @@ function M.reopen_under_cursor()
 		confirm_message = ("Reopen issue #%s?"):format(tostring(number)),
 		in_progress_message = ("Reopening issue #%s"):format(tostring(number)),
 		done_message = ("Reopened issue #%s"):format(tostring(number)),
+		optimistic = function()
+			return patch_cached(issue, { state = "OPEN" })
+		end,
 		call = function(run_opts, cb)
 			gh_issues.reopen(number, run_opts, cb)
 		end,

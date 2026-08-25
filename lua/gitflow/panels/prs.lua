@@ -58,6 +58,7 @@ M.state = {
 -- Forward-declared: the "b" (back) keymap below closes over it before its
 -- definition later in the file.
 local render_list
+local repaint_list_from_cache
 
 ---Scope the cache is only valid under: `gh` resolves the repo from the cwd,
 ---and the filters decide what the rows mean.
@@ -86,6 +87,41 @@ local function scoped_cache()
 		return nil
 	end
 	return M.state.cache
+end
+
+---Repaint the list from what is already in memory. No gh call: this is what
+---makes an optimistic patch and its revert visible in the same frame.
+repaint_list_from_cache = function()
+	if not M.is_open() or M.state.mode ~= "list" then
+		return
+	end
+	local cached = scoped_cache()
+	if cached then
+		render_list(cached)
+	end
+end
+
+---Replace `entry` in the cache with a copy carrying `patch`, and return the
+---undo. A copy rather than an in-place write: the row object is also held by
+---line_entries and by the detail view, and a guess about what GitHub will do
+---must not leak into anything already pointing at it.
+---@param entry table
+---@param patch table
+---@return fun()|nil  the undo, or nil when the row is not in the cache
+local function patch_cached(entry, patch)
+	local cached = M.state.cache
+	if type(cached) ~= "table" then
+		return nil
+	end
+	for index, candidate in ipairs(cached) do
+		if candidate == entry then
+			cached[index] = vim.tbl_extend("force", {}, entry, patch)
+			return function()
+				cached[index] = entry
+			end
+		end
+	end
+	return nil
 end
 
 local P = panel.new({
@@ -705,6 +741,8 @@ end
 ---@field done_message string
 ---@field scope string  cwd the target was resolved under
 ---@field call fun(run_opts: GitflowGitRunOpts, cb: fun(err: string|nil))
+---@field optimistic fun():(fun()|nil)|nil  patch the cached PR to the outcome
+---   the call almost always has, and return the undo to run if it fails
 ---@param opts GitflowGhMutation
 local function perform_mutation(opts)
 	assert(type(opts.scope) == "string", "a mutation must carry the scope it was chosen under")
@@ -741,11 +779,22 @@ local function perform_mutation(opts)
 	M.state.busy = opts.in_progress_message
 	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
 
+	-- Paint the outcome now and reconcile when the call lands. A failure puts
+	-- the row back and says so, so the panel never sits on a wrong state.
+	local revert = opts.optimistic and opts.optimistic() or nil
+	if revert then
+		repaint_list_from_cache()
+	end
+
 	-- The scope is handed to the call rather than left for it to remember: a
 	-- mutation that spawns again after a round trip must land in the same repo.
 	opts.call(in_scope(opts.scope), function(err)
 		M.state.busy = nil
 		if err then
+			if revert then
+				revert()
+				repaint_list_from_cache()
+			end
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
@@ -1630,6 +1679,9 @@ function M.close_pr_under_cursor()
 		confirm_message = ("Close PR #%s without merging?"):format(tostring(number)),
 		in_progress_message = ("Closing PR #%s"):format(tostring(number)),
 		done_message = ("Closed PR #%s"):format(tostring(number)),
+		optimistic = function()
+			return patch_cached(pr, { state = "CLOSED" })
+		end,
 		call = function(run_opts, cb)
 			gh_prs.close(number, run_opts, cb)
 		end,
@@ -1650,6 +1702,9 @@ function M.reopen_under_cursor()
 		confirm_message = ("Reopen PR #%s?"):format(tostring(number)),
 		in_progress_message = ("Reopening PR #%s"):format(tostring(number)),
 		done_message = ("Reopened PR #%s"):format(tostring(number)),
+		optimistic = function()
+			return patch_cached(pr, { state = "OPEN" })
+		end,
 		call = function(run_opts, cb)
 			gh_prs.reopen(number, run_opts, cb)
 		end,
@@ -1677,6 +1732,9 @@ function M.toggle_draft_under_cursor()
 		done_message = to_draft
 			and ("PR #%s is now a draft"):format(tostring(number))
 			or ("PR #%s is ready for review"):format(tostring(number)),
+		optimistic = function()
+			return patch_cached(pr, { isDraft = to_draft })
+		end,
 		call = function(run_opts, cb)
 			gh_prs.set_draft(number, to_draft, run_opts, cb)
 		end,

@@ -137,7 +137,9 @@ local function json_answer(args)
 			return { { number = 12, title = "Add the thing", state = "OPEN",
 				body = "Closes #7", headRefName = "feat/thing" } }
 		end
-		return PR_ROWS
+		-- A fresh copy per call, the way a real `gh` answer is: the panel owns
+		-- what it caches and may patch a row in it.
+		return vim.deepcopy(PR_ROWS)
 	end
 	if joined:find("^pr view") then
 		return vim.tbl_extend("force", vim.deepcopy(PR_ROWS[1]), {
@@ -145,7 +147,7 @@ local function json_answer(args)
 		})
 	end
 	if joined:find("^issue list") then
-		return ISSUE_ROWS
+		return vim.deepcopy(ISSUE_ROWS)
 	end
 	if joined:find("^issue view") then
 		return vim.deepcopy(ISSUE_DETAIL)
@@ -767,6 +769,88 @@ test("pr reviewers: a +/- patch fires one edit with both flags", function()
 	end)
 	pr_panel.close()
 	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+---The rendered row for `number`, read back out of the panel's line map so the
+---assertion sees what was painted rather than what was cached.
+---@param mod table
+---@param number integer
+---@return table|nil
+local function painted_row(mod, number)
+	for _, entry in pairs(mod.state.line_entries or {}) do
+		if entry.number == number then
+			return entry
+		end
+	end
+	return nil
+end
+
+test("a PR draft toggle paints before gh answers", function()
+	install_stubs()
+	local answer
+	local ok, err = pcall(function()
+		stub_confirm(1)
+		open_prs()
+		assert_equals(painted_row(pr_panel, 12).isDraft, false, "PR #12 starts ready")
+
+		-- Hold the answer so the assertion sees the frame between keypress and
+		-- response — the whole point of an optimistic paint.
+		gh.run = function(args, opts, cb)
+			record(args, opts)
+			answer = cb
+		end
+		pr_panel.toggle_draft_under_cursor()
+		assert_true(answer ~= nil, "the gh call should be in flight")
+		assert_equals(
+			painted_row(pr_panel, 12).isDraft, true,
+			"the row should read as a draft while the call is in flight"
+		)
+
+		-- A failure must put it back, not leave a wrong row on screen.
+		answer({ code = 1, signal = 0, stdout = "", stderr = "gh: nope", cmd = {} })
+		assert_equals(
+			painted_row(pr_panel, 12).isDraft, false,
+			"a failed toggle should revert the row"
+		)
+	end)
+	pr_panel.close()
+	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
+test("an issue close paints before gh answers", function()
+	install_stubs()
+	local answer
+	local ok, err = pcall(function()
+		stub_confirm(1)
+		open_issues()
+		assert_equals(painted_row(issue_panel, 7).state, "OPEN", "issue #7 starts open")
+
+		-- Reason prompt answers "Completed" (1), then the gate confirms.
+		input.confirm = function()
+			return true, 1
+		end
+		gh.run = function(args, opts, cb)
+			record(args, opts)
+			answer = cb
+		end
+		issue_panel.close_under_cursor()
+		assert_true(answer ~= nil, "the gh call should be in flight")
+		-- The default filter is open-only, so an optimistically closed issue
+		-- leaves the list entirely.
+		assert_equals(painted_row(issue_panel, 7), nil, "the closed row should leave the list")
+
+		answer({ code = 1, signal = 0, stdout = "", stderr = "gh: nope", cmd = {} })
+		assert_equals(
+			painted_row(issue_panel, 7).state, "OPEN",
+			"a failed close should bring the row back"
+		)
+	end)
+	issue_panel.close()
+	issue_panel.state.cache = nil
 	restore_stubs()
 	assert_true(ok, tostring(err))
 end)
