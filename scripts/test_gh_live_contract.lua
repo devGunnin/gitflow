@@ -400,7 +400,6 @@ end
 
 local gh_actions = require("gitflow.gh.actions")
 
-local run_id
 local runs
 ran, runs = live("gh run list", function(done)
 	gh_actions.list({ limit = 5 }, nil, function(err, value)
@@ -418,9 +417,29 @@ if ran then
 			"normalized run has no databaseId"
 		)
 		expect("gh run list", type(run.status) == "string", "normalized run has no status")
-		run_id = run_id or run.id
 	end
 	record("gh run list")
+end
+
+-- `gh run view --log-failed` refuses a run still in progress, and inside CI
+-- the latest run is always the one currently executing this very suite —
+-- self-defeating if picked. Target a completed run instead, preferring one
+-- that failed so the assertion below exercises real log content.
+local run_id
+local completed_runs
+ran, completed_runs = live("gh run list (completed)", function(done)
+	gh_actions.list({ status = "completed", limit = 20 }, nil, function(err, value)
+		done(err, value, err and { code = 1, stdout = "", stderr = err } or { code = 0 })
+	end)
+end)
+if ran then
+	for _, run in ipairs(completed_runs) do
+		if run.conclusion == "failure" then
+			run_id = run.id
+			break
+		end
+	end
+	run_id = run_id or (completed_runs[1] and completed_runs[1].id)
 end
 
 if run_id then
@@ -433,15 +452,22 @@ if run_id then
 	if ran then
 		expect("gh run view", type(detail) == "table", "expected a run table")
 		expect("gh run view", detail.id == run_id, "run view returned a different run")
-		expect(
-			"gh run view",
-			detail.log_error == nil,
-			("`gh run view --log-failed` failed: %s"):format(tostring(detail.log_error))
-		)
-		record("gh run view (+ --log-failed)")
+		local log_error = detail.log_error and tostring(detail.log_error) or nil
+		if log_error and log_error:lower():find("still in progress", 1, true) then
+			-- Defence in depth: even a run gh reports "completed" can race
+			-- with log availability. Skip rather than fail on that race.
+			skipped[#skipped + 1] = ("gh run view --log-failed: %s"):format(log_error)
+		else
+			expect(
+				"gh run view",
+				log_error == nil,
+				("`gh run view --log-failed` failed: %s"):format(tostring(log_error))
+			)
+			record("gh run view (+ --log-failed)")
+		end
 	end
 else
-	skipped[#skipped + 1] = "gh run view: this repo has no workflow runs"
+	skipped[#skipped + 1] = "gh run view: this repo has no completed workflow runs"
 end
 
 local workflows
