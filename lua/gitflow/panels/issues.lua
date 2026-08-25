@@ -74,6 +74,7 @@ M.state = {
 -- Forward-declared: the "b" (back) keymap below closes over it before its
 -- definition later in the file.
 local render_derived
+local repaint_list_from_cache
 -- Forward-declared: M.refresh calls it before its definition below.
 local refresh_links
 
@@ -105,6 +106,35 @@ local function scoped_cache()
 		return nil
 	end
 	return M.state.cache
+end
+
+repaint_list_from_cache = function()
+	if M.is_open() and M.state.mode == "list" and scoped_cache() then
+		render_derived()
+	end
+end
+
+---Replace `entry` in the cache with a copy carrying `patch`, and return the
+---undo. A copy rather than an in-place write: the row object is also held by
+---line_entries and by the detail view, and a guess about what GitHub will do
+---must not leak into anything already pointing at it.
+---@param entry table
+---@param patch table
+---@return fun()|nil  the undo, or nil when the row is not in the cache
+local function patch_cached(entry, patch)
+	local cached = M.state.cache
+	if type(cached) ~= "table" then
+		return nil
+	end
+	for index, candidate in ipairs(cached) do
+		if candidate == entry then
+			cached[index] = vim.tbl_extend("force", {}, entry, patch)
+			return function()
+				cached[index] = entry
+			end
+		end
+	end
+	return nil
 end
 
 local P = panel.new({
@@ -381,7 +411,7 @@ local function push_issue_card(B, issue, width, line_entries)
 	local state_icon = icons.get("github", "issue_" .. state)
 	local title = components.maybe_text(issue.title)
 	local time = components.relative_time(issue.updatedAt)
-	local left = (" %s  #%s  "):format(state_icon, number)
+	local left = ("  %s  #%s  "):format(state_icon, number)
 	local left_w = vim.fn.strdisplaywidth(left)
 	local time_w = vim.fn.strdisplaywidth(time)
 	local title_max = math.max(8, width - left_w - time_w - 2)
@@ -392,7 +422,7 @@ local function push_issue_card(B, issue, width, line_entries)
 	local title_group = state == "closed"
 		and "GitflowCardTitleDim" or "GitflowCardTitle"
 	local title_line = B:push({
-		{ components.spacing.edge, nil },
+		{ components.spacing.gutter, nil },
 		{ state_icon .. "  ", issue_highlight_group(state) },
 		{ "#" .. number, "GitflowNumber" },
 		{ "  ", nil },
@@ -402,7 +432,7 @@ local function push_issue_card(B, issue, width, line_entries)
 	})
 
 	local meta = {
-		{ components.spacing.gutter .. components.spacing.indent, nil },
+		{ components.spacing.indent, nil },
 		{ icons.get("ui", "author") .. " ", "GitflowMeta" },
 		{
 			issue.author and components.maybe_text(issue.author.login) or "\u{2014}",
@@ -416,10 +446,10 @@ local function push_issue_card(B, issue, width, line_entries)
 	local assignees = join_assignee_names(issue)
 	if assignees ~= "-" then
 		meta[#meta + 1] = { components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" }
-		meta[#meta + 1] = { assignees, "GitflowChip" }
+		meta[#meta + 1] = { assignees, "GitflowMeta" }
 	end
 	meta[#meta + 1] = { components.separators.field .. "milestone: ", "GitflowMetaKey" }
-	meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
+	meta[#meta + 1] = { milestone_text(issue), "GitflowMeta" }
 	for _, chunk in ipairs(linked_pr_chunks(issue)) do
 		meta[#meta + 1] = chunk
 	end
@@ -461,7 +491,7 @@ local function render_list(groups, total)
 	local grouped = M.state.group_by ~= "none"
 
 	if total == 0 then
-		components.empty(B, "No issues match these filters.")
+		components.empty(B, "no issues match these filters")
 	end
 
 	for _, group in ipairs(groups) do
@@ -488,8 +518,7 @@ local function render_list(groups, total)
 	M.state.active_issue_number = nil
 	M.state.active_issue = nil
 	M.state.view_cwd = nil
-	if P:paint(B) then
-		M.state.line_entries = line_entries
+	if P:paint(B, line_entries) then
 		M.state.line_groups = line_groups
 	else
 		-- Never leave the new mode paired with the old maps.
@@ -1075,11 +1104,26 @@ local function perform_mutation(opts)
 	M.state.busy = opts.in_progress_message
 	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
 
+	local revert = opts.optimistic and opts.optimistic() or nil
+	if revert then
+		repaint_list_from_cache()
+	end
+
 	-- The scope is handed to the call rather than left for it to remember: a
 	-- mutation that spawns again after a round trip must land in the same repo.
-	opts.call(in_scope(opts.scope), function(err)
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
 		M.state.busy = nil
 		if err then
+			if revert then
+				revert()
+				repaint_list_from_cache()
+			end
 			utils.notify(err, vim.log.levels.ERROR)
 			return
 		end
@@ -1094,7 +1138,13 @@ local function perform_mutation(opts)
 		else
 			M.refresh()
 		end
-	end)
+	end
+	-- vim.system throws at spawn (gh off PATH, unreadable cwd) instead of
+	-- calling back; without this `busy` wedges and the guess rests.
+	local ok, spawn_err = pcall(opts.call, in_scope(opts.scope), settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
 end
 
 ---Create a branch for the selected issue, prefilled with a suggested name.
@@ -1643,6 +1693,9 @@ function M.close_under_cursor()
 		confirm_message = ("Close issue #%s as %s?"):format(tostring(number), reason),
 		in_progress_message = ("Closing issue #%s"):format(tostring(number)),
 		done_message = ("Closed issue #%s as %s"):format(tostring(number), reason),
+		optimistic = function()
+			return patch_cached(issue, { state = "CLOSED" })
+		end,
 		call = function(run_opts, cb)
 			gh_issues.close(number, { reason = reason }, run_opts, cb)
 		end,
@@ -1663,6 +1716,9 @@ function M.reopen_under_cursor()
 		confirm_message = ("Reopen issue #%s?"):format(tostring(number)),
 		in_progress_message = ("Reopening issue #%s"):format(tostring(number)),
 		done_message = ("Reopened issue #%s"):format(tostring(number)),
+		optimistic = function()
+			return patch_cached(issue, { state = "OPEN" })
+		end,
 		call = function(run_opts, cb)
 			gh_issues.reopen(number, run_opts, cb)
 		end,

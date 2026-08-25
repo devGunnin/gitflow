@@ -92,7 +92,9 @@ local function render(entries, merge_base_sha, current_branch)
 		components.empty(B, "no commits found")
 	else
 		for idx, entry in ipairs(entries) do
-			local position_marker = ""
+			-- Blank-padded to the marker's own width so the shas below and
+			-- above an unnumbered row still line up.
+			local position_marker = "    "
 			if idx <= 9 then
 				position_marker = ("[%d] "):format(idx)
 			end
@@ -108,9 +110,9 @@ local function render(entries, merge_base_sha, current_branch)
 				summary = vim.trim(summary:sub(#entry.short_sha + 1))
 			end
 			local line_no = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ position_marker, "GitflowNumber" },
-				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 				{ entry.short_sha .. components.spacing.gutter, "GitflowLogHash" },
 				{ summary, "GitflowCardTitle" },
 			})
@@ -124,8 +126,7 @@ local function render(entries, merge_base_sha, current_branch)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
+	if P:paint(B, line_entries) then
 		M.state.merge_base_sha = merge_base_sha
 	end
 end

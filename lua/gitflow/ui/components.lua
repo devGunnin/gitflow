@@ -33,15 +33,17 @@ function M.maybe_text(value)
 	return text
 end
 
----Push a panel header: an inline title for splits (floats already show it in
----their frame chrome) followed by the panel rule.
+---Push a panel header: a title and the rule under it. A float already draws
+---both in its frame chrome, so it gets neither — a rule immediately under the
+---border read as a second, thinner border and cost a line of content.
 ---@param B GitflowRenderBuilder
 ---@param title string
 ---@param render_opts table|nil  { winid?, bufnr? }
 function M.header(B, title, render_opts)
-	if ui_render.wants_inline_title(render_opts) then
-		B:raw(title, "GitflowTitle")
+	if not ui_render.wants_inline_title(render_opts) then
+		return
 	end
+	B:raw(title, "GitflowTitle")
 	B:raw(ui_render.separator(render_opts), "GitflowSeparator")
 end
 
@@ -271,22 +273,12 @@ function M.split_hint_bar(B, render_opts, pairs, opts)
 		return nil
 	end
 	opts = opts or {}
-	if opts.blank_before ~= false then
+	-- One blank, never two: most panels end their last section with a blank
+	-- already, and the gap above the bar has to be the same in every panel.
+	if opts.blank_before ~= false and not B:ends_blank() then
 		B:blank()
 	end
 	return M.hint_bar(B, pairs)
-end
-
----Push a final "Current branch: <branch>" footer line. Must be the LAST line
----pushed (some panels/tests read the last buffer line).
----@param B GitflowRenderBuilder
----@param branch string|nil
----@return integer line_no
-function M.branch_footer(B, branch)
-	return B:push({
-		{ "Current branch: ", "GitflowMetaKey" },
-		{ tostring(branch or ""), "GitflowBranchCurrent" },
-	})
 end
 
 ---Toggle cursorline on a window (best-effort).

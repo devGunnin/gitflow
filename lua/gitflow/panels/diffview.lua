@@ -135,7 +135,7 @@ local function render_file_list()
 	B:blank()
 
 	if #M.state.files == 0 then
-		components.empty(B, "(no changes)")
+		components.empty(B, "no changes")
 	end
 
 	for idx, f in ipairs(M.state.files) do
@@ -144,7 +144,7 @@ local function render_file_list()
 		dir = dir or ""
 		name = name or f.path
 		M.state.file_line_map[B:push({
-			{ ui_render.spacing.edge, nil },
+			{ ui_render.spacing.gutter, nil },
 			{ icon .. "  ", icon_hl },
 			{ dir, "GitflowMeta" },
 			{ name, M.state.active_idx == idx

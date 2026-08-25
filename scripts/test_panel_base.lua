@@ -1041,6 +1041,233 @@ test("a destructive hint is drawn in the destructive colour", function()
 	assert_true(marked, "the rebase bar should carry X execute")
 end)
 
+test("a panel's first frame and its loading render say the same thing", function()
+	-- ensure_window seeds a new buffer with the spec's `loading` label, and
+	-- the panel then repaints with its own render_loading. When the two
+	-- disagree, opening the panel reads as two different states in a row.
+	for _, name in ipairs(vim.fn.glob(
+		project_root .. "/lua/gitflow/panels/*.lua", false, true
+	)) do
+		local source = table.concat(vim.fn.readfile(name), "\n")
+		local seeded = source:match('loading%s*=%s*"([^"]*)"')
+		if seeded then
+			for painted in source:gmatch('P:render_loading%(%s*"([^"]*)"') do
+				assert_equals(painted, seeded, ("%s: render_loading disagrees with the seeded first frame"):format(
+					vim.fn.fnamemodify(name, ":t")
+				))
+			end
+		end
+	end
+end)
+
+-- ── cursor identity across a repaint ───────────────────────────────────
+
+---A throwaway panel whose render is a plain list of `{ sha = ... }` rows.
+---@param shas string[]
+---@return table panel
+local function paint_shas(P, shas)
+	local B = render.builder()
+	local entries = {}
+	for _, sha in ipairs(shas) do
+		entries[B:push({ { "  ", nil }, { sha, nil } })] = { sha = sha }
+	end
+	P:paint(B, entries)
+end
+
+test("entry_identity keys a row by its first stable field", function()
+	assert_equals(panel.entry_identity({ sha = "abc" }), "sha=abc", "sha")
+	assert_equals(panel.entry_identity({ number = 7 }), "number=7", "number")
+	assert_equals(
+		panel.entry_identity({ kind = "file", entry = { path = "a.lua" } }),
+		"file:path=a.lua", "wrapped entry"
+	)
+	assert_equals(panel.entry_identity({ untitled = true }), nil, "no identity")
+end)
+
+test("the cursor follows its entry when a repaint shifts the rows", function()
+	local P = panel.new({ name = "gitflow_test_cursor", title = "Cursor Test" })
+	P:ensure_window(gitflow.get_config())
+	paint_shas(P, { "aaa", "bbb", "ccc" })
+	vim.api.nvim_win_set_cursor(P.state.winid, { 2, 0 })
+	assert_equals(P:cursor_identity(), "sha=bbb", "cursor should start on bbb")
+
+	-- Two commits land on top: bbb moves from line 2 to line 4.
+	paint_shas(P, { "yyy", "zzz", "aaa", "bbb", "ccc" })
+	assert_equals(
+		vim.api.nvim_win_get_cursor(P.state.winid)[1], 4,
+		"cursor should have followed bbb down"
+	)
+	assert_equals(P:cursor_identity(), "sha=bbb", "still on bbb")
+
+	-- The entry the cursor was on is gone: it stays put rather than jumping.
+	paint_shas(P, { "yyy", "zzz", "aaa", "ccc", "ddd" })
+	assert_equals(
+		vim.api.nvim_win_get_cursor(P.state.winid)[1], 4,
+		"a vanished entry leaves the cursor where it was"
+	)
+	P:close()
+end)
+
+test("paint without an entry map leaves the cursor alone", function()
+	local P = panel.new({ name = "gitflow_test_cursor_plain", title = "Plain" })
+	P:ensure_window(gitflow.get_config())
+	paint_shas(P, { "aaa", "bbb", "ccc" })
+	vim.api.nvim_win_set_cursor(P.state.winid, { 3, 0 })
+	local B = render.builder()
+	for _, sha in ipairs({ "zzz", "aaa", "bbb", "ccc" }) do
+		B:push({ { "  ", nil }, { sha, nil } })
+	end
+	P:paint(B)
+	assert_equals(
+		vim.api.nvim_win_get_cursor(P.state.winid)[1], 3,
+		"no map means no identity tracking"
+	)
+	P:close()
+end)
+
+test("a panel's declared identity wins over the inferred one", function()
+	local P = panel.new({
+		name = "gitflow_test_identity", title = "Declared",
+		identity = function(entry)
+			return "custom=" .. tostring(entry.selector)
+		end,
+	})
+	assert_equals(
+		P:identity_of({ sha = "abc", selector = "HEAD@{0}" }),
+		"custom=HEAD@{0}", "the panel's own key, not the first inferred field"
+	)
+end)
+
+test("panels whose rows share an inferred key declare their real one", function()
+	-- Every case below is one where the inferred identity collides across
+	-- two rows that are genuinely different, and one of the panels maps a
+	-- destructive verb.
+	local status = panel_object("gitflow.panels.status")
+	local staged = { kind = "file", diff_staged = true, entry = { path = "a.lua" } }
+	local unstaged = { kind = "file", diff_staged = false, entry = { path = "a.lua" } }
+	assert_equals(
+		panel.entry_identity(staged), panel.entry_identity(unstaged),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		status:identity_of(staged) ~= status:identity_of(unstaged),
+		"status must tell a staged row from an unstaged one"
+	)
+
+	-- Reflog shas repeat routinely; the selector is the unique key.
+	local reflog = panel_object("gitflow.panels.reflog")
+	local head0 = { sha = "deadbee", selector = "HEAD@{0}" }
+	local head3 = { sha = "deadbee", selector = "HEAD@{3}" }
+	assert_equals(
+		panel.entry_identity(head0), panel.entry_identity(head3),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		reflog:identity_of(head0) ~= reflog:identity_of(head3),
+		"reflog must tell two entries of the same commit apart"
+	)
+
+	-- One commit blames many consecutive lines.
+	local blame = panel_object("gitflow.panels.blame")
+	assert_true(
+		blame:identity_of({ sha = "deadbee", line_number = 4 })
+			~= blame:identity_of({ sha = "deadbee", line_number = 5 }),
+		"blame must tell two lines of the same commit apart"
+	)
+
+	-- A lightweight tag has no dereferenced object, so `sha` is empty for
+	-- every one of them; two annotated tags on one commit collide as well.
+	local tag = panel_object("gitflow.panels.tag")
+	local nightly = { name = "nightly", sha = "", is_annotated = false }
+	local latest = { name = "latest", sha = "", is_annotated = false }
+	assert_equals(
+		panel.entry_identity(nightly), panel.entry_identity(latest),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		tag:identity_of(nightly) ~= tag:identity_of(latest),
+		"tag must tell two lightweight tags apart"
+	)
+
+	-- A bare worktree has no HEAD line, so `sha` is empty; two worktrees on
+	-- the same commit collide too.
+	local worktree = panel_object("gitflow.panels.worktree")
+	local bare = { path = "/repo.git", sha = "" }
+	local checkout = { path = "/repo/feature", sha = "" }
+	assert_equals(
+		panel.entry_identity(bare), panel.entry_identity(checkout),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		worktree:identity_of(bare) ~= worktree:identity_of(checkout),
+		"worktree must tell two checkouts apart"
+	)
+end)
+
+test("the tag cursor stays on its tag when new tags shift the rows", function()
+	local git_tag = require("gitflow.git.tag")
+	local git_branch = require("gitflow.git.branch")
+	local tag_panel = require("gitflow.panels.tag")
+	local real_list, real_current = git_tag.list, git_branch.current
+
+	---@param names string[]
+	local function lightweight(names)
+		local entries = {}
+		for _, name in ipairs(names) do
+			entries[#entries + 1] =
+				{ name = name, sha = "", subject = nil, is_annotated = false }
+		end
+		return entries
+	end
+
+	local tags = lightweight({ "nightly", "latest", "stable" })
+	git_branch.current = function(_, cb)
+		cb(nil, "main")
+	end
+	git_tag.list = function(_, cb)
+		cb(nil, tags)
+	end
+
+	local ok, err = pcall(function()
+		tag_panel.open(gitflow.get_config())
+		local P = panel_object("gitflow.panels.tag")
+
+		local stable_line
+		for line, entry in pairs(tag_panel.state.line_entries) do
+			if entry.name == "stable" then
+				stable_line = line
+			end
+		end
+		assert_true(stable_line ~= nil, "the tag list should render `stable`")
+		vim.api.nvim_win_set_cursor(P.state.winid, { stable_line, 0 })
+
+		-- Three annotated tags land on top (the list is newest-first), so
+		-- every lightweight row moves down.
+		tags = {
+			{ name = "v3.0", sha = "cafe123", is_annotated = true },
+			{ name = "v2.0", sha = "cafe123", is_annotated = true },
+			{ name = "v1.0", sha = "beef456", is_annotated = true },
+		}
+		for _, entry in ipairs(lightweight({ "nightly", "latest", "stable" })) do
+			tags[#tags + 1] = entry
+		end
+		tag_panel.refresh()
+
+		local under_cursor = tag_panel.state.line_entries[
+			vim.api.nvim_win_get_cursor(P.state.winid)[1]
+		]
+		assert_equals(
+			under_cursor and under_cursor.name, "stable",
+			"the cursor must stay on the tag `D` would delete"
+		)
+	end)
+
+	tag_panel.close()
+	git_tag.list = real_list
+	git_branch.current = real_current
+	assert_true(ok, tostring(err))
+end)
+
 print(("=== Results: %d passed, %d failed ==="):format(passed, failed))
 if failed > 0 then
 	os.exit(1)

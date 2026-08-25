@@ -40,6 +40,14 @@ local P = panel.new({
 	filetype = "gitflowworktree",
 	loading = "Loading worktrees…",
 	state = M.state,
+	-- A bare worktree has an empty `sha`, and two worktrees on the same
+	-- commit share one; the checkout path is the real key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.path) == "string" then
+			return "path=" .. entry.path
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "<CR>", desc = "switch", essential = true, run = function()
 			M.switch_under_cursor()
@@ -154,9 +162,15 @@ local function render(entries)
 		("Worktrees (%d)"):format(#entries)
 	)
 
+	-- The card's dim meta line is the one row here that can run long; every
+	-- other panel truncates its variable field rather than let a row wrap
+	-- and break the column grid.
+	local meta_budget = components.content_width(P:render_opts())
+		- #components.spacing.indent
+
 	local line_entries = {}
 	if #entries == 0 then
-		components.empty(B, "No worktrees yet", {
+		components.empty(B, "no worktrees yet", {
 			hint = "Press a to add a worktree.",
 		})
 	else
@@ -178,7 +192,7 @@ local function render(entries)
 
 			-- Line 1: icon + branch/ref + state badges
 			local line1_chunks = {
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ icons.get("branch", icon_name) .. "  ", ref_group },
 				{ ref, ref_group },
 			}
@@ -205,28 +219,44 @@ local function render(entries)
 			-- Line 2: sha · subject · rel_time · path (dim meta row)
 			local short_sha = (entry.sha ~= "" and entry.sha:sub(1, 7)) or nil
 			local card_indent = components.spacing.indent
-				.. components.spacing.gutter .. components.spacing.edge
 			local line2_chunks = { { card_indent, nil } }
 
 			if entry.is_bare then
 				line2_chunks[#line2_chunks + 1] =
-					{ display_path, "GitflowMeta" }
+					{ components.truncate(display_path, meta_budget), "GitflowMeta" }
 			else
+				local rel_time = (enrich and enrich.rel_time ~= "" and enrich.rel_time)
+					or nil
+				local path_text = components.separators.inline .. display_path
+				local time_text = rel_time
+					and (components.separators.inline .. rel_time) or ""
+				-- The subject gives up its room first: the sha, the age and
+				-- the path are what identify the worktree.
+				local fixed = (short_sha and #short_sha or 0)
+					+ vim.fn.strdisplaywidth(time_text)
+					+ vim.fn.strdisplaywidth(path_text)
+
 				if short_sha then
-					line2_chunks[#line2_chunks + 1] =
-						{ short_sha, "GitflowMeta" }
+					line2_chunks[#line2_chunks + 1] = { short_sha, "GitflowMeta" }
 				end
-				if enrich and enrich.subject and enrich.subject ~= "" then
+				local subject = enrich and enrich.subject or ""
+				if subject ~= "" then
 					local prefix = short_sha and components.spacing.gutter or ""
-					line2_chunks[#line2_chunks + 1] =
-						{ prefix .. enrich.subject, "GitflowMeta" }
+					local room = meta_budget - fixed - #prefix
+					subject = room >= 8 and components.truncate(subject, room) or ""
+					if subject ~= "" then
+						line2_chunks[#line2_chunks + 1] =
+							{ prefix .. subject, "GitflowMeta" }
+					end
 				end
-				if enrich and enrich.rel_time and enrich.rel_time ~= "" then
-					line2_chunks[#line2_chunks + 1] =
-						{ components.separators.inline .. enrich.rel_time, "GitflowRelTime" }
+				if rel_time then
+					line2_chunks[#line2_chunks + 1] = { time_text, "GitflowRelTime" }
 				end
-				line2_chunks[#line2_chunks + 1] =
-					{ components.separators.inline .. display_path, "GitflowMeta" }
+				line2_chunks[#line2_chunks + 1] = {
+					components.truncate(path_text, math.max(8, meta_budget - fixed
+						+ vim.fn.strdisplaywidth(path_text))),
+					"GitflowMeta",
+				}
 			end
 
 			local line2 = B:push(line2_chunks)
@@ -236,13 +266,15 @@ local function render(entries)
 			if entry.is_locked and entry.lock_reason then
 				local line3 = B:push({
 					{ card_indent .. "Locked: ", "GitflowWorktreeLocked" },
-					{ entry.lock_reason, "GitflowMeta" },
+					{ components.truncate(entry.lock_reason, meta_budget - 8),
+						"GitflowMeta" },
 				})
 				line_entries[line3] = entry
 			elseif entry.is_prunable and entry.prune_reason then
 				local line3 = B:push({
 					{ card_indent .. "Prunable: ", "GitflowWorktreePrunable" },
-					{ entry.prune_reason, "GitflowMeta" },
+					{ components.truncate(entry.prune_reason, meta_budget - 10),
+						"GitflowMeta" },
 				})
 				line_entries[line3] = entry
 			end
@@ -253,9 +285,7 @@ local function render(entries)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---Fire async enrichment for each non-bare worktree: commit subject + relative

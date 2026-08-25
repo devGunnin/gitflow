@@ -96,10 +96,10 @@ local function render(entries, current_branch)
 			local marked = marks[entry.sha]
 			local line_no = B:push({
 				{
-					marked and (" \u{2503} ") or (components.spacing.gutter .. " "),
+					marked and ("\u{2503} ") or components.spacing.gutter,
 					marked and "GitflowNumber" or nil,
 				},
-				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowLogHash" },
 				{ summary ~= "" and (components.spacing.gutter .. summary) or "", "GitflowCardTitle" },
 			})
@@ -107,14 +107,9 @@ local function render(entries, current_branch)
 		end
 	end
 
-	-- Hints sit above the branch footer so the final line stays the exact
-	-- "Current branch: <branch>" string other panels and tests rely on.
 	P:push_hints(B)
-	components.branch_footer(B, current_branch)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowLogEntry|nil

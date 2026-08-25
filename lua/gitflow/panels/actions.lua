@@ -63,9 +63,7 @@ local PAGE_STEP = 20
 
 local SPACING = ui_render.spacing
 local SEPARATORS = ui_render.separators
--- Content rows carry a status icon in the gutter, so their metadata lines up
--- one indent step plus that icon's column. No token is five columns wide.
-local ROW_META_INDENT = SPACING.indent .. SPACING.edge
+local ROW_META_INDENT = SPACING.indent
 
 -- Rendered-line cap for one log. Formatting + painting is linear and
 -- blocking (~0.3s for a 100k-line, 8.8MB log), so this is passed to
@@ -376,15 +374,18 @@ local function setup_post_operation_autocmd()
 		{ clear = true }
 	)
 	M.state.post_operation_augroup = augroup
+	-- Coalesced: one command emits this event several times (a stage fires it
+	-- from the panel and again from the command layer), and each one here is
+	-- a `gh` round trip.
+	local refresh_soon = panel.debounced(function()
+		if M.is_open() then
+			M.refresh()
+		end
+	end)
 	vim.api.nvim_create_autocmd("User", {
 		group = augroup,
 		pattern = "GitflowPostOperation",
-		callback = function()
-			if not M.is_open() then
-				return
-			end
-			M.refresh()
-		end,
+		callback = refresh_soon,
 	})
 end
 
@@ -604,7 +605,7 @@ local function render_list(runs, current_branch, cache_scope_key)
 			local status_hl = gh_actions.status_highlight(run)
 			local name = run_title(run)
 			local time = ui_render.relative_time(run.created_at)
-			local left = " " .. icon .. "  "
+			local left = SPACING.gutter .. icon .. "  "
 			local left_w = vim.fn.strdisplaywidth(left)
 			local time_w = vim.fn.strdisplaywidth(time)
 			local name_max = math.max(8, width - left_w - time_w - 2)
@@ -613,7 +614,7 @@ local function render_list(runs, current_branch, cache_scope_key)
 				2, width - left_w - vim.fn.strdisplaywidth(name) - time_w
 			)
 			local title_line = B:push({
-				{ SPACING.edge, nil },
+				{ SPACING.gutter, nil },
 				{ icon .. "  ", status_hl },
 				{ name, "GitflowCardTitle" },
 				{ string.rep(" ", gap), nil },
@@ -1039,7 +1040,13 @@ local function perform_mutation(opts)
 	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
 	render_current_view()
 
-	opts.call(function(err)
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
 		M.state.busy = nil
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
@@ -1052,7 +1059,13 @@ local function perform_mutation(opts)
 		if M.is_open() then
 			M.refresh()
 		end
-	end)
+	end
+	-- vim.system throws at spawn (gh off PATH, unreadable cwd) instead of
+	-- calling back; without this the busy banner wedges every verb.
+	local ok, spawn_err = pcall(opts.call, settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
 end
 
 ---@param cfg GitflowConfig

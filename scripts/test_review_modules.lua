@@ -434,7 +434,7 @@ test("file_list: the empty, loading and error states each render", function()
 
 		state.files_loaded = true
 		file_list.render()
-		assert_true(pane_text(bufnr):find("No changed files", 1, true) ~= nil,
+		assert_true(pane_text(bufnr):find("no changed files", 1, true) ~= nil,
 			"an empty PR says so")
 
 		state.files_error = "gh pr view failed: boom"

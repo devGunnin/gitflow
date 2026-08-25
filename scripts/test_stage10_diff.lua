@@ -393,13 +393,27 @@ test("diff panel shows file summary", function()
 	local lines = vim.api.nvim_buf_get_lines(
 		bufnr, 0, -1, false
 	)
+	-- The counts moved onto the panel's summary bar, in the same shape every
+	-- other panel uses: "<n> files    <n> hunks    <branch>". Both counts on
+	-- one line, and both matching what the panel actually parsed — "file"
+	-- alone matches almost any diff line.
+	local files = #diff_panel.state.file_markers
+	local hunks = #diff_panel.state.hunk_markers
+	assert_true(files > 0 and hunks > 0, "the fixture diff should have files and hunks")
+	local expected = ("%d file%s"):format(files, files == 1 and "" or "s")
+	local expected_hunks = ("%d hunk%s"):format(hunks, hunks == 1 and "" or "s")
+	local summary
+	for i, line in ipairs(lines) do
+		if line:find(expected, 1, true) and line:find(expected_hunks, 1, true) then
+			summary = i
+			break
+		end
+	end
 	assert_true(
-		find_line(lines, "Files:") ~= nil,
-		"diff panel should show file summary"
-	)
-	assert_true(
-		find_line(lines, "Hunks:") ~= nil,
-		"diff panel should show hunk count"
+		summary ~= nil,
+		("diff panel should carry '%s' and '%s' on one summary bar"):format(
+			expected, expected_hunks
+		)
 	)
 end)
 

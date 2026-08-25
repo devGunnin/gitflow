@@ -69,9 +69,8 @@ function M.register(ctx)
 						return
 					end
 					shared.show_info(("Created worktree at %s"):format(path))
-					if worktree_panel.is_open() then
-						worktree_panel.refresh()
-					end
+					-- The panel listens to this event; refreshing here too
+					-- would list the worktrees twice for one command.
 					shared.emit_post_operation()
 				end)
 				return ("Creating worktree at %s..."):format(path)
@@ -89,9 +88,6 @@ function M.register(ctx)
 						return
 					end
 					shared.show_info(("Removed worktree %s"):format(path))
-					if worktree_panel.is_open() then
-						worktree_panel.refresh()
-					end
 					shared.emit_post_operation()
 				end)
 				return ("Removing worktree %s..."):format(path)
@@ -111,9 +107,6 @@ function M.register(ctx)
 						return
 					end
 					shared.show_info(("Moved worktree to %s"):format(dest))
-					if worktree_panel.is_open() then
-						worktree_panel.refresh()
-					end
 					shared.emit_post_operation()
 				end)
 				return ("Moving worktree %s..."):format(path)
@@ -163,9 +156,6 @@ function M.register(ctx)
 						return
 					end
 					shared.show_info("Pruned stale worktree entries")
-					if worktree_panel.is_open() then
-						worktree_panel.refresh()
-					end
 					shared.emit_post_operation()
 				end)
 				return "Pruning worktrees..."

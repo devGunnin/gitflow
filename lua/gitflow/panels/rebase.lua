@@ -230,7 +230,7 @@ local function ensure_window(cfg)
 			if M.state.preview_winid
 				and vim.api.nvim_win_is_valid(M.state.preview_winid)
 			then
-				M.refresh_preview()
+				M.schedule_preview_refresh()
 			end
 		end,
 	})
@@ -285,10 +285,9 @@ render_todo = function()
 			-- (item 6: squash/fixup chain indentation).
 			local is_chain = entry.action == "squash"
 				or entry.action == "fixup"
-			local edge, gutter = components.spacing.edge, components.spacing.gutter
-			local lead = is_chain and (edge .. gutter) or edge
-			local lead2 = is_chain and (components.spacing.indent .. gutter .. edge)
-				or (components.spacing.indent .. edge)
+			local gutter, indent = components.spacing.gutter, components.spacing.indent
+			local lead = is_chain and indent or gutter
+			local lead2 = is_chain and (indent .. gutter) or indent
 
 			-- Line 1: glyph badge + sha + subject (items 1 & 2).
 			local line1 = B:push({
@@ -328,16 +327,14 @@ render_todo = function()
 		})
 	else
 		B:push({
-			{ components.spacing.gutter .. components.spacing.edge, nil },
+			{ components.spacing.gutter, nil },
 			{ "move cursor to a commit to inspect", "GitflowMeta" },
 		})
 	end
 
 	P:push_hints(B, "todo")
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 	refresh_float_footer()
 end
 
@@ -380,7 +377,7 @@ render_normal = function()
 		for _, entry in ipairs(M.state.entries) do
 			-- Line 1: sha + subject.
 			local line1 = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ commit_icon .. " ", "GitflowRebaseHash" },
 				{ entry.short_sha, "GitflowRebaseHash" },
 				{ components.spacing.gutter .. (entry.subject or ""), "GitflowCardTitle" },
@@ -389,7 +386,7 @@ render_normal = function()
 
 			-- Line 2: author + relative time, dimmed.
 			local line2 = B:push({
-				{ components.spacing.indent .. components.spacing.edge, nil },
+				{ components.spacing.indent, nil },
 				{ entry.author or "", "GitflowMeta" },
 				{ " " .. components.glyphs.bullet .. " ", "GitflowMetaKey" },
 				{ entry.relative_time or "", "GitflowMeta" },
@@ -407,9 +404,7 @@ render_normal = function()
 
 	P:push_hints(B, "normal")
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 	refresh_float_footer()
 end
 
@@ -450,39 +445,71 @@ local function ensure_preview_buffer()
 	return bufnr
 end
 
+-- Holding `j` down the todo list moves the cursor once per repeat, and the
+-- preview is a `git show` each time. The tick coalesces the burst into one
+-- fetch and also settles which result may paint: a `git show` that lands
+-- after the cursor has moved on belongs to a commit nobody is looking at.
+local PREVIEW_DEBOUNCE_MS = 90
+
+---Bump the preview generation and return the new one.
+---@return integer
+local function next_preview_tick()
+	M.state.preview_tick = (M.state.preview_tick or 0) + 1
+	return M.state.preview_tick
+end
+
+---Refresh the preview once the cursor has settled.
+function M.schedule_preview_refresh()
+	local tick = next_preview_tick()
+	vim.defer_fn(function()
+		if M.state.preview_tick ~= tick then
+			return
+		end
+		M.refresh_preview()
+	end, PREVIEW_DEBOUNCE_MS)
+end
+
+---@param bufnr integer
+---@param lines string[]
+local function paint_preview(bufnr, lines)
+	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+end
+
 ---Fetch and display `git show` for the currently focused commit in the preview
----window. No-ops when the preview buffer or focused entry is absent.
+---window. No-ops when the preview buffer is absent.
 function M.refresh_preview()
+	local preview_bufnr = M.state.preview_bufnr
+	if not preview_bufnr or not vim.api.nvim_buf_is_valid(preview_bufnr) then
+		return
+	end
 	local entry = M.state.line_entries
 		and M.state.line_entries[M.state.focused_line]
-	local preview_bufnr = M.state.preview_bufnr
-	if not entry
-		or not preview_bufnr
-		or not vim.api.nvim_buf_is_valid(preview_bufnr)
-	then
+	local tick = next_preview_tick()
+	if not entry then
+		-- Cursor settled off any commit: blank it rather than keep the
+		-- previous commit's diff on screen as if it were this row's.
+		paint_preview(preview_bufnr, {})
 		return
 	end
 	git.git(
 		{ "show", "--stat", "--patch", entry.sha },
 		{},
 		function(result)
-			if not vim.api.nvim_buf_is_valid(preview_bufnr) then
+			if M.state.preview_tick ~= tick
+				or not vim.api.nvim_buf_is_valid(preview_bufnr)
+			then
 				return
 			end
 			local lines = vim.split(result.stdout or "", "\n")
 			vim.schedule(function()
-				if not vim.api.nvim_buf_is_valid(preview_bufnr) then
+				if M.state.preview_tick ~= tick
+					or not vim.api.nvim_buf_is_valid(preview_bufnr)
+				then
 					return
 				end
-				vim.api.nvim_set_option_value(
-					"modifiable", true, { buf = preview_bufnr }
-				)
-				vim.api.nvim_buf_set_lines(
-					preview_bufnr, 0, -1, false, lines
-				)
-				vim.api.nvim_set_option_value(
-					"modifiable", false, { buf = preview_bufnr }
-				)
+				paint_preview(preview_bufnr, lines)
 			end)
 		end
 	)
@@ -603,7 +630,7 @@ local function render_base_picker(branches)
 				group = "GitflowCardTitle"
 			end
 			local chunks = {
-				{ components.spacing.indent, nil },
+				{ components.spacing.gutter, nil },
 				{ (icon ~= "" and icon .. "  " or ""), group },
 				{ entry.name, group },
 			}

@@ -156,7 +156,7 @@ local function render_commits(commits, source_branch, current_branch)
 			local chunks = {
 				{ components.spacing.gutter, nil },
 				{ marker, "GitflowNumber" },
-				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowCherryPickHash" },
 			}
 			if summary ~= "" then
@@ -170,9 +170,7 @@ local function render_commits(commits, source_branch, current_branch)
 	B:blank()
 	P:push_hints(B, nil, { blank_before = false })
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowCherryPickEntry|nil

@@ -376,7 +376,7 @@ T.run_suite("E2E: Notification Center", {
 		local has_error_label = false
 		local has_warn_label = false
 		local has_info_label = false
-		local has_count_footer = false
+		local has_count_summary = false
 		local has_branch_footer = false
 		for _, line in ipairs(lines) do
 			if line:find("[ERROR]", 1, true) then
@@ -388,8 +388,10 @@ T.run_suite("E2E: Notification Center", {
 			if line:find("[INFO]", 1, true) then
 				has_info_label = true
 			end
-			if line:find("3 entries", 1, true) then
-				has_count_footer = true
+			-- The count lives on the summary bar; the panel has no second,
+			-- separate footer copy of it.
+			if line:find("3 notifications", 1, true) then
+				has_count_summary = true
 			end
 			if line:find("Current branch:", 1, true) then
 				has_branch_footer = true
@@ -409,12 +411,12 @@ T.run_suite("E2E: Notification Center", {
 			"should show [INFO] severity label"
 		)
 		T.assert_true(
-			has_count_footer,
-			"should show entry count in footer"
+			has_count_summary,
+			"should show the entry count on the summary bar"
 		)
 		T.assert_false(
 			has_branch_footer,
-			"notifications footer should not render a branch label"
+			"no panel renders a branch footer any more"
 		)
 
 		T.cleanup_panels()

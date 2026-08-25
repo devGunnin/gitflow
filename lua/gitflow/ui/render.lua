@@ -302,6 +302,11 @@ function M.builder()
 		return #self.lines
 	end
 
+	---@return boolean  whether nothing has been pushed, or the last line is blank
+	function B:ends_blank()
+		return #self.lines == 0 or self.lines[#self.lines] == ""
+	end
+
 	---Render into a buffer, touching only what changed since the last render.
 	---Lines are diffed against the previous render (one nvim_buf_set_lines over
 	---the changed range, none at all when nothing moved) and highlight spans are

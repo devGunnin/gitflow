@@ -40,6 +40,9 @@ local help = require("gitflow.ui.help")
 ---@field state table|nil  the panel's own state table to adopt
 ---@field entry_maps string[]|nil  state keys holding line->entry maps
 ---                                (default `{ "line_entries" }`)
+---@field identity fun(entry: any):(string|nil)|nil  the panel's own cursor
+---   identity, for a panel whose unique key is not one of `IDENTITY_FIELDS`
+---   (a compound, or a field the default order would shadow)
 ---@field keymaps GitflowPanelKeymap[]|nil
 ---@field on_close fun()|nil  extra teardown when the window closes
 
@@ -348,6 +351,7 @@ function M.new(spec)
 		loading = spec.loading,
 		keymaps = spec.keymaps or {},
 		entry_maps = spec.entry_maps or { "line_entries" },
+		identity = spec.identity,
 		on_close = spec.on_close,
 		ns = vim.api.nvim_create_namespace("gitflow_" .. spec.name .. "_hl"),
 		state = state,
@@ -891,15 +895,143 @@ function Panel:push_hints(B, view, opts)
 	)
 end
 
+-- ── coalescing ─────────────────────────────────────────────────────────
+
+---Default settle time for a coalesced refresh. Long enough that the several
+---events one command emits arrive inside one window, short enough that the
+---panel still feels like it reacted to the keypress.
+local DEBOUNCE_MS = 120
+
+---Wrap `fn` so a burst of calls runs it once, after the burst settles. The
+---returned function is cheap to call and never runs `fn` synchronously.
+---@param fn fun()
+---@param ms integer|nil
+---@return fun()
+function M.debounced(fn, ms)
+	local tick = 0
+	return function()
+		tick = tick + 1
+		local mine = tick
+		vim.defer_fn(function()
+			if tick == mine then
+				fn()
+			end
+		end, ms or DEBOUNCE_MS)
+	end
+end
+
+-- ── cursor identity ────────────────────────────────────────────────────
+-- A refresh that inserts, drops or reorders rows leaves the cursor on
+-- whatever now occupies its old LINE — the user is reading one commit and
+-- ends up on another. So the cursor follows the ENTRY it was on: identify
+-- the row before the repaint, find that same row after, and move to it.
+--
+-- The identity below is INFERRED, which only holds where one of the fields
+-- is unique per visible row. A panel whose real key is a compound, or is a
+-- field the order below would shadow, declares `identity` in its spec.
+
+local IDENTITY_FIELDS = { "sha", "oid", "number", "id", "path", "name", "ref" }
+
+---A stable identity for a rendered entry, or nil when it has none (the
+---cursor then just stays where it is, the old behaviour).
+---@param entry any
+---@return string|nil
+function M.entry_identity(entry)
+	if type(entry) == "string" then
+		return entry
+	end
+	if type(entry) ~= "table" then
+		return nil
+	end
+	for _, field in ipairs(IDENTITY_FIELDS) do
+		local value = entry[field]
+		if type(value) == "string" or type(value) == "number" then
+			return field .. "=" .. tostring(value)
+		end
+	end
+	-- Panels that wrap the real entry (status: { kind, entry = <file> }).
+	if type(entry.entry) == "table" then
+		local inner = M.entry_identity(entry.entry)
+		if inner then
+			return (entry.kind and (entry.kind .. ":") or "") .. inner
+		end
+	end
+	return nil
+end
+
+---This panel's identity for `entry`: its own if it declared one, else the
+---inferred default.
+---@param entry any
+---@return string|nil
+function Panel:identity_of(entry)
+	if self.identity then
+		return self.identity(entry)
+	end
+	return M.entry_identity(entry)
+end
+
+---Identity of the entry the cursor is on right now.
+---@return string|nil
+function Panel:cursor_identity()
+	if not self:has_window() then
+		return nil
+	end
+	local entries = self.state.line_entries
+	if type(entries) ~= "table" then
+		return nil
+	end
+	local ok, cursor = pcall(vim.api.nvim_win_get_cursor, self.state.winid)
+	if not ok then
+		return nil
+	end
+	return self:identity_of(entries[cursor[1]])
+end
+
+---Move the cursor back onto `identity` in the freshly rendered map.
+---@param identity string|nil
+local function restore_cursor(self, identity)
+	if not identity or not self:has_window() then
+		return
+	end
+	local entries = self.state.line_entries
+	if type(entries) ~= "table" then
+		return
+	end
+	local ok, cursor = pcall(vim.api.nvim_win_get_cursor, self.state.winid)
+	if not ok or self:identity_of(entries[cursor[1]]) == identity then
+		return
+	end
+	-- Lowest matching line: a repeated identity resolves to its first row.
+	local target
+	for line, entry in pairs(entries) do
+		if self:identity_of(entry) == identity and (not target or line < target) then
+			target = line
+		end
+	end
+	if target then
+		pcall(vim.api.nvim_win_set_cursor, self.state.winid, { target, cursor[2] })
+	end
+end
+
 ---Paint a finished builder into the panel buffer.
+---
+---Passing the render's line→entry map hands the panel's primary entry map
+---over to the base, which then keeps the cursor on the entry it was on
+---rather than on the line number it was at.
 ---@param B GitflowRenderBuilder
+---@param line_entries table<integer, any>|nil
 ---@return boolean painted
-function Panel:paint(B)
+function Panel:paint(B, line_entries)
 	local bufnr = self:bufnr()
 	if not bufnr then
 		return false
 	end
+	local identity = line_entries and self:cursor_identity() or nil
 	B:flush(bufnr, bufnr, self.ns)
+	if line_entries then
+		self.state.line_entries = line_entries
+		restore_cursor(self, identity)
+	end
 	components.cursorline(self.state.winid, true)
 	return true
 end

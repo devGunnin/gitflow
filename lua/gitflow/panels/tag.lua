@@ -27,6 +27,14 @@ local P = panel.new({
 	filetype = "gitflowtag",
 	loading = "Loading tags…",
 	state = M.state,
+	-- Every lightweight tag carries an empty `sha`, and annotated tags share
+	-- one when they point at the same commit; the tag name is the real key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.name) == "string" then
+			return "name=" .. entry.name
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "c", desc = "create", essential = true, run = function()
 			M.create_tag()
@@ -89,7 +97,7 @@ local function render(entries, current_branch)
 			local accent = annotated and "GitflowTagAnnotated" or "GitflowChip"
 			local type_marker = annotated and "[annotated]" or "[lightweight]"
 			local chunks = {
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ tag_icon .. "  ", accent },
 				{ entry.name, accent },
 				{ components.spacing.gutter .. type_marker, "GitflowMeta" },
@@ -98,7 +106,7 @@ local function render(entries, current_branch)
 				chunks[#chunks + 1] = { components.spacing.gutter .. entry.subject, "GitflowCardTitle" }
 			end
 			if entry.sha and entry.sha ~= "" then
-				chunks[#chunks + 1] = { components.spacing.gutter .. " " .. entry.sha, "GitflowLogHash" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. " " .. entry.sha, "GitflowMeta" }
 			end
 			local line_no = B:push(chunks)
 			line_entries[line_no] = entry
@@ -107,9 +115,7 @@ local function render(entries, current_branch)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowTagEntry|nil

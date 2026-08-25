@@ -192,9 +192,7 @@ local function render_list(entries)
 	P:push_hints(B, "list")
 
 	clear_graph_highlights(M.state.bufnr)
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 -- ── Graph rendering ──────────────────────────────────────────────────
@@ -507,7 +505,7 @@ local function render_graph(graph_entries, current_branch)
 		B:raw(row.line)
 	end
 	if #rows == 0 then
-		components.empty(B, "No commits to visualize")
+		components.empty(B, "no commits to visualize")
 	end
 
 	P:push_hints(B, "graph")

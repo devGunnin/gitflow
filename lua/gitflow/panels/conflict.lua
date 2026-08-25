@@ -43,7 +43,7 @@ local P = panel.new({
 	name = "conflict",
 	title = "Gitflow Conflicts",
 	filetype = "gitflowconflict",
-	loading = "Loading conflicts…",
+	loading = "Scanning for conflicts…",
 	state = M.state,
 	keymaps = {
 		{ key = "<CR>", desc = "open resolver", essential = true, run = function()
@@ -158,7 +158,7 @@ local function render(files, operation)
 				hint = ("Press C to continue the %s, or A to abort."):format(op),
 			})
 		else
-			components.empty(B, "No conflicts", {
+			components.empty(B, "no conflicts", {
 				icon = icons.get("git_state", "staged"),
 				hint = "Your working tree has no unmerged paths.",
 			})
@@ -166,7 +166,7 @@ local function render(files, operation)
 	else
 		for _, item in ipairs(files) do
 			local line_no = B:push({
-				{ components.spacing.edge, nil },
+				{ components.spacing.gutter, nil },
 				{ icons.get("git_state", "conflict") .. "  ", "GitflowConflictRemote" },
 				{ item.path, "GitflowCardTitle" },
 				{ ("   (%d hunk%s)"):format(
@@ -177,7 +177,7 @@ local function render(files, operation)
 
 			if item.marker_error then
 				B:push({
-					{ components.spacing.indent .. components.spacing.edge, nil },
+					{ components.spacing.indent, nil },
 					{ icons.get("ui", "error") .. " ", "GitflowStateErrorIcon" },
 					{ item.marker_error, "GitflowStateError" },
 				})
@@ -189,9 +189,7 @@ local function render(files, operation)
 
 	M.state.files = files
 	M.state.active_operation = operation
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowConflictFileEntry|nil

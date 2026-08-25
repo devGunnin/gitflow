@@ -294,6 +294,50 @@ T.run_suite("E2E: Worktree Panel", {
 		T.cleanup_panels()
 	end,
 
+	["the prune command refreshes the open panel exactly once"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		with_temp_git_log(function(log_path)
+			commands.dispatch({ "worktree", "prune" }, cfg)
+			T.drain_jobs(3000)
+
+			local list_calls = 0
+			for _, line in ipairs(T.read_file(log_path)) do
+				if line:find("worktree list", 1, true) then
+					list_calls = list_calls + 1
+				end
+			end
+			T.assert_equals(
+				list_calls, 1,
+				"prune should list the worktrees exactly once"
+			)
+		end)
+
+		worktree_panel.close()
+		T.cleanup_panels()
+	end,
+
+	["no worktree row is wider than the panel"] = function()
+		local worktree_panel = require("gitflow.panels.worktree")
+		commands.dispatch({ "worktree", "list" }, cfg)
+		T.drain_jobs(3000)
+
+		local width = vim.api.nvim_win_get_width(worktree_panel.state.winid)
+		for index, line in ipairs(T.buf_lines(worktree_panel.state.bufnr)) do
+			T.assert_true(
+				vim.fn.strdisplaywidth(line) <= width,
+				("line %d wraps: %q (width %d, panel %d)"):format(
+					index, line, vim.fn.strdisplaywidth(line), width
+				)
+			)
+		end
+
+		worktree_panel.close()
+		T.cleanup_panels()
+	end,
+
 	["worktree prune dispatches git worktree prune"] = function()
 		with_temp_git_log(function(log_path)
 			commands.dispatch({ "worktree", "prune" }, cfg)

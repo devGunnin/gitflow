@@ -394,7 +394,7 @@ local function render()
 	if #filtered == 0 then
 		lines[#lines + 1] = ""
 		lines[#lines + 1] = ""
-		local no_match_msg = "No commands match the current query."
+		local no_match_msg = "no commands match the current query"
 		lines[#lines + 1] = center_text(no_match_msg, width)
 		lines[#lines + 1] = ""
 	else

@@ -28,6 +28,14 @@ local P = panel.new({
 	filetype = "gitflowreflog",
 	loading = "Loading reflog…",
 	state = M.state,
+	-- Reflog shas repeat routinely (checkout away and back, reset --soft);
+	-- the selector HEAD@{n} is the unique key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.selector) == "string" then
+			return "selector=" .. entry.selector
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "<CR>", desc = "checkout", essential = true, run = function()
 			M.checkout_under_cursor()
@@ -118,8 +126,8 @@ local function render(entries, current_branch)
 
 			local icon = action_icon(action)
 			local chunks = {
-				{ components.spacing.edge, nil },
-				{ icon ~= "" and (icon .. "  ") or "", "GitflowSectionIcon" },
+				{ components.spacing.gutter, nil },
+				{ icon ~= "" and (icon .. "  ") or "", "GitflowMeta" },
 				{ marker, "GitflowNumber" },
 				{ sha, "GitflowReflogHash" },
 				{ components.spacing.gutter, nil },
@@ -140,9 +148,7 @@ local function render(entries, current_branch)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	end
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowReflogEntry|nil

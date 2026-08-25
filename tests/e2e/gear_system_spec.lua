@@ -260,7 +260,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		-- Empty state shows the resolved affordance instead of a raw count.
 		T.assert_true(
 			T.find_line(lines, "all resolved") ~= nil
-				or T.find_line(lines, "No conflicts") ~= nil,
+				or T.find_line(lines, "no conflicts") ~= nil,
 			"should show resolved/no-conflicts state when there are none"
 		)
 

@@ -130,7 +130,7 @@ local function render_list(labels)
 
 	local line_entries = {}
 	if #labels == 0 then
-		components.empty(B, "(no labels)")
+		components.empty(B, "no labels")
 	else
 		for _, label in ipairs(page_items) do
 			local name = components.maybe_text(label.name)
@@ -140,13 +140,13 @@ local function render_list(labels)
 			-- Name line: text MUST contain "<name> (#<color>)" exactly so the
 			-- colored highlight can target the name and tests can locate it.
 			local name_line = B:push({
-				{ components.spacing.edge, nil },
-				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
+				{ components.spacing.gutter, nil },
+				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowMeta" },
 				{ name, "GitflowCardTitle" },
 				{ (" (#%s)"):format(color), "GitflowMeta" },
 			})
 			local desc_line = B:push({
-				{ components.spacing.indent .. components.spacing.gutter, nil },
+				{ components.spacing.indent, nil },
 				{ description, "GitflowMeta" },
 			})
 
@@ -172,9 +172,7 @@ local function render_list(labels)
 
 	P:push_hints(B)
 
-	if P:paint(B) then
-		M.state.line_entries = line_entries
-	else
+	if not P:paint(B, line_entries) then
 		-- A failed paint must not leave the previous rows resolvable.
 		P:clear_entry_maps()
 	end

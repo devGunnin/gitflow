@@ -91,7 +91,7 @@ end
 ---@param ctx table  { B, threads, pending }
 local function render_tree_node(node, depth, prefix, ctx)
 	local B = ctx.B
-	local indent = ui_render.spacing.edge
+	local indent = ui_render.spacing.gutter
 		.. string.rep(ui_render.spacing.gutter, depth)
 
 	local dnames = vim.deepcopy(node.dir_order)
@@ -264,7 +264,7 @@ local function push_files(B)
 		components.error_state(B, "Could not load changed files",
 			{ detail = state.files_error })
 	elseif state.files_loaded then
-		components.empty(B, "No changed files",
+		components.empty(B, "no changed files",
 			{ hint = "Nothing to review in this PR." })
 	else
 		components.loading(B, "Loading changed files\u{2026}")

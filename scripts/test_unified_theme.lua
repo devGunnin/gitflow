@@ -153,7 +153,8 @@ assert_true(
 	"wants_inline_title should be true without a window"
 )
 
--- Float: the frame chrome already carries the title, so only the rule.
+-- Float: the frame chrome already carries the title AND the border, so the
+-- panel draws no header of its own.
 local header_buf = vim.api.nvim_create_buf(false, true)
 local header_win = vim.api.nvim_open_win(header_buf, false, {
 	relative = "editor",
@@ -170,11 +171,7 @@ assert_true(
 )
 local B_float = ui_render.builder()
 components.header(B_float, "Gitflow Test", { winid = header_win })
-assert_equals(#B_float.lines, 1, "float header should push the rule only")
-assert_true(
-	ui_render.is_separator(B_float.lines[1]),
-	"float header line should be the panel rule"
-)
+assert_equals(#B_float.lines, 0, "a float header should push nothing")
 vim.api.nvim_win_close(header_win, true)
 vim.api.nvim_buf_delete(header_buf, { force = true })
 
