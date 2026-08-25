@@ -230,7 +230,7 @@ local function ensure_window(cfg)
 			if M.state.preview_winid
 				and vim.api.nvim_win_is_valid(M.state.preview_winid)
 			then
-				M.refresh_preview()
+				M.schedule_preview_refresh()
 			end
 		end,
 	})
@@ -445,6 +445,30 @@ local function ensure_preview_buffer()
 	return bufnr
 end
 
+-- Holding `j` down the todo list moves the cursor once per repeat, and the
+-- preview is a `git show` each time. The tick coalesces the burst into one
+-- fetch and also settles which result may paint: a `git show` that lands
+-- after the cursor has moved on belongs to a commit nobody is looking at.
+local PREVIEW_DEBOUNCE_MS = 90
+
+---Bump the preview generation and return the new one.
+---@return integer
+local function next_preview_tick()
+	M.state.preview_tick = (M.state.preview_tick or 0) + 1
+	return M.state.preview_tick
+end
+
+---Refresh the preview once the cursor has settled.
+function M.schedule_preview_refresh()
+	local tick = next_preview_tick()
+	vim.defer_fn(function()
+		if M.state.preview_tick ~= tick then
+			return
+		end
+		M.refresh_preview()
+	end, PREVIEW_DEBOUNCE_MS)
+end
+
 ---Fetch and display `git show` for the currently focused commit in the preview
 ---window. No-ops when the preview buffer or focused entry is absent.
 function M.refresh_preview()
@@ -457,16 +481,21 @@ function M.refresh_preview()
 	then
 		return
 	end
+	local tick = next_preview_tick()
 	git.git(
 		{ "show", "--stat", "--patch", entry.sha },
 		{},
 		function(result)
-			if not vim.api.nvim_buf_is_valid(preview_bufnr) then
+			if M.state.preview_tick ~= tick
+				or not vim.api.nvim_buf_is_valid(preview_bufnr)
+			then
 				return
 			end
 			local lines = vim.split(result.stdout or "", "\n")
 			vim.schedule(function()
-				if not vim.api.nvim_buf_is_valid(preview_bufnr) then
+				if M.state.preview_tick ~= tick
+					or not vim.api.nvim_buf_is_valid(preview_bufnr)
+				then
 					return
 				end
 				vim.api.nvim_set_option_value(
