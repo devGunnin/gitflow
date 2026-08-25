@@ -40,6 +40,9 @@ local help = require("gitflow.ui.help")
 ---@field state table|nil  the panel's own state table to adopt
 ---@field entry_maps string[]|nil  state keys holding line->entry maps
 ---                                (default `{ "line_entries" }`)
+---@field identity fun(entry: any):(string|nil)|nil  the panel's own cursor
+---   identity, for a panel whose unique key is not one of `IDENTITY_FIELDS`
+---   (a compound, or a field the default order would shadow)
 ---@field keymaps GitflowPanelKeymap[]|nil
 ---@field on_close fun()|nil  extra teardown when the window closes
 
@@ -348,6 +351,7 @@ function M.new(spec)
 		loading = spec.loading,
 		keymaps = spec.keymaps or {},
 		entry_maps = spec.entry_maps or { "line_entries" },
+		identity = spec.identity,
 		on_close = spec.on_close,
 		ns = vim.api.nvim_create_namespace("gitflow_" .. spec.name .. "_hl"),
 		state = state,
@@ -921,6 +925,10 @@ end
 -- whatever now occupies its old LINE — the user is reading one commit and
 -- ends up on another. So the cursor follows the ENTRY it was on: identify
 -- the row before the repaint, find that same row after, and move to it.
+--
+-- The identity below is INFERRED, which only holds where one of the fields
+-- is unique per visible row. A panel whose real key is a compound, or is a
+-- field the order below would shadow, declares `identity` in its spec.
 
 local IDENTITY_FIELDS = { "sha", "oid", "number", "id", "path", "name", "ref" }
 
@@ -951,6 +959,17 @@ function M.entry_identity(entry)
 	return nil
 end
 
+---This panel's identity for `entry`: its own if it declared one, else the
+---inferred default.
+---@param entry any
+---@return string|nil
+function Panel:identity_of(entry)
+	if self.identity then
+		return self.identity(entry)
+	end
+	return M.entry_identity(entry)
+end
+
 ---Identity of the entry the cursor is on right now.
 ---@return string|nil
 function Panel:cursor_identity()
@@ -965,7 +984,7 @@ function Panel:cursor_identity()
 	if not ok then
 		return nil
 	end
-	return M.entry_identity(entries[cursor[1]])
+	return self:identity_of(entries[cursor[1]])
 end
 
 ---Move the cursor back onto `identity` in the freshly rendered map.
@@ -979,13 +998,13 @@ local function restore_cursor(self, identity)
 		return
 	end
 	local ok, cursor = pcall(vim.api.nvim_win_get_cursor, self.state.winid)
-	if not ok or M.entry_identity(entries[cursor[1]]) == identity then
+	if not ok or self:identity_of(entries[cursor[1]]) == identity then
 		return
 	end
 	-- Lowest matching line: a repeated identity resolves to its first row.
 	local target
 	for line, entry in pairs(entries) do
-		if M.entry_identity(entry) == identity and (not target or line < target) then
+		if self:identity_of(entry) == identity and (not target or line < target) then
 			target = line
 		end
 	end

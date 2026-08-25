@@ -28,6 +28,14 @@ local P = panel.new({
 	filetype = "gitflowreflog",
 	loading = "Loading reflog…",
 	state = M.state,
+	-- Reflog shas repeat routinely (checkout away and back, reset --soft);
+	-- the selector HEAD@{n} is the unique key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.selector) == "string" then
+			return "selector=" .. entry.selector
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "<CR>", desc = "checkout", essential = true, run = function()
 			M.checkout_under_cursor()

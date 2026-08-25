@@ -11,6 +11,8 @@ local git_path = require("gitflow.git.path")
 ---@field unstaged boolean
 ---@field untracked boolean
 ---@field ignored boolean
+---@field optimistic boolean|nil  set only by the status panel, on a row it
+---   painted ahead of git. Nothing on such a row is confirmed.
 
 ---@class GitflowStatusGroups
 ---@field staged GitflowStatusEntry[]
@@ -18,7 +20,8 @@ local git_path = require("gitflow.git.path")
 ---@field untracked GitflowStatusEntry[]
 
 ---@class GitflowStatusRevertOpts: GitflowGitRunOpts
----@field untracked? boolean
+---@field untracked? boolean  CONFIRMED by `git status`, never an optimistic
+---   guess: on its own it authorises `git clean -f` on the path.
 
 local M = {}
 
@@ -262,7 +265,10 @@ function M.revert_file(path, opts, cb)
 				end
 
 				local output = git.output(checkout_result)
-				local should_clean = options.untracked or output_mentions_unknown_path(output)
+				-- `clean -f` deletes the file. `untracked` is a confirmed fact
+				-- from `git status` (see the opts class), not a guess.
+				local should_clean = options.untracked == true
+					or output_mentions_unknown_path(output)
 				if not should_clean then
 					cb(error_from_result(checkout_result, "checkout --"), checkout_result)
 					return

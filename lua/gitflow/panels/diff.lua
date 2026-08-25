@@ -6,7 +6,6 @@
 --- to leak: a terminal too small for the float left the buffer behind with no
 --- window to close it from.
 
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
 local icons = require("gitflow.icons")
 local panel = require("gitflow.ui.panel")

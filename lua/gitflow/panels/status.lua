@@ -38,6 +38,7 @@ local icons = require("gitflow.icons")
 ---@field opts GitflowStatusPanelOpts
 ---@field line_entries table<integer, GitflowStatusLineEntry>
 ---@field request_id integer
+---@field busy string|nil
 
 local M = {}
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
@@ -52,6 +53,9 @@ M.state = {
 	-- single `git status` call instead of re-running upstream + two git logs
 	-- on every keypress (#362).
 	last = nil,
+	-- Single-flight: what a stage/unstage in flight is doing, or nil. A second
+	-- mutation is refused rather than queued, so two guesses never compose.
+	busy = nil,
 }
 
 local P = panel.new({
@@ -60,6 +64,17 @@ local P = panel.new({
 	filetype = "gitflowstatus",
 	loading = "Loading git status…",
 	state = M.state,
+	-- A partially-staged path renders in BOTH sections, so the path alone is
+	-- not unique — the section is half the key.
+	identity = function(line_entry)
+		if type(line_entry) == "table" and line_entry.kind == "file" then
+			return ("file:%s:%s"):format(
+				line_entry.diff_staged and "staged" or "unstaged",
+				line_entry.entry and line_entry.entry.path or "?"
+			)
+		end
+		return panel.entry_identity(line_entry)
+	end,
 	keymaps = {
 		{ key = "s/u", keys = { "s", "u" }, desc = "stage/unstage",
 			essential = true, run = function(key)
@@ -438,8 +453,14 @@ end
 -- ── optimistic staging ─────────────────────────────────────────────────
 -- `git add` / `git reset` on one file almost always succeeds, and the answer
 -- is two subprocesses away. So the file moves between sections the moment the
--- key is pressed, and the real `git status` reconciles a moment later; a
--- failure puts it back and says why, so the panel never sits on a wrong list.
+-- key is pressed, and the real `git status` reconciles a moment later.
+--
+-- Three rules keep a guess from becoming a resting state:
+--   * one mutation at a time (`M.state.busy`), so guesses never compose;
+--   * the undo is per ROW, and only for a row still sitting where the guess
+--     put it — a refresh that landed meanwhile is newer truth and wins;
+--   * every path, success or failure, ends in a real `git status`.
+-- A guessed row is marked `optimistic`; destructive verbs refuse on it.
 
 ---@param entry GitflowStatusEntry
 ---@return boolean
@@ -475,6 +496,52 @@ local function with_entry(list, entry)
 	return out
 end
 
+local SECTIONS = { "staged", "unstaged", "untracked" }
+
+---Which section holds `path` right now, or nil when nothing does.
+---@param grouped GitflowStatusGroups
+---@param path string
+---@return string|nil
+local function section_of(grouped, path)
+	for _, name in ipairs(SECTIONS) do
+		for _, item in ipairs(grouped[name] or {}) do
+			if item.path == path then
+				return name
+			end
+		end
+	end
+	return nil
+end
+
+---`grouped` with `entry` present in exactly `section` and nowhere else.
+---@param grouped GitflowStatusGroups
+---@param entry GitflowStatusEntry
+---@param section string
+---@return GitflowStatusGroups
+local function place(grouped, entry, section)
+	local out = {}
+	for _, name in ipairs(SECTIONS) do
+		out[name] = without_path(grouped[name] or {}, entry.path)
+	end
+	out[section] = with_entry(out[section], entry)
+	return out
+end
+
+---True when any row in `grouped` was painted ahead of git. Closing the panel
+---mid-mutation can leave one behind; it must not seed the next open's frame.
+---@param grouped GitflowStatusGroups
+---@return boolean
+local function holds_a_guess(grouped)
+	for _, name in ipairs(SECTIONS) do
+		for _, item in ipairs(grouped[name] or {}) do
+			if item.optimistic then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 ---What `git add` leaves in the index for this path.
 ---@param entry GitflowStatusEntry
 ---@return GitflowStatusEntry
@@ -488,6 +555,7 @@ local function as_staged(entry)
 	return vim.tbl_extend("force", {}, entry, {
 		untracked = false, staged = true, unstaged = false,
 		index_status = index, worktree_status = " ",
+		optimistic = true,
 	})
 end
 
@@ -500,6 +568,7 @@ local function as_unstaged(entry)
 		return vim.tbl_extend("force", {}, entry, {
 			untracked = true, staged = false, unstaged = false,
 			index_status = "?", worktree_status = "?",
+			optimistic = true,
 		})
 	end
 	local worktree = entry.index_status
@@ -509,6 +578,7 @@ local function as_unstaged(entry)
 	return vim.tbl_extend("force", {}, entry, {
 		untracked = false, staged = false, unstaged = true,
 		index_status = " ", worktree_status = worktree,
+		optimistic = true,
 	})
 end
 
@@ -523,63 +593,112 @@ local function repaint_groups(grouped)
 		last.upstream_name, last.branch or "(unknown)")
 end
 
+---Where a moved entry lands.
+---@param moved GitflowStatusEntry
+---@param staging boolean
+---@return string
+local function target_section(moved, staging)
+	if staging then
+		return "staged"
+	end
+	return moved.untracked and "untracked" or "unstaged"
+end
+
 ---Move `entries` between the sections the pending git command will move them
 ---between, and repaint from memory.
+---
+---The undo it returns is per ROW: it restores only the paths it is asked
+---about, and only those still sitting where the guess put them. Anything a
+---later refresh has already moved is newer truth and is left alone.
 ---@param entries GitflowStatusEntry[]
 ---@param staging boolean  true for `git add`, false for `git reset`
----@return fun()|nil  the undo, or nil when there is nothing safe to guess
+---@return fun(paths: string[]|nil)|nil  the undo, or nil when there is
+---   nothing safe to guess
 local function optimistic_move(entries, staging)
 	local last = M.state.last
 	local previous = last and last.grouped
 	if type(previous) ~= "table" then
 		return nil
 	end
-	local next_groups = {
-		staged = previous.staged, unstaged = previous.unstaged,
-		untracked = previous.untracked,
-	}
+
+	local next_groups = previous
+	---@type { path: string, original: GitflowStatusEntry, from: string, to: string }[]
+	local moves = {}
 	for _, entry in ipairs(entries) do
-		-- A conflicted path is not a two-section move; leave it to git.
-		if is_unmerged(entry) then
+		local from = section_of(next_groups, entry.path)
+		-- A conflicted path is not a two-section move; leave it to git. So is
+		-- a path the panel is not currently showing.
+		if is_unmerged(entry) or not from then
 			return nil
 		end
 		local moved = staging and as_staged(entry) or as_unstaged(entry)
-		if staging then
-			next_groups = {
-				staged = with_entry(next_groups.staged, moved),
-				unstaged = without_path(next_groups.unstaged, entry.path),
-				untracked = without_path(next_groups.untracked, entry.path),
-			}
-		elseif moved.untracked then
-			next_groups = {
-				staged = without_path(next_groups.staged, entry.path),
-				unstaged = without_path(next_groups.unstaged, entry.path),
-				untracked = with_entry(next_groups.untracked, moved),
-			}
-		else
-			next_groups = {
-				staged = without_path(next_groups.staged, entry.path),
-				unstaged = with_entry(next_groups.unstaged, moved),
-				untracked = without_path(next_groups.untracked, entry.path),
-			}
-		end
+		local to = target_section(moved, staging)
+		next_groups = place(next_groups, moved, to)
+		moves[#moves + 1] = { path = entry.path, original = entry, from = from, to = to }
 	end
 	repaint_groups(next_groups)
-	return function()
-		repaint_groups(previous)
+
+	---@param paths string[]|nil  nil undoes every row this move guessed
+	return function(paths)
+		local current = M.state.last and M.state.last.grouped
+		if type(current) ~= "table" then
+			return
+		end
+		local wanted
+		if paths then
+			wanted = {}
+			for _, path in ipairs(paths) do
+				wanted[path] = true
+			end
+		end
+		local restored, changed = current, false
+		for _, move in ipairs(moves) do
+			if (not wanted or wanted[move.path])
+				and section_of(restored, move.path) == move.to
+			then
+				restored = place(restored, move.original, move.from)
+				changed = true
+			end
+		end
+		if changed then
+			repaint_groups(restored)
+		end
 	end
 end
 
+---True (and says so) when a stage/unstage is already in flight.
+---@return boolean
+local function refuse_while_busy()
+	if not M.state.busy then
+		return false
+	end
+	utils.notify(
+		("Already busy: %s — wait for it to finish"):format(M.state.busy),
+		vim.log.levels.WARN
+	)
+	return true
+end
+
+---@param label string  what is in flight, named in the busy refusal
 ---@param operation fun(cb: fun(err: string|nil))
----@param optimistic fun():(fun()|nil)|nil  paint the expected outcome now,
----   returning the undo to run if the operation fails
-local function run_status_operation(operation, optimistic)
+---@param optimistic fun():(fun(paths: string[]|nil)|nil)|nil  paint the
+---   expected outcome now, returning the undo to run if the operation fails
+local function run_status_operation(label, operation, optimistic)
+	if refuse_while_busy() then
+		return
+	end
+	M.state.busy = label
 	local revert = optimistic and optimistic() or nil
 	operation(function(err)
-		if err and revert then
-			revert()
-		end
-		if notify_if_error(err) then
+		M.state.busy = nil
+		if err then
+			if revert then
+				revert(nil)
+			end
+			utils.notify(err, vim.log.levels.ERROR)
+			-- A failed guess must never be the resting state: reconcile
+			-- against git even though nothing changed.
+			M.refresh({ files_only = true })
 			return
 		end
 		emit_post_operation()
@@ -603,7 +722,9 @@ function M.open(cfg, opts)
 	-- open-to-content gap in the plugin; the prs/issues/labels/actions panels
 	-- already open this way.
 	local last = M.state.last
-	if last and last.grouped and last.cwd == vim.fn.getcwd() then
+	if last and last.grouped and last.cwd == vim.fn.getcwd()
+		and not holds_a_guess(last.grouped)
+	then
 		render(last.grouped, last.outgoing or {}, last.incoming or {},
 			last.upstream_name, last.branch or "(unknown)")
 	end
@@ -718,7 +839,7 @@ function M.stage_under_cursor()
 		return
 	end
 
-	run_status_operation(function(done)
+	run_status_operation("Staging " .. line_entry.entry.path, function(done)
 		local entry = line_entry.entry
 		git_status.stage_file(entry.path, {}, function(err)
 			done(err)
@@ -735,7 +856,7 @@ function M.unstage_under_cursor()
 		return
 	end
 
-	run_status_operation(function(done)
+	run_status_operation("Unstaging " .. line_entry.entry.path, function(done)
 		local entry = line_entry.entry
 		git_status.unstage_file(entry.path, {}, function(err)
 			done(err)
@@ -775,37 +896,48 @@ local function batch_stage_visual(stage)
 		utils.notify("No files in selection", vim.log.levels.WARN)
 		return
 	end
+	if refuse_while_busy() then
+		return
+	end
 
 	local files = {}
 	for _, le in ipairs(entries) do
 		files[#files + 1] = le.entry
 	end
+	M.state.busy = ("%s %d files"):format(stage and "Staging" or "Unstaging", #files)
 	local revert = optimistic_move(files, stage)
 
-	local pending, failed = #entries, false
-	local function on_one(err)
+	local pending, failed = #entries, {}
+	---@param path string
+	---@param err string|nil
+	local function on_one(path, err)
 		if err then
-			failed = true
+			failed[#failed + 1] = path
 			utils.notify(err, vim.log.levels.ERROR)
 		end
 		pending = pending - 1
-		if pending == 0 then
-			-- One failure among many: put the whole selection back rather
-			-- than leave a list that is right about some rows and wrong
-			-- about others. The refresh below settles it either way.
-			if failed and revert then
-				revert()
-			end
-			emit_post_operation()
-			M.refresh({ files_only = true })
+		if pending > 0 then
+			return
 		end
+		M.state.busy = nil
+		-- Only the rows that actually failed go back; the ones that landed
+		-- stay where git put them. The refresh below settles it either way.
+		if #failed > 0 and revert then
+			revert(failed)
+		end
+		emit_post_operation()
+		M.refresh({ files_only = true })
 	end
 
 	for _, le in ipairs(entries) do
+		local path = le.entry.path
+		local function done(err)
+			on_one(path, err)
+		end
 		if stage then
-			git_status.stage_file(le.entry.path, {}, on_one)
+			git_status.stage_file(path, {}, done)
 		else
-			git_status.unstage_file(le.entry.path, {}, on_one)
+			git_status.unstage_file(path, {}, done)
 		end
 	end
 end
@@ -821,7 +953,7 @@ function M.unstage_visual()
 end
 
 function M.stage_all()
-	run_status_operation(function(done)
+	run_status_operation("Staging all files", function(done)
 		git_status.stage_all({}, function(err)
 			done(err)
 		end)
@@ -829,7 +961,7 @@ function M.stage_all()
 end
 
 function M.unstage_all()
-	run_status_operation(function(done)
+	run_status_operation("Unstaging all files", function(done)
 		git_status.unstage_all({}, function(err)
 			done(err)
 		end)
@@ -914,6 +1046,19 @@ function M.revert_under_cursor()
 	end
 
 	local entry = line_entry.entry
+	-- A discard deletes work, and `entry.untracked` alone authorises
+	-- `git clean -f`. Never resolve it against a row git has not confirmed.
+	if refuse_while_busy() then
+		return
+	end
+	if entry.optimistic then
+		utils.notify(
+			("'%s' is not confirmed yet — wait for the refresh before discarding"):format(entry.path),
+			vim.log.levels.WARN
+		)
+		return
+	end
+
 	local confirmed = ui.input.confirm(
 		("Revert all uncommitted changes for '%s'?"):format(entry.path),
 		{ choices = { "&Revert", "&Cancel" }, default_choice = 2 }

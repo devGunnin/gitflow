@@ -1125,6 +1125,57 @@ test("paint without an entry map leaves the cursor alone", function()
 	P:close()
 end)
 
+test("a panel's declared identity wins over the inferred one", function()
+	local P = panel.new({
+		name = "gitflow_test_identity", title = "Declared",
+		identity = function(entry)
+			return "custom=" .. tostring(entry.selector)
+		end,
+	})
+	assert_equals(
+		P:identity_of({ sha = "abc", selector = "HEAD@{0}" }),
+		"custom=HEAD@{0}", "the panel's own key, not the first inferred field"
+	)
+end)
+
+test("panels whose rows share an inferred key declare their real one", function()
+	-- Every case below is one where the inferred identity collides across
+	-- two rows that are genuinely different, and one of the panels maps a
+	-- destructive verb.
+	local status = panel_object("gitflow.panels.status")
+	local staged = { kind = "file", diff_staged = true, entry = { path = "a.lua" } }
+	local unstaged = { kind = "file", diff_staged = false, entry = { path = "a.lua" } }
+	assert_equals(
+		panel.entry_identity(staged), panel.entry_identity(unstaged),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		status:identity_of(staged) ~= status:identity_of(unstaged),
+		"status must tell a staged row from an unstaged one"
+	)
+
+	-- Reflog shas repeat routinely; the selector is the unique key.
+	local reflog = panel_object("gitflow.panels.reflog")
+	local head0 = { sha = "deadbee", selector = "HEAD@{0}" }
+	local head3 = { sha = "deadbee", selector = "HEAD@{3}" }
+	assert_equals(
+		panel.entry_identity(head0), panel.entry_identity(head3),
+		"the inferred identity is the collision this guards against"
+	)
+	assert_true(
+		reflog:identity_of(head0) ~= reflog:identity_of(head3),
+		"reflog must tell two entries of the same commit apart"
+	)
+
+	-- One commit blames many consecutive lines.
+	local blame = panel_object("gitflow.panels.blame")
+	assert_true(
+		blame:identity_of({ sha = "deadbee", line_number = 4 })
+			~= blame:identity_of({ sha = "deadbee", line_number = 5 }),
+		"blame must tell two lines of the same commit apart"
+	)
+end)
+
 print(("=== Results: %d passed, %d failed ==="):format(passed, failed))
 if failed > 0 then
 	os.exit(1)

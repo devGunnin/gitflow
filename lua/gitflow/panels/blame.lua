@@ -30,6 +30,14 @@ local P = panel.new({
 	filetype = "gitflowblame",
 	loading = "Computing blame…",
 	state = M.state,
+	-- One commit blames many consecutive lines, so the sha is not unique;
+	-- the file line number is.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.line_number) == "number" then
+			return "line=" .. entry.line_number
+		end
+		return panel.entry_identity(entry)
+	end,
 	keymaps = {
 		{ key = "<CR>", desc = "open commit", essential = true, run = function()
 			M.open_commit_under_cursor()
