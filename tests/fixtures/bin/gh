@@ -6,6 +6,15 @@
 # Set GITFLOW_GH_FAIL=<subcommand> to force that subcommand to fail.
 # Set GITFLOW_GH_DELAY=<seconds> to hold every answer open, so a test can slip
 # a `cd` into the round trip.
+#
+# This stub REJECTS malformed invocations (validate_api below) rather than
+# blessing them with a canned answer. #429 (`gh api …/milestones --paginate
+# -f state=all` shipping as a POST, 422'ing against real GitHub) was NOT this
+# stub blessing a wrong method: nothing ever routed that argv through it —
+# mutation-tested, only scripts/test_gh_argv_contract.lua's pinned argv caught
+# it, and the live GET is checked by scripts/test_gh_live_contract.lua. This
+# validation is still real defense-in-depth for whatever argv DOES reach it —
+# see tests/e2e/issues_panel_spec.lua's milestone-picker test for one that does.
 set -eu
 
 if [ -n "${GITFLOW_GH_LOG:-}" ]; then
@@ -39,6 +48,103 @@ FIXTURE_DIR="$SCRIPT_DIR/../gh"
 
 # Allow forcing failure for any subcommand
 fail_cmd="${GITFLOW_GH_FAIL:-}"
+
+# ── argv validation ──────────────────────────────────────────────────
+# Endpoints gitflow only ever reads. GitHub routes a non-GET here to a
+# different operation entirely (POST /milestones is create-a-milestone).
+is_read_only_endpoint() {
+  case "$1" in
+    */milestones|*/milestones\?*) return 0 ;;
+    # The repo-level collection only: completion/assignees.lua's GET. NOT
+    # */assignees generally — issues/{n}/assignees is a real, legitimately
+    # writable add-assignees POST endpoint gitflow does not call today, and
+    # this pattern must not refuse it if a future call site adds it.
+    repos/{owner}/{repo}/assignees|repos/{owner}/{repo}/assignees\?*) return 0 ;;
+    */pulls/*/files|*/pulls/*/commits) return 0 ;;
+    user|user\?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The method real `gh api` would use: explicit -X/--method wins, otherwise
+# any -f/-F/--field/--raw-field/--input makes it POST, else GET.
+api_effective_method() {
+  method=""
+  has_body=false
+  expect_method=false
+  for a in "$@"; do
+    if [ "$expect_method" = true ]; then
+      method="$a"
+      expect_method=false
+      continue
+    fi
+    case "$a" in
+      -X|--method) expect_method=true ;;
+      -f|-F|--field|--raw-field|--input) has_body=true ;;
+    esac
+  done
+  if [ -n "$method" ]; then
+    printf '%s' "$method" | tr '[:lower:]' '[:upper:]'
+  elif [ "$has_body" = true ]; then
+    printf 'POST'
+  else
+    printf 'GET'
+  fi
+}
+
+api_has_paginate() {
+  for a in "$@"; do
+    [ "$a" = "--paginate" ] && return 0
+  done
+  return 1
+}
+
+# Refuse the two shapes GitHub refuses, so a wrong method cannot pass here
+# and fail only in a user's editor.
+validate_api() {
+  endpoint="$1"
+  shift
+  method="$(api_effective_method "$@")"
+  # STRICTER than real gh here: gh only refuses --paginate when -X/--method is
+  # an EXPLICIT non-GET, and lets an IMPLICIT POST (from -f/-F with no -X)
+  # through with --paginate — that implicit-POST case is exactly how #429
+  # reached GitHub. This rule refuses both; no legitimate call is refused
+  # either way, since a genuine implicit-POST + --paginate is nonsense gh
+  # itself would never route usefully.
+  if [ "$method" != "GET" ] && api_has_paginate "$@"; then
+    echo "gh stub: --paginate on a $method request to '$endpoint'" \
+      "— pagination is GET-only; pass -X GET" >&2
+    exit 1
+  fi
+  if [ "$method" != "GET" ] && is_read_only_endpoint "$endpoint"; then
+    echo "gh stub: $method to read-only endpoint '$endpoint'" \
+      "— gh api defaults to POST when -f/-F is present; pass -X GET" >&2
+    exit 1
+  fi
+}
+
+# gh validates --reason itself and rejects the API's own `not_planned`
+# spelling; its enum is {completed|not planned|duplicate}.
+validate_close_reason() {
+  expect_reason=false
+  for a in "$@"; do
+    if [ "$expect_reason" = true ]; then
+      case "$a" in
+        completed|"not planned"|duplicate) ;;
+        *)
+          echo "invalid argument \"$a\" for \"-r, --reason\" flag:" \
+            "valid values are {completed|not planned|duplicate}" >&2
+          exit 1
+          ;;
+      esac
+      expect_reason=false
+      continue
+    fi
+    case "$a" in
+      -r|--reason) expect_reason=true ;;
+    esac
+  done
+}
 
 # ── Top-level flags ────────────────────────────────────────────────────
 if [ "$#" -ge 1 ] && [ "$1" = "--version" ]; then
@@ -165,6 +271,7 @@ case "$subcmd" in
         echo "issue comment ok"
         ;;
       close)
+        validate_close_reason "$@"
         echo "issue close ok"
         ;;
       reopen)
@@ -211,7 +318,15 @@ case "$subcmd" in
     fi
     # Route api calls based on endpoint path
     endpoint="$sub2"
+    validate_api "$endpoint" "$@"
     case "$endpoint" in
+      user|user\?*)
+        # `-q .login` is the only projection any call site asks for.
+        case " $* " in
+          *" .login "*) echo "e2e-test-user" ;;
+          *) echo '{"login": "e2e-test-user"}' ;;
+        esac
+        ;;
       *pulls/*/files)
         if [ -f "$FIXTURE_DIR/pr_files.json" ]; then
           cat "$FIXTURE_DIR/pr_files.json"
@@ -337,6 +452,26 @@ case "$subcmd" in
         ;;
       *)
         echo "gh stub: unknown workflow subcommand '$sub2'" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  # ── repo ──────────────────────────────────────────────────────────────
+  repo)
+    if [ "$fail_cmd" = "repo" ]; then
+      echo "gh repo failed" >&2
+      exit 1
+    fi
+    case "$sub2" in
+      view)
+        case " $* " in
+          *" .nameWithOwner "*) echo "devGunnin/gitflow" ;;
+          *) echo '{"nameWithOwner": "devGunnin/gitflow"}' ;;
+        esac
+        ;;
+      *)
+        echo "gh stub: unknown repo subcommand '$sub2'" >&2
         exit 1
         ;;
     esac

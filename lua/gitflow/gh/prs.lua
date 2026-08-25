@@ -278,6 +278,33 @@ local function error_from_result(result, action)
 	return ("gh pr %s failed: %s"):format(action, output)
 end
 
+---A PR number that is safe to interpolate into a REST path. `gh pr <verb>`
+---also accepts a URL or a branch name, which a path segment must not carry —
+---this is the narrower guard for the `gh api` builders below.
+---
+---Returns the failure as a message rather than raising, for any input:
+---nil, JSON `vim.NIL`, empty, or non-numeric alike. Every caller sits behind
+---an async `cb`, several reached from inside another call's callback, where a
+---raise is an uncaught error in the user's editor instead of a handled one
+---(#H1 audit).
+---@param number integer|string|nil
+---@return string|nil value
+---@return string|nil err
+local function path_number(number)
+	if number == nil or number == vim.NIL then
+		return nil, "gitflow gh pr error: number is required"
+	end
+	local value = vim.trim(tostring(number))
+	if value == "" then
+		return nil, "gitflow gh pr error: number is required"
+	end
+	if not value:match("^%d+$") then
+		return nil, ("gitflow gh pr error: a numeric PR number is required, got %q")
+			:format(value)
+	end
+	return value
+end
+
 ---@param result GitflowGitResult
 ---@return boolean
 local function is_project_cards_deprecation_error(result)
@@ -329,8 +356,14 @@ end
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
 local function edit_labels_via_api(number, add_labels, remove_labels, opts, cb)
-	local normalized_number = normalize_number(number)
-	local endpoint = ("repos/{owner}/{repo}/issues/%s/labels"):format(normalized_number)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh", "api" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/issues/%s/labels"):format(pr_number)
 
 	local function success_result(result)
 		cb(nil, result or {
@@ -924,9 +957,14 @@ function M.list_files(number, opts, cb)
 		return
 	end
 
-	local endpoint = ("repos/{owner}/{repo}/pulls/%s/files"):format(
-		normalize_number(number)
-	)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, nil, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/files"):format(pr_number)
 	-- IMPORTANT: do NOT pass `--jq` with `--paginate` for array endpoints.
 	-- gh applies the jq filter per-page, which produces concatenated
 	-- `[…][…]` output instead of a single merged array.  Without `--jq`,
@@ -958,9 +996,14 @@ function M.list_commits(number, opts, cb)
 		return
 	end
 
-	local endpoint = ("repos/{owner}/{repo}/pulls/%s/commits"):format(
-		normalize_number(number)
-	)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, nil, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/commits"):format(pr_number)
 	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
 	-- multi-page array responses.
 	gh.json({
@@ -986,9 +1029,14 @@ function M.review_comments(number, opts, cb)
 		return
 	end
 
-	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
-		normalize_number(number)
-	)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, nil, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(pr_number)
 	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
 	-- multi-page array responses.
 	gh.json({
@@ -1014,9 +1062,14 @@ function M.list_reviews(number, opts, cb)
 		return
 	end
 
-	local endpoint = ("repos/{owner}/{repo}/pulls/%s/reviews"):format(
-		normalize_number(number)
-	)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, nil, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/reviews"):format(pr_number)
 	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
 	-- multi-page array responses.
 	gh.json({
@@ -1056,7 +1109,13 @@ function M.delete_review_comment(number, comment_id, opts, cb)
 
 	-- The comment is scoped at the repo level on GitHub's API, not by PR,
 	-- but we accept the PR number for symmetry with the other helpers.
-	local _ = normalize_number(number)
+	local _, number_err = path_number(number)
+	if number_err then
+		cb(number_err, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
 	local endpoint = ("repos/{owner}/{repo}/pulls/comments/%d"):format(id)
 	gh.run({
 		"api", endpoint, "--method", "DELETE",
@@ -1096,9 +1155,14 @@ function M.create_file_comment(number, commit_id, path, body, opts, cb)
 		error("gitflow gh pr error: create_file_comment requires commit_id", 2)
 	end
 
-	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
-		normalize_number(number)
-	)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(pr_number)
 	gh.run({
 		"api", endpoint, "--method", "POST",
 		-- Raw (-f) fields are always strings: never coerce a body or path.
@@ -1134,8 +1198,22 @@ function M.reply_to_review_comment(number, review_id, body, opts, cb)
 		)
 	end
 
+	-- Reject a non-integer id outright rather than floor-truncating it to a
+	-- different comment's id.
+	local reply_to = tonumber(review_id)
+	if not reply_to or reply_to ~= math.floor(reply_to) then
+		error(
+			"gitflow gh pr error: reply_to_review_comment requires a numeric"
+				.. " comment id", 2
+		)
+	end
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, { code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" } })
+		return
+	end
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments/%d/replies"):format(
-		normalize_number(number), review_id
+		pr_number, reply_to
 	)
 	gh.run({
 		-- Raw (-f) fields are always strings: never coerce a body or path.
@@ -1182,10 +1260,14 @@ function M.submit_review(number, mode, body, comments, opts, cb)
 		event = "REQUEST_CHANGES"
 	end
 
-	local endpoint =
-		("repos/{owner}/{repo}/pulls/%s/reviews"):format(
-			normalize_number(number)
-		)
+	local pr_number, number_err = path_number(number)
+	if not pr_number then
+		cb(number_err, {
+			code = 1, signal = 0, stdout = "", stderr = number_err, cmd = { "gh" },
+		})
+		return
+	end
+	local endpoint = ("repos/{owner}/{repo}/pulls/%s/reviews"):format(pr_number)
 
 	local normalized_body = vim.trim(tostring(body or ""))
 	local payload = { event = event }

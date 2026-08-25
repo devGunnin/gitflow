@@ -786,7 +786,12 @@ test("issue close: the reason reaches gh", function()
 		local fired = capture(function()
 			issue_panel.close_under_cursor()
 		end)
-		assert_equals(fired[1], "issue close 7 --reason not_planned", "close reason argv")
+		-- gh's --reason enum is {completed|not planned|duplicate}; it rejects
+		-- the API's own `not_planned` spelling the panel still speaks. This
+		-- string compare can't distinguish one argv element "not planned"
+		-- from two ("not", "planned") — scripts/test_gh_argv_contract.lua
+		-- pins the real argv list.
+		assert_equals(fired[1], "issue close 7 --reason not planned", "close reason argv")
 	end)
 	issue_panel.close()
 	issue_panel.state.cache = nil

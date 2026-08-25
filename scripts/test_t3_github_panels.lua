@@ -704,6 +704,106 @@ for _, case in ipairs(DESTRUCTIVE_HINTS) do
 	end)
 end
 
+-- ── #H1 audit: open_view resolves the PR number before fetching comments ──
+-- `:Gitflow pr view <branch|url>` reaches open_view with free text, not a
+-- number (commands/github.lua "view" action, via first_positional_from).
+-- review_comments needs the real number for its REST path, so open_view must
+-- use the fetched pr.number — passing the raw arg through built a nonsense
+-- endpoint and, once the path-number guard stopped tolerating that
+-- silently, would have delivered/raised an error instead of loading
+-- comments at all.
+
+test("prs: open_view fetches review comments by the resolved pr.number, not the raw arg", function()
+	local mod = require("gitflow.panels.prs")
+	local gh_mod = require("gitflow.gh.prs")
+	local real_view, real_review_comments = gh_mod.view, gh_mod.review_comments
+
+	mod.close()
+	mod.state.cache = nil
+
+	local ok, err = pcall(function()
+		gh_mod.view = function(_, _, cb)
+			cb(nil, { number = 42, title = "Detail PR", state = "open", body = "" })
+		end
+		local seen_number
+		gh_mod.review_comments = function(number, _, cb)
+			seen_number = number
+			cb(nil, {})
+		end
+
+		mod.open_view("feature/x", cfg)
+
+		assert_true(
+			seen_number == 42,
+			("review_comments should be called with the resolved PR number 42,"
+				.. " got %s"):format(tostring(seen_number))
+		)
+	end)
+
+	gh_mod.view = real_view
+	gh_mod.review_comments = real_review_comments
+	mod.close()
+	mod.state.cache = nil
+	assert_true(ok, tostring(err))
+end)
+
+-- ── M2: a failed review-comments fetch must render, but not in silence ──
+-- The PR view still paints without its comments (they are secondary), but
+-- swallowing rc_err left no trace anywhere the guard could fail loudly.
+
+test("prs: open_view renders the PR and surfaces a failed review-comments fetch", function()
+	local mod = require("gitflow.panels.prs")
+	local P = panel_object("gitflow.panels.prs")
+	local gh_mod = require("gitflow.gh.prs")
+	local real_view, real_review_comments = gh_mod.view, gh_mod.review_comments
+	local real_notify = require("gitflow.utils").notify
+
+	mod.close()
+	mod.state.cache = nil
+
+	local ok, err = pcall(function()
+		gh_mod.view = function(_, _, cb)
+			cb(nil, { number = 42, title = "Detail PR", state = "open", body = "" })
+		end
+		gh_mod.review_comments = function(_, _, cb)
+			cb("comments fetch failed")
+		end
+
+		local notified = {}
+		require("gitflow.utils").notify = function(msg, level)
+			notified[#notified + 1] = { msg = msg, level = level }
+		end
+
+		mod.open_view(42, cfg)
+
+		assert_true(
+			mod.state.mode == "view",
+			"the PR view should still render despite the failed comments fetch"
+		)
+		assert_true(
+			P.state.bufnr ~= nil and buffer_text(P.state.bufnr):find("Detail PR", 1, true) ~= nil,
+			"the rendered view should contain the PR title"
+		)
+
+		local surfaced = false
+		for _, entry in ipairs(notified) do
+			if entry.msg:find("comments fetch failed", 1, true)
+				and entry.level == vim.log.levels.WARN
+			then
+				surfaced = true
+			end
+		end
+		assert_true(surfaced, "the review-comments failure must be surfaced, not swallowed")
+	end)
+
+	gh_mod.view = real_view
+	gh_mod.review_comments = real_review_comments
+	require("gitflow.utils").notify = real_notify
+	mod.close()
+	mod.state.cache = nil
+	assert_true(ok, tostring(err))
+end)
+
 print(("T3 github-panels tests: %d/%d passed"):format(passed, passed + failed))
 if failed > 0 then
 	vim.cmd("cquit! 1")

@@ -1470,6 +1470,46 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	-- ── M2: a failed review-comments fetch must render, but not in silence ─
+
+	["a failed review-comments fetch still opens the review and surfaces the error"] = function()
+		local notified = {}
+		local utils = require("gitflow.utils")
+
+		with_temporary_patches({
+			{ table = gh_prs, key = "review_comments",
+				value = function(_, _, cb)
+					cb("comments fetch failed")
+				end },
+			{ table = utils, key = "notify",
+				value = function(msg, level)
+					notified[#notified + 1] = { msg = msg, level = level }
+				end },
+		}, function()
+			open_review(42)
+			T.drain_jobs(5000)
+			T.wait_until(function()
+				return #review_panel.state.files > 0
+			end, "files should be populated after open despite the failed comments fetch")
+
+			T.assert_equals(#review_panel.state.comment_threads, 0,
+				"a failed fetch must not populate comment threads")
+
+			local surfaced = false
+			for _, entry in ipairs(notified) do
+				if entry.msg:find("comments fetch failed", 1, true)
+					and entry.level == vim.log.levels.ERROR
+				then
+					surfaced = true
+				end
+			end
+			T.assert_true(surfaced,
+				"the review-comments failure must be surfaced, not swallowed")
+		end)
+
+		cleanup_panels()
+	end,
+
 	["toggle_thread folds the replies out under the first comment"] = function()
 		open_review(42)
 		T.drain_jobs(5000)

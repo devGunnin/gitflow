@@ -281,7 +281,9 @@ function M.refresh()
 			if not file_list.is_active(request_id, number) then
 				return
 			end
-			if not rc_err and comments then
+			if rc_err then
+				rstate.notify_error("Review comments unavailable: " .. rc_err)
+			elseif comments then
 				state.comment_threads = threads.build(comments)
 			end
 			hydrate_drafts(number)
