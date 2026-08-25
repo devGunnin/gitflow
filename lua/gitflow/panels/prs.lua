@@ -487,7 +487,7 @@ render_list = function(prs)
 			if assignees ~= "-" then
 				meta[#meta + 1] =
 					{ components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" }
-				meta[#meta + 1] = { assignees, "GitflowChip" }
+				meta[#meta + 1] = { assignees, "GitflowMeta" }
 			end
 			for _, chunk in ipairs(check_summary_chunks(pr)) do
 				meta[#meta + 1] = chunk

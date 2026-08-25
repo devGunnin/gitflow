@@ -446,10 +446,10 @@ local function push_issue_card(B, issue, width, line_entries)
 	local assignees = join_assignee_names(issue)
 	if assignees ~= "-" then
 		meta[#meta + 1] = { components.separators.field .. icons.get("ui", "author") .. " ", "GitflowMeta" }
-		meta[#meta + 1] = { assignees, "GitflowChip" }
+		meta[#meta + 1] = { assignees, "GitflowMeta" }
 	end
 	meta[#meta + 1] = { components.separators.field .. "milestone: ", "GitflowMetaKey" }
-	meta[#meta + 1] = { milestone_text(issue), "GitflowChip" }
+	meta[#meta + 1] = { milestone_text(issue), "GitflowMeta" }
 	for _, chunk in ipairs(linked_pr_chunks(issue)) do
 		meta[#meta + 1] = chunk
 	end
