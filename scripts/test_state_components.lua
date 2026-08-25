@@ -55,7 +55,7 @@ end
 -- ── empty() with icon + hint → two lines, styled ─────────────────────
 do
 	local B = ui_render.builder()
-	components.empty(B, "No worktrees yet", { hint = "Press a to add a worktree." })
+	components.empty(B, "no worktrees yet", { hint = "Press a to add a worktree." })
 	assert_equals(#B.lines, 2, "empty() with hint should push text + hint lines")
 	assert_true(line_has_group(B, 1, "GitflowEmptyIcon"),
 		"enriched empty() should style the leading icon")

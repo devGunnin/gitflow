@@ -1041,6 +1041,25 @@ test("a destructive hint is drawn in the destructive colour", function()
 	assert_true(marked, "the rebase bar should carry X execute")
 end)
 
+test("a panel's first frame and its loading render say the same thing", function()
+	-- ensure_window seeds a new buffer with the spec's `loading` label, and
+	-- the panel then repaints with its own render_loading. When the two
+	-- disagree, opening the panel reads as two different states in a row.
+	for _, name in ipairs(vim.fn.glob(
+		project_root .. "/lua/gitflow/panels/*.lua", false, true
+	)) do
+		local source = table.concat(vim.fn.readfile(name), "\n")
+		local seeded = source:match('loading%s*=%s*"([^"]*)"')
+		if seeded then
+			for painted in source:gmatch('P:render_loading%(%s*"([^"]*)"') do
+				assert_equals(painted, seeded, ("%s: render_loading disagrees with the seeded first frame"):format(
+					vim.fn.fnamemodify(name, ":t")
+				))
+			end
+		end
+	end
+end)
+
 -- ── cursor identity across a repaint ───────────────────────────────────
 
 ---A throwaway panel whose render is a plain list of `{ sha = ... }` rows.

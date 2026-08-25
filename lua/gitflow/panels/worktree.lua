@@ -156,7 +156,7 @@ local function render(entries)
 
 	local line_entries = {}
 	if #entries == 0 then
-		components.empty(B, "No worktrees yet", {
+		components.empty(B, "no worktrees yet", {
 			hint = "Press a to add a worktree.",
 		})
 	else

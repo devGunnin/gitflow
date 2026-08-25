@@ -130,7 +130,7 @@ local function render_list(labels)
 
 	local line_entries = {}
 	if #labels == 0 then
-		components.empty(B, "(no labels)")
+		components.empty(B, "no labels")
 	else
 		for _, label in ipairs(page_items) do
 			local name = components.maybe_text(label.name)

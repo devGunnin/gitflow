@@ -135,7 +135,7 @@ local function render_file_list()
 	B:blank()
 
 	if #M.state.files == 0 then
-		components.empty(B, "(no changes)")
+		components.empty(B, "no changes")
 	end
 
 	for idx, f in ipairs(M.state.files) do

@@ -28,7 +28,7 @@ local P = panel.new({
 	name = "blame",
 	title = "Gitflow Blame",
 	filetype = "gitflowblame",
-	loading = "Loading blame…",
+	loading = "Computing blame…",
 	state = M.state,
 	keymaps = {
 		{ key = "<CR>", desc = "open commit", essential = true, run = function()
@@ -48,6 +48,18 @@ local function render_loading()
 	P:render_loading("Computing blame…", {
 		detail = short_path ~= "" and short_path or nil,
 	})
+end
+
+---A nothing-to-show state, distinct from a failure: the blame did not fail,
+---there is simply no file under the cursor to blame.
+---@param message string
+---@param hint string|nil
+local function render_empty(message, hint)
+	P:clear_entry_maps()
+	local B = P:begin_render()
+	components.empty(B, message, { hint = hint })
+	P:push_hints(B)
+	P:paint(B)
 end
 
 ---@param message string
@@ -101,7 +113,7 @@ local function render(entries, current_branch)
 	)
 
 	if #entries == 0 then
-		components.empty(B, "No blame data for this file", {
+		components.empty(B, "no blame data for this file", {
 			hint = "The file may be untracked or have no committed history.",
 		})
 	else
@@ -197,7 +209,7 @@ function M.refresh()
 			"No file to blame (open a file first)",
 			vim.log.levels.WARN
 		)
-		render_error("No file to blame — open a file first.")
+		render_empty("no file to blame", "Open a file, then press r.")
 		return
 	end
 

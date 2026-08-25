@@ -264,7 +264,7 @@ local function push_files(B)
 		components.error_state(B, "Could not load changed files",
 			{ detail = state.files_error })
 	elseif state.files_loaded then
-		components.empty(B, "No changed files",
+		components.empty(B, "no changed files",
 			{ hint = "Nothing to review in this PR." })
 	else
 		components.loading(B, "Loading changed files\u{2026}")

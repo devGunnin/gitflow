@@ -72,7 +72,7 @@ local P = panel.new({
 ---@return string[]
 local function to_lines(text)
 	if text == "" then
-		return { "(no diff output)" }
+		return { "no diff output" }
 	end
 	return vim.split(text, "\n", { plain = true })
 end

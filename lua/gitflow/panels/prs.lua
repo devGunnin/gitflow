@@ -441,7 +441,7 @@ render_list = function(prs)
 
 	local line_entries = {}
 	if #prs == 0 then
-		components.empty(B, "No pull requests match these filters.")
+		components.empty(B, "no pull requests match these filters")
 	else
 		local width = components.content_width(P:render_opts())
 		for _, pr in ipairs(page_items) do

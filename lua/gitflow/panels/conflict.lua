@@ -43,7 +43,7 @@ local P = panel.new({
 	name = "conflict",
 	title = "Gitflow Conflicts",
 	filetype = "gitflowconflict",
-	loading = "Loading conflicts…",
+	loading = "Scanning for conflicts…",
 	state = M.state,
 	keymaps = {
 		{ key = "<CR>", desc = "open resolver", essential = true, run = function()
@@ -158,7 +158,7 @@ local function render(files, operation)
 				hint = ("Press C to continue the %s, or A to abort."):format(op),
 			})
 		else
-			components.empty(B, "No conflicts", {
+			components.empty(B, "no conflicts", {
 				icon = icons.get("git_state", "staged"),
 				hint = "Your working tree has no unmerged paths.",
 			})

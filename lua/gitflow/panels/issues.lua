@@ -491,7 +491,7 @@ local function render_list(groups, total)
 	local grouped = M.state.group_by ~= "none"
 
 	if total == 0 then
-		components.empty(B, "No issues match these filters.")
+		components.empty(B, "no issues match these filters")
 	end
 
 	for _, group in ipairs(groups) do

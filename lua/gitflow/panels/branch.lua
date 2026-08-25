@@ -505,7 +505,7 @@ local function render_graph(graph_entries, current_branch)
 		B:raw(row.line)
 	end
 	if #rows == 0 then
-		components.empty(B, "No commits to visualize")
+		components.empty(B, "no commits to visualize")
 	end
 
 	P:push_hints(B, "graph")
