@@ -1040,7 +1040,13 @@ local function perform_mutation(opts)
 	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
 	render_current_view()
 
-	opts.call(function(err)
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
 		M.state.busy = nil
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
@@ -1053,7 +1059,13 @@ local function perform_mutation(opts)
 		if M.is_open() then
 			M.refresh()
 		end
-	end)
+	end
+	-- vim.system throws at spawn (gh off PATH, unreadable cwd) instead of
+	-- calling back; without this the busy banner wedges every verb.
+	local ok, spawn_err = pcall(opts.call, settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
 end
 
 ---@param cfg GitflowConfig

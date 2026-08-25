@@ -1111,7 +1111,13 @@ local function perform_mutation(opts)
 
 	-- The scope is handed to the call rather than left for it to remember: a
 	-- mutation that spawns again after a round trip must land in the same repo.
-	opts.call(in_scope(opts.scope), function(err)
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
 		M.state.busy = nil
 		if err then
 			if revert then
@@ -1132,7 +1138,13 @@ local function perform_mutation(opts)
 		else
 			M.refresh()
 		end
-	end)
+	end
+	-- vim.system throws at spawn (gh off PATH, unreadable cwd) instead of
+	-- calling back; without this `busy` wedges and the guess rests.
+	local ok, spawn_err = pcall(opts.call, in_scope(opts.scope), settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
 end
 
 ---Create a branch for the selected issue, prefilled with a suggested name.

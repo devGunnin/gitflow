@@ -1098,6 +1098,42 @@ test("a second press while a mutation is in flight fires nothing", function()
 	assert_true(ok, tostring(err))
 end)
 
+test("a gh call that throws at spawn releases the panel, not wedges it", function()
+	install_stubs()
+	local ok, err = pcall(function()
+		stub_confirm(1)
+		open_prs()
+		-- vim.system throws at spawn (gh off PATH, unreadable cwd) rather than
+		-- calling back; `busy` must still be released.
+		gh.run = function()
+			error("ENOENT: no such file or directory (cmd): 'gh'")
+		end
+		local fired = pcall(function()
+			pr_panel.reopen_under_cursor()
+		end)
+		assert_equals(pr_panel.state.busy, nil, "busy must be released")
+		assert_true(fired, "a spawn failure must not escape as an error")
+
+		-- The panel still takes work.
+		install_stubs()
+		stub_confirm(1)
+		local held
+		gh.run = function(args, opts, cb)
+			record(args, opts)
+			held = cb
+		end
+		local again = capture(function()
+			pr_panel.reopen_under_cursor()
+		end)
+		assert_equals(#again, 1, "a later mutation must still be accepted")
+		held({ code = 0, signal = 0, stdout = "", stderr = "", cmd = {} })
+	end)
+	pr_panel.close()
+	pr_panel.state.cache = nil
+	restore_stubs()
+	assert_true(ok, tostring(err))
+end)
+
 -- ── 5. scope: a verb never fires against another repo ────────────────────
 
 test("a detail view loaded elsewhere refuses to mutate after a cd", function()

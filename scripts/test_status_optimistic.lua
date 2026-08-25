@@ -393,6 +393,83 @@ test("a partly failed batch puts back only the rows that failed", function()
 	end)
 end)
 
+-- ── F1: the git layer throws at spawn instead of calling back ──────────
+
+--- Route stage/unstage through the REAL git layer with an unreadable cwd, so
+--- `vim.system` throws at spawn exactly as it does when git is off PATH.
+local function make_git_unspawnable()
+	local nowhere = { cwd = "/nonexistent-gitflow-spawn-dir" }
+	git.git = real.git
+	git_status.stage_file = function(path, _, cb)
+		world.calls[#world.calls + 1] = "add " .. path
+		real.stage_file(path, nowhere, cb)
+	end
+	git_status.unstage_file = function(path, _, cb)
+		world.calls[#world.calls + 1] = "reset " .. path
+		real.unstage_file(path, nowhere, cb)
+	end
+end
+
+test("a spawn failure ends on git's truth and releases the panel", function()
+	with_panel(function()
+		open_on(grouped({ unstaged = { file("a.txt", "unstaged") } }))
+
+		make_git_unspawnable()
+		cursor_to("unstaged", "a.txt")
+		local ok = pcall(status_panel.stage_under_cursor)
+
+		assert_equals(shown("staged"), "", "no guess may rest on screen")
+		assert_equals(shown("unstaged"), "a.txt", "the panel shows git's truth")
+		assert_equals(status_panel.state.busy, nil, "busy must be released")
+		assert_true(
+			notices():find("ENOENT", 1, true) ~= nil,
+			"the spawn failure must be reported: " .. notices()
+		)
+		assert_true(ok, "a spawn failure must not escape as an error")
+
+		-- git is spawnable again: the panel still takes work.
+		install_stubs()
+		world.truth = grouped({ unstaged = { file("a.txt", "unstaged") } })
+		open_on(world.truth)
+		cursor_to("unstaged", "a.txt")
+		status_panel.stage_under_cursor()
+		assert_equals(#world.calls, 1, "a later stage must still be accepted")
+		assert_equals(shown("staged"), "a.txt", "and it guesses as usual")
+	end)
+end)
+
+test("a spawn failure in a batch releases the panel too", function()
+	with_panel(function()
+		open_on(grouped({
+			unstaged = { file("a.txt", "unstaged"), file("b.txt", "unstaged") },
+		}))
+
+		vim.api.nvim_set_current_win(status_panel.state.winid)
+		local first, last
+		for line, entry in pairs(status_panel.state.line_entries) do
+			if entry.kind == "file" then
+				first = (not first or line < first) and line or first
+				last = (not last or line > last) and line or last
+			end
+		end
+		vim.api.nvim_win_set_cursor(status_panel.state.winid, { first, 0 })
+		vim.cmd("normal! V")
+		vim.api.nvim_win_set_cursor(status_panel.state.winid, { last, 0 })
+
+		make_git_unspawnable()
+		local ok = pcall(status_panel.stage_visual)
+
+		assert_equals(shown("staged"), "", "no guess may rest on screen")
+		assert_equals(shown("unstaged"), "a.txt,b.txt", "the panel shows git's truth")
+		assert_equals(status_panel.state.busy, nil, "busy must be released")
+		assert_true(
+			notices():find("ENOENT", 1, true) ~= nil,
+			"the spawn failure must be reported: " .. notices()
+		)
+		assert_true(ok, "a spawn failure must not escape as an error")
+	end)
+end)
+
 -- ── F2: a destructive verb never resolves against a guess ──────────────
 
 test("X refuses on a row git has not confirmed, and fires no discard", function()

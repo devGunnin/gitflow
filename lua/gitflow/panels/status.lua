@@ -689,7 +689,13 @@ local function run_status_operation(label, operation, optimistic)
 	end
 	M.state.busy = label
 	local revert = optimistic and optimistic() or nil
-	operation(function(err)
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
 		M.state.busy = nil
 		if err then
 			if revert then
@@ -704,7 +710,13 @@ local function run_status_operation(label, operation, optimistic)
 		emit_post_operation()
 		-- Staging doesn't change commits/upstream → cheap files-only repaint.
 		M.refresh({ files_only = true })
-	end)
+	end
+	-- vim.system throws at spawn (git off PATH, unreadable cwd) instead of
+	-- calling back; without this the guess rests and `busy` wedges forever.
+	local ok, spawn_err = pcall(operation, settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
 end
 
 ---@param cfg GitflowConfig
@@ -931,13 +943,25 @@ local function batch_stage_visual(stage)
 
 	for _, le in ipairs(entries) do
 		local path = le.entry.path
+		local answered = false
 		local function done(err)
+			if answered then
+				return
+			end
+			answered = true
 			on_one(path, err)
 		end
-		if stage then
-			git_status.stage_file(path, {}, done)
-		else
-			git_status.unstage_file(path, {}, done)
+		-- A spawn throw is this path's failure, same as a nonzero exit: without
+		-- it `pending` never reaches zero and `busy` wedges forever.
+		local ok, spawn_err = pcall(function()
+			if stage then
+				git_status.stage_file(path, {}, done)
+			else
+				git_status.unstage_file(path, {}, done)
+			end
+		end)
+		if not ok then
+			done(tostring(spawn_err))
 		end
 	end
 end
