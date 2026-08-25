@@ -282,15 +282,22 @@ end
 ---also accepts a URL or a branch name, which a path segment must not carry —
 ---this is the narrower guard for the `gh api` builders below.
 ---
----Returns the failure as a message rather than raising: every caller sits
----behind an async `cb`, several reached from inside another call's callback,
----where a raise is an uncaught error in the user's editor instead of a
----handled one (#H1 audit).
----@param number integer|string
+---Returns the failure as a message rather than raising, for any input:
+---nil, JSON `vim.NIL`, empty, or non-numeric alike. Every caller sits behind
+---an async `cb`, several reached from inside another call's callback, where a
+---raise is an uncaught error in the user's editor instead of a handled one
+---(#H1 audit).
+---@param number integer|string|nil
 ---@return string|nil value
 ---@return string|nil err
 local function path_number(number)
-	local value = tostring(normalize_number(number))
+	if number == nil or number == vim.NIL then
+		return nil, "gitflow gh pr error: number is required"
+	end
+	local value = vim.trim(tostring(number))
+	if value == "" then
+		return nil, "gitflow gh pr error: number is required"
+	end
 	if not value:match("^%d+$") then
 		return nil, ("gitflow gh pr error: a numeric PR number is required, got %q")
 			:format(value)

@@ -897,6 +897,12 @@ function M.open_view(number, cfg)
 				abandon_view(number)
 				return
 			end
+			if rc_err then
+				utils.notify(
+					"Review comments unavailable: " .. rc_err,
+					vim.log.levels.WARN
+				)
+			end
 			render_view(pr or {}, not rc_err and rc or nil, requested_cwd)
 		end)
 	end)

@@ -499,6 +499,17 @@ expect_number_guard_error("api pulls path (branch name as number)", function(cb)
 	gh_prs.list_files("feature/x", nil, cb)
 end)
 
+-- `pr.number` can arrive nil (`gh.json` returns `{}` on an empty body) or
+-- `vim.NIL` (a JSON `null` body decodes to that sentinel, not Lua nil) —
+-- both reproduce the original raise signature via `open_view`'s chain (M1).
+expect_number_guard_error("api pulls path (nil number)", function(cb)
+	gh_prs.list_files(nil, nil, cb)
+end)
+
+expect_number_guard_error("api pulls path (vim.NIL number)", function(cb)
+	gh_prs.list_files(vim.NIL, nil, cb)
+end)
+
 -- The URL/branch form itself must still work end to end for the call that
 -- accepts free text: `gh pr view` does not path-interpolate its argument.
 expect_argv("pr view (branch name)", {
