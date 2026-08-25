@@ -1,2 +1,2 @@
-lint	Lint check	Error: style violation on lua/gitflow/panels/actions.lua:42
-lint	Lint check	Expected indentation to use tabs, found spaces
+lint	Lint check	﻿2026-02-17T10:00:06.1234567Z Error: style violation on lua/gitflow/panels/actions.lua:42
+lint	Lint check	2026-02-17T10:00:07.1234567Z Expected indentation to use tabs, found spaces

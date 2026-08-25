@@ -4,6 +4,7 @@ local git = require("gitflow.git")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
 local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 
 ---@class GitflowBranchPanelState
@@ -14,29 +15,76 @@ local components = require("gitflow.ui.components")
 ---@field view_mode "list"|"graph"
 ---@field graph_lines GitflowGraphLine[]|nil
 ---@field graph_current string|nil
----@field refresh_token integer
+---@field request_id integer
 
 local M = {}
-local BRANCH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_hl")
 local GRAPH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_branch_graph_hl")
-local BRANCH_FLOAT_TITLE = "Gitflow Branches"
-local LIST_FOOTER =
-	" <CR> switch · c create · d delete · D force delete · m merge"
-	.. " · u update · r rename · . current · R refresh · f fetch · G graph · q close "
-local GRAPH_FOOTER =
-	" R refresh · f fetch · G list · q close "
 
 ---@type GitflowBranchPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	line_entries = {},
 	view_mode = "list",
 	graph_lines = nil,
 	graph_current = nil,
-	refresh_token = 0,
 }
+
+local P = panel.new({
+	name = "branch",
+	title = "Gitflow Branches",
+	filetype = "gitflowbranch",
+	loading = "Loading branches…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "switch", views = { "list" }, essential = true,
+			run = function()
+			M.switch_under_cursor()
+		end },
+		{ key = "c", desc = "create", views = { "list" }, essential = true,
+			run = function()
+			M.create_branch()
+		end },
+		{ key = "d", desc = "delete", views = { "list" }, destructive = true,
+			run = function()
+			M.delete_under_cursor(false)
+		end },
+		{ key = "D", desc = "force delete", views = { "list" }, destructive = true,
+			run = function()
+				M.delete_under_cursor(true)
+			end },
+		{ key = "m", desc = "merge", views = { "list" }, run = function()
+			M.merge_under_cursor()
+		end },
+		{ key = "u", desc = "update", views = { "list" }, run = function()
+			M.update_under_cursor()
+		end },
+		-- Not `M`: that is a vim motion, and the PR panel's merge family
+		-- claims it for auto-merge, which is destructive.
+		{ key = "e", desc = "rename", views = { "list" }, run = function()
+			M.rename_under_cursor()
+		end },
+		{ key = ".", desc = "current", views = { "list" }, run = function()
+			M.jump_to_current()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh_with_fetch()
+		end },
+		{ key = "f", desc = "fetch", run = function()
+			M.fetch_remotes()
+		end },
+		{ key = "G", desc = "graph", views = { "list" }, run = function()
+			M.toggle_view()
+		end },
+		-- Same key, view-specific wording; bound once by the entry above.
+		{ key = "G", desc = "list", views = { "graph" }, bind = false,
+			run = function()
+				M.toggle_view()
+			end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 ---@param result GitflowGitResult
 ---@param fallback string
@@ -49,14 +97,6 @@ local function result_message(result, fallback)
 	return output
 end
 
----@return string
-local function current_footer()
-	if M.state.view_mode == "graph" then
-		return GRAPH_FOOTER
-	end
-	return LIST_FOOTER
-end
-
 ---@param bufnr integer|nil
 local function clear_graph_highlights(bufnr)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -65,136 +105,23 @@ local function clear_graph_highlights(bufnr)
 	vim.api.nvim_buf_clear_namespace(bufnr, GRAPH_HIGHLIGHT_NS, 0, -1)
 end
 
----@return integer
-local function next_refresh_token()
-	M.state.refresh_token = (M.state.refresh_token or 0) + 1
-	return M.state.refresh_token
-end
-
+---A refresh belongs to the view it was started for: a result landing after
+---the user toggled views must not paint over the other one.
 ---@param token integer
 ---@param expected_view "list"|"graph"
 ---@return boolean
 local function is_current_refresh(token, expected_view)
-	if token ~= M.state.refresh_token then
-		return false
-	end
-	if M.state.view_mode ~= expected_view then
-		return false
-	end
-	local bufnr = M.state.bufnr
-	return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
-end
-
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("branch", {
-			filetype = "gitflowbranch",
-			lines = { "Loading branches..." },
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "branch",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = BRANCH_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and current_footer() or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "branch",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.switch_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "c", function()
-		M.create_branch()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "d", function()
-		M.delete_under_cursor(false)
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "D", function()
-		M.delete_under_cursor(true)
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.rename_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "R", function()
-		M.refresh_with_fetch()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "f", function()
-		M.fetch_remotes()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "m", function()
-		M.merge_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "u", function()
-		M.update_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", ".", function()
-		M.jump_to_current()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "G", function()
-		M.toggle_view()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	return P:is_active(token) and M.state.view_mode == expected_view
 end
 
 ---Push a list section (Local / Remote) into the builder.
----The header line MUST equal the bare title ("Local"/"Remote") because tests
----assert it via an exact `line == "Local"` match, so the icon/count live on the
----summary bar instead and the title gets only a styled underline beneath it.
 ---@param B GitflowRenderBuilder
+---@param icon string
 ---@param title string
 ---@param entries GitflowBranchEntry[]
 ---@param line_entries table<integer, GitflowBranchEntry>
-local function append_section(B, title, entries, line_entries)
-	B:push({ { title, "GitflowSectionTitle" } })
-	B:raw(
-		" " .. string.rep("-", math.max(8, #title + 4)),
-		"GitflowSeparator"
-	)
+local function append_section(B, icon, title, entries, line_entries)
+	components.section(B, icon, title)
 
 	if #entries == 0 then
 		components.empty(B, "(none)")
@@ -203,21 +130,21 @@ local function append_section(B, title, entries, line_entries)
 	end
 
 	for _, entry in ipairs(entries) do
-		local icon, group
+		local entry_icon, group
 		if entry.is_current then
-			icon = icons.get("branch", "current")
+			entry_icon = icons.get("branch", "current")
 			group = "GitflowBranchCurrent"
 		elseif entry.is_remote then
-			icon = icons.get("branch", "remote")
+			entry_icon = icons.get("branch", "remote")
 			group = "GitflowBranchRemote"
 		else
-			icon = icons.get("branch", "local_branch")
+			entry_icon = icons.get("branch", "local_branch")
 			group = "GitflowCardTitle"
 		end
 
 		local chunks = {
-			{ "  ", nil },
-			{ icon ~= "" and (icon .. "  ") or "", group },
+			{ components.spacing.gutter, nil },
+			{ entry_icon ~= "" and (entry_icon .. "  ") or "", group },
 			{ entry.name, group },
 		}
 		if entry.is_current then
@@ -232,10 +159,6 @@ end
 ---@param entries GitflowBranchEntry[]
 local function render_list(entries)
 	local local_entries, remote_entries = git_branch.partition(entries)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
 
 	local current_name
 	for _, entry in ipairs(entries) do
@@ -245,34 +168,31 @@ local function render_list(entries)
 		end
 	end
 
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Branches", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: branch icon + current branch + local/remote counts.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
 		{ current_name or "(detached)", "GitflowSectionTitle" },
-		{ ("     %d local"):format(#local_entries), "GitflowMeta" },
-		{ "  \u{b7}  ", "GitflowMeta" },
+		{ (components.separators.field .. "%d local"):format(#local_entries), "GitflowMeta" },
+		{ "  " .. components.glyphs.bullet .. "  ", "GitflowMeta" },
 		{ ("%d remote"):format(#remote_entries), "GitflowMeta" },
 	})
 	B:blank()
 
 	local line_entries = {}
-	append_section(B, "Local", local_entries, line_entries)
-	append_section(B, "Remote", remote_entries, line_entries)
+	append_section(
+		B, icons.get("branch", "local_branch"), "Local", local_entries, line_entries
+	)
+	append_section(
+		B, icons.get("branch", "remote"), "Remote", remote_entries, line_entries
+	)
 
-	ui.buffer.update("branch", B.lines)
-	M.state.line_entries = line_entries
+	P:push_hints(B, "list")
 
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	clear_graph_highlights(bufnr)
-	B:apply(bufnr, BRANCH_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	clear_graph_highlights(M.state.bufnr)
+	P:paint(B, line_entries)
 end
 
 -- ── Graph rendering ──────────────────────────────────────────────────
@@ -511,7 +431,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 				local hl_group = ch == GRAPH_NODE
 					and "GitflowGraphNode"
 					or lane_group_for_column(lane_idx)
-				vim.api.nvim_buf_add_highlight(
+				ui_render.highlight(
 					bufnr,
 					GRAPH_HIGHLIGHT_NS,
 					hl_group,
@@ -523,7 +443,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 		end
 
 		if row.hash_start and row.hash_end then
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr,
 				GRAPH_HIGHLIGHT_NS,
 				"GitflowGraphHash",
@@ -534,7 +454,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 		end
 
 		if row.subject_start and row.subject_end then
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr,
 				GRAPH_HIGHLIGHT_NS,
 				"GitflowGraphSubject",
@@ -553,7 +473,7 @@ local function apply_graph_highlights(bufnr, rows, first_row_line)
 			else
 				hl_group = lane_group_for_text(badge.text)
 			end
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr,
 				GRAPH_HIGHLIGHT_NS,
 				hl_group,
@@ -569,40 +489,34 @@ end
 ---@param graph_entries GitflowGraphLine[]
 ---@param current_branch string|nil
 local function render_graph(graph_entries, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-
 	local rows, lane_width = build_graph_rows(graph_entries, current_branch)
-	local lines = ui_render.panel_header("Branch Flowchart", render_opts)
-	local column_line = #lines + 1
+	local B = P:begin_render("Branch Flowchart")
 	local lane_header = pad_graph_text("Flow", lane_width)
-	lines[#lines + 1] = ("  %s  Commit    Message / Branches"):format(lane_header)
-	lines[#lines + 1] = ui_render.separator(render_opts)
+	B:raw(
+		("%s%s  Commit    Message / Branches"):format(
+			components.spacing.gutter, lane_header
+		),
+		"GitflowTitle"
+	)
+	B:raw(ui_render.separator(P:render_opts()), "GitflowSeparator")
 
-	local first_row_line = #lines + 1
+	local first_row_line = B:count() + 1
 	for _, row in ipairs(rows) do
-		lines[#lines + 1] = row.line
+		B:raw(row.line)
 	end
 	if #rows == 0 then
-		lines[#lines + 1] = ui_render.empty("No commits to visualize")
+		components.empty(B, "no commits to visualize")
 	end
 
-	ui.buffer.update("branch", lines)
+	P:push_hints(B, "graph")
+
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+	clear_graph_highlights(bufnr)
+	if not P:paint(B) then
 		return
 	end
-	clear_graph_highlights(bufnr)
-
-	ui_render.apply_panel_highlights(bufnr, BRANCH_HIGHLIGHT_NS, lines, {
-		entry_highlights = {
-			[column_line] = "GitflowHeader",
-		},
-	})
 
 	if #rows > 0 then
 		apply_graph_highlights(bufnr, rows, first_row_line)
@@ -628,13 +542,16 @@ function M.refresh()
 		M.refresh_graph()
 		return
 	end
-	local refresh_token = next_refresh_token()
+	local refresh_token = P:next_request()
 	git_branch.list({}, function(err, entries)
 		if not is_current_refresh(refresh_token, "list") then
 			return
 		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
+			P:render_error("Could not list branches", {
+				detail = err, hint = "r retries", view = "list",
+			})
 			return
 		end
 		render_list(entries or {})
@@ -642,13 +559,16 @@ function M.refresh()
 end
 
 function M.refresh_graph()
-	local refresh_token = next_refresh_token()
+	local refresh_token = P:next_request()
 	git_branch.graph({}, function(err, graph_entries, current_branch)
 		if not is_current_refresh(refresh_token, "graph") then
 			return
 		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
+			P:render_error("Could not build the branch graph", {
+				detail = err, hint = "r retries", view = "graph",
+			})
 			return
 		end
 		M.state.graph_lines = graph_entries
@@ -657,11 +577,18 @@ function M.refresh_graph()
 	end)
 end
 
+---Fetch, then repaint the open panel in place (#427): seeing branches the
+---fetch just brought in must never need a close/reopen.
 ---@param show_success_message boolean
 local function fetch_then_refresh(show_success_message)
 	git_branch.fetch(nil, {}, function(err, result)
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
+			if P:is_open() then
+				P:render_error("Fetch failed", {
+					detail = err, hint = "r retries", view = M.state.view_mode,
+				})
+			end
 			return
 		end
 		if show_success_message then
@@ -670,7 +597,9 @@ local function fetch_then_refresh(show_success_message)
 				vim.log.levels.INFO
 			)
 		end
-		M.refresh()
+		if P:is_open() then
+			M.refresh()
+		end
 	end)
 end
 
@@ -689,30 +618,16 @@ function M.toggle_view()
 		M.state.view_mode = "list"
 	end
 
-	-- Update float footer if applicable
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		local ok, win_cfg = pcall(vim.api.nvim_win_get_config, M.state.winid)
-		if ok and win_cfg and win_cfg.relative and win_cfg.relative ~= "" then
-			local cfg = M.state.cfg
-			local footer_enabled = cfg
-				and cfg.ui
-				and cfg.ui.float
-				and cfg.ui.float.footer
-			if footer_enabled and vim.fn.has("nvim-0.10") == 1 then
-				pcall(vim.api.nvim_win_set_config, M.state.winid, {
-					footer = current_footer(),
-				})
-			end
-		end
-	end
-
+	P:refresh_footer(M.state.view_mode)
 	M.refresh()
 end
 
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg, { view = M.state.view_mode }) then
+		return
+	end
 	M.refresh()
 end
 
@@ -910,7 +825,13 @@ function M.delete_under_cursor(force)
 
 		local is_merged = merged and merged[entry.name] == true
 		if is_merged then
-			run_delete(false)
+			local confirmed = ui.input.confirm(
+				("Delete merged branch '%s'?"):format(entry.name),
+				{ choices = { "&Delete", "&Cancel" }, default_choice = 2 }
+			)
+			if confirmed then
+				run_delete(false)
+			end
 			return
 		end
 
@@ -1031,30 +952,16 @@ function M.merge_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("branch")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("branch")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.view_mode = "list"
 	M.state.graph_lines = nil
 	M.state.graph_current = nil
-	M.state.refresh_token = (M.state.refresh_token or 0) + 1
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

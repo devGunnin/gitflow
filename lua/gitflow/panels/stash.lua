@@ -4,7 +4,7 @@ local git = require("gitflow.git")
 local git_stash = require("gitflow.git.stash")
 local git_branch = require("gitflow.git.branch")
 local status_panel = require("gitflow.panels.status")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 local icons = require("gitflow.icons")
 
@@ -15,17 +15,40 @@ local icons = require("gitflow.icons")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local STASH_FLOAT_TITLE = "Gitflow Stash"
-local STASH_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_stash_hl")
-local STASH_FLOAT_FOOTER = " A apply · P pop · D drop · S stash · r refresh · q close "
 
 ---@type GitflowStashPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	cfg = nil,
 }
+
+local P = panel.new({
+	name = "stash",
+	title = "Gitflow Stash",
+	filetype = "gitflowstash",
+	loading = "Loading stash list…",
+	state = M.state,
+	keymaps = {
+		{ key = "A", desc = "apply", essential = true, run = function()
+			M.apply_under_cursor()
+		end },
+		{ key = "P", desc = "pop", run = function()
+			M.pop_under_cursor()
+		end },
+		{ key = "D", desc = "drop", destructive = true, run = function()
+			M.drop_under_cursor()
+		end },
+		{ key = "S", desc = "stash", run = function()
+			M.push_with_prompt()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 local function refresh_status_panel_if_open()
 	if status_panel.is_open() then
@@ -33,94 +56,20 @@ local function refresh_status_panel_if_open()
 	end
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("stash", {
-			filetype = "gitflowstash",
-			lines = { "Loading stash list..." },
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "stash",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = STASH_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STASH_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "stash",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "P", function()
-		M.pop_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "D", function()
-		M.drop_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "A", function()
-		M.apply_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "S", function()
-		M.push_with_prompt()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@param entries GitflowStashEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Stash", render_opts)
+	local B = P:begin_render()
 
 	local stash_icon = icons.get("git_state", "staged")
 
 	-- Stash count + current-branch summary bar.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ stash_icon .. "  ", "GitflowSectionIcon" },
 		{ ("%d stash entr%s"):format(#entries, #entries == 1 and "y" or "ies"), "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -135,28 +84,19 @@ local function render(entries, current_branch)
 			-- The ref chunk ("stash@{0}") carries GitflowStashRef so the span
 			-- lands exactly on the ref portion; the description follows it dim.
 			local line_no = B:push({
-				{ " ", nil },
-				{ stash_icon .. "  ", "GitflowSectionIcon" },
+				{ components.spacing.gutter, nil },
+				{ stash_icon .. "  ", "GitflowMeta" },
 				{ entry.ref, "GitflowStashRef" },
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 				{ components.maybe_text(entry.description), "GitflowCardTitle" },
 			})
 			line_entries[line_no] = entry
 		end
 	end
 
-	B:blank()
-	components.branch_footer(B, current_branch)
+	P:push_hints(B)
 
-	ui.buffer.update("stash", B.lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, STASH_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowStashEntry|nil
@@ -191,7 +131,9 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -223,10 +165,19 @@ function M.push_with_prompt()
 end
 
 function M.refresh()
+	local request_id = P:next_request()
 	git_branch.current({}, function(_, branch)
+		if not P:is_active(request_id) then
+			return
+		end
 		git_stash.list({}, function(err, entries)
+			if not P:is_active(request_id) then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				P:render_error("Could not list stash entries", { detail = err,
+					hint = "r retries" })
 				return
 			end
 			render(entries, branch or "(unknown)")
@@ -277,7 +228,10 @@ function M.drop_under_cursor()
 		return
 	end
 
-	local confirmed = vim.fn.confirm(("Drop %s?"):format(entry.ref), "&Yes\n&No", 2) == 1
+	local confirmed = ui.input.confirm(
+		("Drop %s?"):format(entry.ref),
+		{ choices = { "&Drop", "&Cancel" }, default_choice = 2 }
+	)
 	if not confirmed then
 		return
 	end
@@ -293,26 +247,13 @@ function M.drop_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("stash")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("stash")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

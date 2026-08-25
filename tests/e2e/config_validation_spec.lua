@@ -6,8 +6,20 @@
 local config = require("gitflow.config")
 local highlights = require("gitflow.highlights")
 
-local DARK_ACCENT = tonumber("56B6C2", 16)
-local LIGHT_ACCENT = tonumber("0E7490", 16)
+local DARK_SEPARATOR = tonumber("3E4452", 16)
+local LIGHT_SEPARATOR = tonumber("C8CCD4", 16)
+
+---The accent gitflow should be showing: the colorscheme's Special foreground
+---when it defines one, else the background palette's fallback hex.
+---@param fallback string
+---@return integer|nil
+local function expected_accent(fallback)
+	local attrs = vim.api.nvim_get_hl(0, { name = "Special", link = false })
+	if type(attrs) == "table" and type(attrs.fg) == "number" then
+		return attrs.fg
+	end
+	return tonumber(fallback, 16)
+end
 
 ---@param group string
 ---@return integer|nil
@@ -53,17 +65,27 @@ T.run_suite("config_validation_spec", {
 		with_background("dark", function()
 			highlights.setup({})
 			T.assert_equals(
-				group_fg("GitflowBorder"),
-				DARK_ACCENT,
-				"dark background should use the dark accent"
+				group_fg("GitflowSeparator"),
+				DARK_SEPARATOR,
+				"dark background should use the dark chrome palette"
 			)
-
-			-- OptionSet fires here; without the autocmd the accent stays dark.
-			vim.o.background = "light"
 			T.assert_equals(
 				group_fg("GitflowBorder"),
-				LIGHT_ACCENT,
-				"background=light should recompute to the light accent"
+				expected_accent("56B6C2"),
+				"dark accent should follow the colorscheme's Special"
+			)
+
+			-- OptionSet fires here; without the autocmd the palette stays dark.
+			vim.o.background = "light"
+			T.assert_equals(
+				group_fg("GitflowSeparator"),
+				LIGHT_SEPARATOR,
+				"background=light should recompute to the light chrome palette"
+			)
+			T.assert_equals(
+				group_fg("GitflowBorder"),
+				expected_accent("0E7490"),
+				"light accent should follow the colorscheme's Special"
 			)
 		end)
 	end,
@@ -177,10 +199,23 @@ T.run_suite("config_validation_spec", {
 		)
 	end,
 
+	["a sub-second actions.watch_interval is rejected"] = function()
+		-- `10` reads as seconds but is milliseconds: 100 GitHub calls a second.
+		local err = setup_error({ actions = { watch_interval = 10 } })
+		T.assert_contains(err, "watch_interval", "error should name the option")
+		T.assert_contains(err, "1000", "error should state the floor")
+
+		local cfg = config.setup({ actions = { watch_interval = 1000 } })
+		T.assert_equals(
+			cfg.actions.watch_interval, 1000,
+			"the floor itself must stay accepted"
+		)
+	end,
+
 	["duplicate keybindings are rejected"] = function()
-		local err = setup_error({ keybindings = { commit = "gs" } })
+		local err = setup_error({ keybindings = { commit = "<leader>gs" } })
 		T.assert_contains(err, "duplicate keybindings", "error should name the failure")
-		T.assert_contains(err, "gs", "error should name the colliding mapping")
+		T.assert_contains(err, "<leader>gs", "error should name the colliding mapping")
 		T.assert_contains(err, "commit", "error should name the colliding action")
 		T.assert_contains(err, "status", "error should name the shadowed action")
 	end,

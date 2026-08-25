@@ -285,8 +285,8 @@ T.run_suite("Interactive Rebase Panel", {
 		)
 		T.assert_equals(
 			cfg.keybindings.rebase_interactive,
-			"gI",
-			"default keybinding should be gI"
+			"<leader>gI",
+			"default keybinding should be <leader>gI"
 		)
 	end,
 

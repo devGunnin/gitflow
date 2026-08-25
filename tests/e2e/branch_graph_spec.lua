@@ -387,7 +387,10 @@ T.run_suite("Branch Graph Visualization", {
 			local has_local_section = false
 			local has_graph_header = false
 			for _, line in ipairs(lines) do
-				if line == "Local" then
+				-- Standard section header: the single-column edge indent, an
+				-- optional icon, then the title -- not any line ending in
+				-- "Local" (a branch named feature/Local sits on a gutter).
+				if line:match("^ %S*%s*Local$") then
 					has_local_section = true
 				end
 				if line:find("Flow", 1, true) and line:find("Commit", 1, true) then
@@ -737,7 +740,7 @@ T.run_suite("Branch Graph Visualization", {
 
 		local bufnr = ui.buffer.get("branch")
 		T.assert_keymaps(bufnr, {
-			"<CR>", "c", "d", "D", "r", "R", "f", "G", "u", "q",
+			"<CR>", "c", "d", "D", "r", "e", "f", "G", "u", "q", "?",
 		})
 
 		close_panel()
@@ -797,7 +800,7 @@ T.run_suite("Branch Graph Visualization", {
 
 			local before_lines = T.read_file(log_path)
 			vim.api.nvim_set_current_win(winid)
-			T.feedkeys("R")
+			T.feedkeys("r")
 			T.drain_jobs(3000)
 
 			local after_lines = T.read_file(log_path)
@@ -814,11 +817,11 @@ T.run_suite("Branch Graph Visualization", {
 
 			T.assert_true(
 				fetch_line ~= nil,
-				"R refresh should run git fetch"
+				"r refresh should run git fetch"
 			)
 			T.assert_true(
 				graph_line ~= nil,
-				"R refresh should redraw graph"
+				"r refresh should redraw graph"
 			)
 			T.assert_true(
 				fetch_line < graph_line,

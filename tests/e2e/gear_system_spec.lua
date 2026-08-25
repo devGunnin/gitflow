@@ -223,7 +223,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 
 		local bufnr = ui.buffer.get("conflict")
 		T.assert_true(bufnr ~= nil, "conflict buffer should exist")
-		T.assert_keymaps(bufnr, { "<CR>", "r", "R", "C", "A", "q" })
+		T.assert_keymaps(bufnr, { "<CR>", "r", "C", "X", "q", "?" })
 
 		T.cleanup_panels()
 	end,
@@ -260,7 +260,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		-- Empty state shows the resolved affordance instead of a raw count.
 		T.assert_true(
 			T.find_line(lines, "all resolved") ~= nil
-				or T.find_line(lines, "No conflicts") ~= nil,
+				or T.find_line(lines, "no conflicts") ~= nil,
 			"should show resolved/no-conflicts state when there are none"
 		)
 
@@ -436,7 +436,7 @@ T.run_suite("E2E: Conflict Resolution UI", {
 		-- working; navigation is ]c/[c (mnemonic: conflict).
 		T.assert_keymaps(
 			bufnr,
-			{ "co", "ct", "cb", "cB", "ca", "ce", "cr", "cx", "]c", "[c", "q" }
+			{ "co", "ct", "cb", "cB", "ca", "ce", "cr", "cD", "c?", "]c", "[c", "q" }
 		)
 
 		pcall(vim.fn.delete, path)

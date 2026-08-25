@@ -54,14 +54,14 @@ require("gitflow").setup({
   keybindings = {
     help       = "<leader>gh",
     open       = "<leader>go",
-    refresh    = "gr",
+    refresh    = "<leader>gz",
     close      = "<leader>gq",
-    status     = "gs",
-    commit     = "gc",
+    status     = "<leader>gs",
+    commit     = "<leader>gc",
     push       = "<leader>gP",
     pull       = "<leader>gp",
     fetch      = "<leader>gf",
-    diff       = "gD",
+    diff       = "<leader>gd",
     log        = "gl",
     stash      = "gS",
     stash_push = "gZ",
@@ -78,6 +78,7 @@ require("gitflow").setup({
   },
   ui = {
     default_layout = "split",   -- "split" or "float"
+    separator_width = 0,        -- fixed panel-rule width; 0 adapts to the window
     split = {
       orientation = "vertical", -- "vertical" or "horizontal"
       size = 50,
@@ -127,6 +128,9 @@ require("gitflow").setup({
     delay       = 200,          -- debounce (ms) before blaming the cursor line
     date_format = "%Y-%m-%d",   -- os.date() format for the author date
   },
+  actions = {
+    watch_interval = 10000,     -- ms between polls while watching a run; min 1000
+  },
 })
 ```
 
@@ -134,7 +138,9 @@ require("gitflow").setup({
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `keybindings.<action>` | `string` | see above | Normal-mode mapping for each action |
+| `keybindings` | `table` \| `false` | see above | Global mappings; `false` installs none of them |
+| `keybindings.<action>` | `string` \| `false` | see above | Normal-mode mapping for an action; `false` disables just that one |
+| `panel_keybindings.<panel>.<key>` | `string` \| `false` | `{}` | Move (or, with `false`, remove) a panel-local key |
 | `ui.default_layout` | `string` | `"split"` | Panel layout: `"split"` or `"float"` |
 | `ui.split.orientation` | `string` | `"vertical"` | `"vertical"` or `"horizontal"` |
 | `ui.split.size` | `number` | `50` | Column/row count for split panels |
@@ -164,6 +170,7 @@ require("gitflow").setup({
 | `inline_blame.auto` | `boolean` | `false` | Automatically show inline blame in every file buffer |
 | `inline_blame.delay` | `integer` | `200` | Debounce in ms before blaming the cursor line |
 | `inline_blame.date_format` | `string` | `"%Y-%m-%d"` | `os.date()` format for the author date |
+| `actions.watch_interval` | `integer` | `10000` | Poll interval (ms) for the actions panel's live-watch (`w`); minimum `1000` |
 
 ### Configuration Validation
 
@@ -248,12 +255,17 @@ All commands use the `:Gitflow` prefix.
 
 ## Default Keybindings
 
-See [KEYBINDINGS.md](KEYBINDINGS.md) for the complete keybinding reference
-organized by context, including all panel-local bindings, override
-instructions, keybindings that collide with common plugin/LSP setups (e.g.
-`gc` vs vim-commentary — see its "Known Conflicts" section), and how the
-same key can mean different things across panels ("Cross-Panel
-Inconsistencies").
+Press `?` in any gitflow panel for a scrollable list of that panel's keys, or
+`:Gitflow help` for the commands and global mappings — both are generated from
+the bindings themselves, so they cannot go stale.
+
+[KEYBINDINGS.md](KEYBINDINGS.md) is the full written reference: every
+panel-local binding, the cross-panel key rules, how to move or disable any of
+them, and a migration table for everything v2 changed.
+
+Gitflow claims no bare `g` sequence that Neovim itself defines, so `gc`, `gr`,
+`gs`, `gD` and friends keep working. `r` is refresh in every panel, `q` closes,
+and no key that destroys something in one panel is a harmless one in another.
 
 ### Global Mappings
 
@@ -261,14 +273,14 @@ Inconsistencies").
 | --- | --- |
 | `<leader>gh` | Help |
 | `<leader>go` | Open main panel |
-| `gr` | Refresh |
+| `<leader>gz` | Refresh |
 | `<leader>gq` | Close panels |
-| `gs` | Status panel |
-| `gc` | Commit |
+| `<leader>gs` | Status panel |
+| `<leader>gc` | Commit |
 | `<leader>gP` | Push |
 | `<leader>gp` | Pull |
 | `<leader>gf` | Fetch |
-| `gD` | Diff |
+| `<leader>gd` | Diff |
 | `gl` | Log |
 | `gS` | Stash list |
 | `gZ` | Stash push |
@@ -280,8 +292,16 @@ Inconsistencies").
 | `<leader>gi` | Issues |
 | `<leader>gr` | Pull requests |
 | `<leader>gL` | Labels |
+| `<leader>gR` | Reset panel |
 | `<leader>gm` | Conflicts |
-| `gP` | Command palette |
+| `<leader>gx` | Command palette |
+| `<leader>gv` | Revert panel |
+| `<leader>gt` | Tag list |
+| `<leader>gF` | Reflog panel |
+| `gC` | Cherry-pick panel |
+| `<leader>gI` | Rebase panel |
+| `gA` | Actions panel |
+| `<leader>gn` | Notification center |
 | `<leader>gG` | Toggle PR review mode |
 
 ## Statusline
@@ -323,7 +343,6 @@ require("gitflow").setup({
     GitflowBorder = { fg = "#98C379" },
     GitflowTitle  = { fg = "#98C379", bold = true },
     -- Or switch accent groups to colorscheme links
-    GitflowHeader = { link = "TabLineSel" },
     GitflowFooter = { link = "Comment" },
   },
 })

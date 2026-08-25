@@ -49,6 +49,37 @@ M.state = {
 ---@type GitflowCommandArea[]
 local registered_areas = {}
 
+---Help sections for `:Gitflow help`: every subcommand with its description,
+---and every global mapping the current config installs. Generated, so a
+---subcommand or a default that exists is listed and one that does not is not.
+---@param cfg GitflowConfig
+---@return table[]
+function M.help_sections(cfg)
+	local keybindings = type(cfg.keybindings) == "table" and cfg.keybindings or {}
+
+	local commands_rows = {}
+	for _, name in ipairs(utils.sorted_keys(M.subcommands)) do
+		commands_rows[#commands_rows + 1] = {
+			key = name,
+			desc = M.subcommands[name].description,
+		}
+	end
+
+	local mapping_rows = {}
+	for _, action in ipairs(utils.sorted_keys(keybindings)) do
+		local mapping = keybindings[action]
+		if mapping ~= false then
+			mapping_rows[#mapping_rows + 1] = { key = mapping, desc = action }
+		end
+	end
+
+	local sections = { { label = ":Gitflow", rows = commands_rows } }
+	if #mapping_rows > 0 then
+		sections[#sections + 1] = { label = "GLOBAL KEYS", rows = mapping_rows }
+	end
+	return sections
+end
+
 ---@return string
 function M.usage()
 	local lines = { "Gitflow usage: :Gitflow <subcommand>", "", "Subcommands:" }
@@ -62,11 +93,12 @@ end
 ---@return GitflowPaletteEntry[]
 function M.palette_entries(cfg)
 	local entries = {}
+	local keybindings = type(cfg.keybindings) == "table" and cfg.keybindings or {}
 	for _, name in ipairs(utils.sorted_keys(M.subcommands)) do
 		local subcommand = M.subcommands[name]
-		local keybinding = cfg.keybindings[name]
+		local keybinding = keybindings[name] or nil
 		if not keybinding and name == "conflicts" then
-			keybinding = cfg.keybindings.conflict
+			keybinding = keybindings.conflict or nil
 		end
 
 		local category = subcommand.category
@@ -168,9 +200,10 @@ end
 ---@return string
 function M.dispatch(args, cfg)
 	if #args == 0 then
-		local usage = M.usage()
-		shared.show_info(usage)
-		return usage
+		-- The same buffer `:Gitflow help` opens: the subcommand list outgrew
+		-- the message area, and half-migrating left bare `:Gitflow` on the old
+		-- notification.
+		return M.dispatch({ "help" }, cfg)
 	end
 
 	local subcommand_name = args[1]
@@ -317,9 +350,15 @@ function M.setup(cfg)
 		notifications = "<Plug>(GitflowNotifications)",
 		pr_review = "<Plug>(GitflowPrReview)",
 	}
+	-- `<Plug>` targets above are inert until something maps to them, so they
+	-- are always defined: the opt-out only withholds the default mappings,
+	-- leaving every action reachable by a user's own `<Plug>` map.
+	if current.keybindings == false then
+		return
+	end
 	for action, mapping in pairs(current.keybindings) do
 		local plug = key_to_plug[action]
-		if plug then
+		if plug and mapping ~= false then
 			vim.keymap.set("n", mapping, plug, { remap = true, silent = true })
 		end
 	end

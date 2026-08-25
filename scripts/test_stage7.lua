@@ -88,7 +88,7 @@ local defaults = config.defaults()
 assert_equals(defaults.sync.pull_strategy, "rebase", "default pull strategy should be rebase")
 assert_equals(
 	defaults.keybindings.palette,
-	"gP",
+	"<leader>gx",
 	"default palette keybinding should match documented default"
 )
 assert_deep_equals(

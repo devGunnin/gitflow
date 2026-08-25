@@ -72,59 +72,91 @@ local cw_cfg = ui_render.content_width()
 assert_equals(cw_cfg, 60, "content_width() should use ui.separator_width when set")
 local sep_cfg = ui_render.separator()
 assert_equals(#sep_cfg, 60 * char_len, "separator() should use ui.separator_width when set")
+
+-- A fixed ui.separator_width is honored even with a real window present --
+-- "fixed" would otherwise only ever apply on the windowless fallback path.
+local win_buf = vim.api.nvim_create_buf(false, true)
+vim.cmd("vsplit")
+local win_id = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(win_id, win_buf)
+vim.api.nvim_win_set_width(win_id, 90)
+local cw_windowed_fixed = ui_render.content_width({ winid = win_id })
+assert_equals(
+	cw_windowed_fixed, 60,
+	"a fixed ui.separator_width should win over the window's actual width"
+)
+vim.api.nvim_win_close(win_id, true)
+vim.api.nvim_buf_delete(win_buf, { force = true })
+
+-- A fixed ui.separator_width wider than the window is clamped to it -- it
+-- must never blow past what the window can actually show.
+cfg.current.ui.separator_width = 200
+local narrow_buf = vim.api.nvim_create_buf(false, true)
+vim.cmd("vsplit")
+local narrow_win = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(narrow_win, narrow_buf)
+vim.api.nvim_win_set_width(narrow_win, 40)
+local cw_clamped = ui_render.content_width({ winid = narrow_win })
+assert_true(
+	cw_clamped <= 40,
+	"a fixed ui.separator_width wider than the window should clamp to the window width"
+)
+vim.api.nvim_win_close(narrow_win, true)
+vim.api.nvim_buf_delete(narrow_buf, { force = true })
+
 cfg.current.ui.separator_width = saved
 
--- title() returns text as-is
-assert_equals(ui_render.title("Gitflow Status"), "Gitflow Status", "title should return text as-is")
+-- ui.separator_width validation rejects non-integers, accepts 0 and positive
+-- integers.
+local function with_separator_width(value, fn)
+	local before = cfg.current.ui.separator_width
+	cfg.current.ui.separator_width = value
+	local ok, err = pcall(fn)
+	cfg.current.ui.separator_width = before
+	return ok, err
+end
 
--- section() returns header and separator
-local header, section_sep = ui_render.section("Staged Changes", 5)
-assert_equals(header, "Staged Changes (5)", "section header should include count")
-assert_true(section_sep:find("─") ~= nil, "section separator should be a separator line")
-
--- section() without count
-local header_no_count = ui_render.section("Details")
-assert_equals(header_no_count, "Details", "section header without count should be plain text")
-
--- empty() default
-assert_equals(ui_render.empty(), "  (none)", "empty() default should be indented '(none)'")
-
--- empty() with custom text
-assert_equals(ui_render.empty("no items"), "  no items", "empty() should indent custom text")
-
--- entry() indents text
-assert_equals(ui_render.entry("file.txt"), "  file.txt", "entry should indent with 2 spaces")
-
--- footer() returns text as-is
-assert_equals(
-	ui_render.footer("q quit  r refresh"),
-	"q quit  r refresh",
-	"footer should return hints"
-)
-
--- format_key_hints()
-local hints = ui_render.format_key_hints({
-	{ "q", "quit" },
-	{ "r", "refresh" },
-})
-assert_equals(
-	hints,
-	"q quit  r refresh",
-	"format_key_hints should join pairs with double space"
-)
-
--- panel_header() keeps inline title by default/split layout
-local ph_split = ui_render.panel_header("Gitflow Test")
-assert_equals(#ph_split, 2, "panel_header should return title+separator in split/default layout")
-assert_equals(ph_split[1], "Gitflow Test", "split/default panel_header first line should be title")
 assert_true(
-	ph_split[2]:find("─") ~= nil,
-	"split/default panel_header second line should be separator"
+	select(1, with_separator_width(0.5, function()
+		cfg.validate(cfg.current)
+	end)) == false,
+	"ui.separator_width must reject a non-integer value like 0.5"
+)
+assert_true(
+	select(1, with_separator_width(45, function()
+		cfg.validate(cfg.current)
+	end)),
+	"ui.separator_width must accept a positive integer"
+)
+assert_true(
+	select(1, with_separator_width(0, function()
+		cfg.validate(cfg.current)
+	end)),
+	"ui.separator_width must accept 0 (adaptive)"
 )
 
--- panel_header() omits inline title in float layout to avoid duplicate title chrome
-local ph_float_buf = vim.api.nvim_create_buf(false, true)
-local ph_float_win = vim.api.nvim_open_win(ph_float_buf, false, {
+-- ── 1b. components.header — the one way to draw a panel header ───
+
+local components = require("gitflow.ui.components")
+
+-- Split (no window context): inline title + rule.
+local B_split = ui_render.builder()
+components.header(B_split, "Gitflow Test")
+assert_equals(#B_split.lines, 2, "header should push title+rule in split layout")
+assert_equals(B_split.lines[1], "Gitflow Test", "split header first line should be the title")
+assert_true(
+	ui_render.is_separator(B_split.lines[2]),
+	"split header second line should be the panel rule"
+)
+assert_true(
+	ui_render.wants_inline_title({}),
+	"wants_inline_title should be true without a window"
+)
+
+-- Float: the frame chrome already carries the title AND the border, so the
+-- panel draws no header of its own.
+local header_buf = vim.api.nvim_create_buf(false, true)
+local header_win = vim.api.nvim_open_win(header_buf, false, {
 	relative = "editor",
 	row = 1,
 	col = 1,
@@ -133,157 +165,106 @@ local ph_float_win = vim.api.nvim_open_win(ph_float_buf, false, {
 	style = "minimal",
 	border = "rounded",
 })
-local ph_float = ui_render.panel_header("Gitflow Test", { winid = ph_float_win })
-assert_equals(#ph_float, 1, "panel_header should only include separator in float layout")
-assert_true(ph_float[1]:find("─") ~= nil, "float panel_header line should be separator")
-vim.api.nvim_win_close(ph_float_win, true)
-vim.api.nvim_buf_delete(ph_float_buf, { force = true })
-
--- panel_header() should suppress inline title for float windows
-local header_buf = vim.api.nvim_create_buf(false, true)
-local header_win = vim.api.nvim_open_win(header_buf, false, {
-	relative = "editor",
-	row = 0,
-	col = 0,
-	width = 40,
-	height = 4,
-	style = "minimal",
-	border = "single",
-})
-local ph_float = ui_render.panel_header("Gitflow Float Header", { winid = header_win })
-assert_equals(#ph_float, 1, "panel_header should omit inline title in float layout")
-assert_true(ph_float[1]:find("─") ~= nil, "float panel_header should keep separator line")
+assert_true(
+	not ui_render.wants_inline_title({ winid = header_win }),
+	"wants_inline_title should be false for a float"
+)
+local B_float = ui_render.builder()
+components.header(B_float, "Gitflow Test", { winid = header_win })
+assert_equals(#B_float.lines, 0, "a float header should push nothing")
 vim.api.nvim_win_close(header_win, true)
 vim.api.nvim_buf_delete(header_buf, { force = true })
 
--- panel_footer() with branch and hints
-local pf = ui_render.panel_footer("main", "q quit")
-assert_true(#pf >= 3, "panel_footer with branch+hints should have at least 3 lines")
-local has_branch = false
-local has_footer = false
-for _, line in ipairs(pf) do
-	if line:find("Current branch: main") then
-		has_branch = true
-	end
-	if line == "q quit" then
-		has_footer = true
-	end
-end
-assert_true(has_branch, "panel_footer should include current branch")
-assert_true(has_footer, "panel_footer should include key hints")
+-- ── 1c. design tokens ────────────────────────────────────────────
 
--- panel_footer() without branch
-local pf_no_branch = ui_render.panel_footer(nil, "q quit")
-local found_branch = false
-for _, line in ipairs(pf_no_branch) do
-	if line:find("Current branch") then
-		found_branch = true
-	end
-end
-assert_true(not found_branch, "panel_footer without branch should not include branch line")
+assert_equals(ui_render.spacing.edge, " ", "edge spacing should be one column")
+assert_equals(ui_render.spacing.gutter, "  ", "gutter spacing should be two columns")
+assert_equals(ui_render.spacing.indent, "    ", "indent spacing should be four columns")
+assert_equals(ui_render.glyphs.rule, "\u{2500}", "rule glyph should be box-drawing horizontal")
 
--- ── 2. apply_panel_highlights ────────────────────────────────────
+-- Every component that indents does so with a token, so the whole design
+-- system shares one spacing scale.
+local B_tokens = ui_render.builder()
+components.section(B_tokens, "*", "Section")
+components.summary(B_tokens, "*", "Summary")
+components.meta_row(B_tokens, "Key", { { "value", nil } })
+components.empty(B_tokens, "nothing")
+components.loading(B_tokens, "loading")
+for line_no, expected in pairs({
+	[1] = ui_render.spacing.edge,
+	[2] = ui_render.spacing.edge,
+	[3] = ui_render.spacing.gutter,
+	[4] = ui_render.spacing.gutter,
+	[5] = ui_render.spacing.gutter,
+	[6] = ui_render.spacing.gutter,
+}) do
+	local line = B_tokens.lines[line_no]
+	assert_equals(
+		line:match("^ *"), expected,
+		("component line %d should indent with its spacing token"):format(line_no)
+	)
+end
+
+-- ── 2. builder spans reach the buffer as extmarks ────────────────
 
 local ns = vim.api.nvim_create_namespace("test_unified_theme")
 local bufnr = vim.api.nvim_create_buf(false, true)
 
-local test_lines = {
+local B = ui_render.builder()
+B:raw("Gitflow Test Panel", "GitflowTitle")
+B:raw(ui_render.separator(20), "GitflowSeparator")
+B:raw("Section Header", "GitflowSectionTitle")
+B:raw("  entry one")
+B:raw("  entry two")
+B:blank()
+B:raw("q: quit  r: refresh", "GitflowFooter")
+B:flush(bufnr, bufnr, ns)
+
+local function first_group(row)
+	local marks = vim.api.nvim_buf_get_extmarks(
+		bufnr, ns, { row, 0 }, { row, -1 }, { details = true }
+	)
+	return marks[1] and marks[1][4].hl_group or nil
+end
+
+assert_equals(
+	vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)[1],
 	"Gitflow Test Panel",
-	ui_render.separator(),
-	"Section Header",
-	"  entry one",
-	"  entry two",
-	"",
-	"q: quit  r: refresh",
-}
+	"flush should write the builder's lines into the buffer"
+)
+assert_equals(first_group(0), "GitflowTitle", "title line should carry GitflowTitle")
+assert_equals(first_group(1), "GitflowSeparator", "rule line should carry GitflowSeparator")
+assert_equals(first_group(2), "GitflowSectionTitle", "entry line should carry its own group")
+assert_equals(first_group(6), "GitflowFooter", "footer line should carry GitflowFooter")
 
-vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
-vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, test_lines)
-vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
--- apply with footer and entry highlights
-ui_render.apply_panel_highlights(bufnr, ns, test_lines, {
-	footer_line = 7,
-	entry_highlights = {
-		[3] = "GitflowHeader",
-	},
-})
-
--- Check title highlight (line 0)
-local title_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 0, 0 }, { 0, -1 }, { details = true })
-assert_true(#title_hl > 0, "title line should have highlights")
-assert_equals(title_hl[1][4].hl_group, "GitflowTitle", "title should use GitflowTitle highlight")
-
--- Check separator highlight (line 1)
-local sep_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
-assert_true(#sep_hl > 0, "separator line should have highlights")
+-- Re-rendering different content replaces the old spans rather than layering.
+local B2 = ui_render.builder()
+B2:raw("Title Only", "GitflowTitle")
+B2:flush(bufnr, bufnr, ns)
 assert_equals(
-	sep_hl[1][4].hl_group,
-	"GitflowSeparator",
-	"separator should use GitflowSeparator highlight"
+	#vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, {}),
+	0,
+	"a shorter re-render should leave no spans on dropped lines"
 )
 
--- Check footer highlight (line 6)
-local footer_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 6, 0 }, { 6, -1 }, { details = true })
-assert_true(#footer_hl > 0, "footer line should have highlights")
-assert_equals(
-	footer_hl[1][4].hl_group,
-	"GitflowFooter",
-	"footer should use GitflowFooter highlight"
+-- render.highlight() is the extmark-based replacement for the deprecated
+-- nvim_buf_add_highlight, including its col_end = -1 whole-line form.
+ui_render.highlight(bufnr, ns, "GitflowSeparator", 0, 0, -1)
+local whole_line = vim.api.nvim_buf_get_extmarks(
+	bufnr, ns, { 0, 0 }, { 0, -1 }, { details = true }
 )
-
--- Check entry highlight (line 2)
-local entry_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 2, 0 }, { 2, -1 }, { details = true })
-assert_true(#entry_hl > 0, "entry_highlights line should have highlights")
-assert_equals(
-	entry_hl[1][4].hl_group,
-	"GitflowHeader",
-	"entry_highlights should apply specified group"
-)
-
--- Clearing: re-apply and check old marks are gone
-ui_render.apply_panel_highlights(bufnr, ns, { "Title Only" }, {})
-local old_sep_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 1, 0 }, { 1, -1 }, { details = true })
-assert_equals(#old_sep_hl, 0, "re-apply should clear previous namespace highlights")
-
--- Separator-first headers should not receive GitflowTitle highlight
-local separator_only_lines = { ui_render.separator(), "Body line" }
-ui_render.apply_panel_highlights(bufnr, ns, separator_only_lines, {})
-local separator_title_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr, ns, { 0, 0 }, { 0, -1 }, { details = true })
-assert_true(#separator_title_hl > 0, "separator line should be highlighted")
-assert_equals(
-	separator_title_hl[1][4].hl_group,
-	"GitflowSeparator",
-	"separator-first header should not apply GitflowTitle to line 0"
-)
-
--- Invalid buffer should not error
-ui_render.apply_panel_highlights(-1, ns, test_lines, {})
-assert_true(true, "apply_panel_highlights with invalid bufnr should not error")
-
--- Separator-first headers (float mode) should not apply GitflowTitle on line 0
-local bufnr_no_title = vim.api.nvim_create_buf(false, true)
-local no_title_lines = { ui_render.separator(20), "content" }
-vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr_no_title })
-vim.api.nvim_buf_set_lines(bufnr_no_title, 0, -1, false, no_title_lines)
-vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr_no_title })
-ui_render.apply_panel_highlights(bufnr_no_title, ns, no_title_lines, {})
-local line0_hl =
-	vim.api.nvim_buf_get_extmarks(bufnr_no_title, ns, { 0, 0 }, { 0, -1 }, { details = true })
-local found_title_hl = false
-for _, mark in ipairs(line0_hl) do
-	if mark[4].hl_group == "GitflowTitle" then
-		found_title_hl = true
+local found_span = false
+for _, mark in ipairs(whole_line) do
+	if mark[4].hl_group == "GitflowSeparator" then
+		found_span = true
+		assert_equals(mark[4].end_col, #"Title Only", "col_end -1 should span the whole line")
 	end
 end
-assert_true(not found_title_hl, "separator-first header should not apply GitflowTitle to line 0")
-vim.api.nvim_buf_delete(bufnr_no_title, { force = true })
+assert_true(found_span, "render.highlight should apply the requested group")
+
+-- An invalid buffer should not error.
+ui_render.highlight(-1, ns, "GitflowTitle", 0, 0, -1)
+assert_true(true, "render.highlight with an invalid bufnr should not error")
 
 vim.api.nvim_buf_delete(bufnr, { force = true })
 
@@ -295,7 +276,6 @@ local highlights = require("gitflow.highlights")
 local themed_groups = {
 	"GitflowBorder",
 	"GitflowTitle",
-	"GitflowHeader",
 	"GitflowFooter",
 	"GitflowSeparator",
 }
@@ -315,18 +295,12 @@ assert_equals(normal_attrs.link, "NormalFloat", "GitflowNormal should link to No
 -- Accent color consistency: border and title share the same fg
 local border_fg = highlights.DEFAULT_GROUPS.GitflowBorder.fg
 local title_fg = highlights.DEFAULT_GROUPS.GitflowTitle.fg
-local header_fg = highlights.DEFAULT_GROUPS.GitflowHeader.fg
 assert_equals(border_fg, title_fg, "border and title should share accent color")
-assert_equals(title_fg, header_fg, "title and header should share accent color")
 
--- GitflowTitle and GitflowHeader should be bold
+-- GitflowTitle should be bold
 assert_true(
 	highlights.DEFAULT_GROUPS.GitflowTitle.bold == true,
 	"GitflowTitle should be bold"
-)
-assert_true(
-	highlights.DEFAULT_GROUPS.GitflowHeader.bold == true,
-	"GitflowHeader should be bold"
 )
 
 -- GitflowFooter should be italic

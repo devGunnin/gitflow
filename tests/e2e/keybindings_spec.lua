@@ -12,6 +12,7 @@ local cfg = _G.TestConfig
 local commands = require("gitflow.commands")
 local ui = require("gitflow.ui")
 local branch_panel = require("gitflow.panels.branch")
+local cache = require("gitflow.review.cache")
 
 --- Resolve a key notation to its internal form for comparison.
 ---@param lhs string
@@ -508,11 +509,14 @@ T.run_suite("E2E: Keybinding Verification", {
 
 	["review panel has expected buffer-local keymaps"] = function()
 		local review = require("gitflow.panels.review")
+		-- Same on-disk draft cache PR 42 uses elsewhere in the suite; clear
+		-- it so a prior test's leftover draft can't shift this one's state.
+		cache.clear(42, cache.repo_slug())
 		review.open(cfg, 42)
 		T.drain_jobs(3000)
 
 		-- File list pane holds the navigation + review-submission keymaps.
-		local file_list_buf = review.state.file_list_bufnr
+		local file_list_buf = review.state.bufnr
 		T.assert_true(file_list_buf ~= nil,
 			"review file list buffer should exist")
 		T.assert_keymaps(file_list_buf, {

@@ -1,6 +1,5 @@
-local ui = require("gitflow.ui")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local utils = require("gitflow.utils")
 local input = require("gitflow.ui.input")
 local form = require("gitflow.ui.form")
@@ -8,158 +7,146 @@ local gh_labels = require("gitflow.gh.labels")
 local highlights = require("gitflow.highlights")
 local icons = require("gitflow.icons")
 
-local LABELS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_labels_hl")
-local LABELS_FLOAT_TITLE = "  Gitflow Labels  "
-local LABELS_FLOAT_FOOTER = " c create · d delete · r refresh · q close "
-
 ---@class GitflowLabelPanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
 ---@field cfg GitflowConfig|nil
+---@field cache table[]|nil  raw labels from the last successful fetch
+---@field cache_key string|nil  scope the cache was filled under
+---@field page integer  1-based page into `cache`
 ---@field line_entries table<integer, table>
 
 local M = {}
 
+-- `gh label list` defaults to 30 and has no cursor pagination; fetch a
+-- generous bound in one call and page through it client-side (#283).
+local FETCH_LIMIT = 500
+local PAGE_SIZE = 30
+
 ---@type GitflowLabelPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
+	cache = nil,
+	cache_key = nil,
+	page = 1,
 	line_entries = {},
 }
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("labels", {
-			filetype = "markdown",
-			lines = { "Loading labels..." },
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "labels",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = LABELS_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and LABELS_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "labels",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "c", function()
-		M.create_interactive()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "d", function()
-		M.delete_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
----@param value string|nil
+---Scope the cache is only valid under: `gh` resolves the repo from the cwd.
 ---@return string
-local function maybe_text(value)
-	local text = vim.trim(tostring(value or ""))
-	if text == "" then
-		return "-"
-	end
-	return text
+local function cache_key()
+	return vim.fn.getcwd()
 end
 
-local function render_loading(message)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Labels", render_opts)
-	components.summary(B, icons.get("ui", "tag"), "Labels", {})
-	B:blank()
-	components.empty(B, message)
-
-	ui.buffer.update("labels", B.lines)
-	M.state.line_entries = {}
-
-	local bufnr = M.state.bufnr
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		B:apply(bufnr, LABELS_HIGHLIGHT_NS)
-		components.cursorline(M.state.winid, true)
+---The cache, but only when it was filled under the current scope. Unkeyed it
+---painted another repo's labels as `d`-deletable rows, so a mismatch drops it.
+---@return table[]|nil
+local function scoped_cache()
+	if not M.state.cache then
+		return nil
 	end
+	if M.state.cache_key ~= cache_key() then
+		M.state.cache, M.state.cache_key = nil, nil
+		return nil
+	end
+	return M.state.cache
+end
+
+local P = panel.new({
+	name = "labels",
+	title = "Gitflow Labels",
+	filetype = "markdown",
+	loading = "Loading labels…",
+	state = M.state,
+	keymaps = {
+		{ key = "c", desc = "create", essential = true, run = function()
+			M.create_interactive()
+		end },
+		{ key = "d", desc = "delete", destructive = true, run = function()
+			M.delete_under_cursor()
+		end },
+		-- Not n/p: n is search-next in a buffer users `/` through; shadows
+		-- CTRL-N/P motion instead, j/k still move. `d` drops first (destructive).
+		{ key = "<C-n>", desc = "next page", run = function()
+			M.next_page()
+		end },
+		{ key = "<C-p>", desc = "prev page", run = function()
+			M.prev_page()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
+
+---Slice `list` to page `page` (clamped) at PAGE_SIZE.
+---@param list table[]
+---@param page integer
+---@return table[] slice, integer page, integer total_pages
+local function paginate(list, page)
+	local total = #list
+	local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
+	page = math.min(math.max(1, page), total_pages)
+	local start_index = (page - 1) * PAGE_SIZE + 1
+	local end_index = math.min(total, page * PAGE_SIZE)
+	local slice = {}
+	for index = start_index, end_index do
+		slice[#slice + 1] = list[index]
+	end
+	return slice, page, total_pages
 end
 
 ---@param labels table[]
 local function render_list(labels)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local tag_icon = icons.get("ui", "tag")
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Labels", render_opts)
+	local page_items, page, total_pages = paginate(labels, M.state.page)
+	M.state.page = page
 
-	-- Summary bar: tag icon + label count.
-	B:push({
-		{ "  ", nil },
+	local tag_icon = icons.get("ui", "tag")
+	local B = P:begin_render()
+
+	-- Summary bar: tag icon + label count (+ page, once there's more than one).
+	local summary = {
+		{ components.spacing.gutter, nil },
 		{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
 		{ ("%d label%s"):format(#labels, #labels == 1 and "" or "s"), "GitflowSectionTitle" },
-	})
+	}
+	if #labels >= FETCH_LIMIT then
+		-- `gh label list` has no cursor pagination: say the count is a cap,
+		-- never report a truncated fetch as the repo's total.
+		summary[#summary + 1] = { components.separators.field .. "capped at ", "GitflowMetaKey" }
+		summary[#summary + 1] = { tostring(FETCH_LIMIT), "GitflowMeta" }
+	end
+	if total_pages > 1 then
+		summary[#summary + 1] = { components.separators.field .. "page ", "GitflowMetaKey" }
+		summary[#summary + 1] = { ("%d/%d"):format(page, total_pages), "GitflowMeta" }
+	end
+	B:push(summary)
 	B:blank()
 
 	components.section(B, tag_icon, "Repository Labels")
 
 	local line_entries = {}
 	if #labels == 0 then
-		components.empty(B, "(no labels)")
+		components.empty(B, "no labels")
 	else
-		for _, label in ipairs(labels) do
-			local name = maybe_text(label.name)
-			local color = maybe_text(label.color)
-			local description = maybe_text(label.description)
+		for _, label in ipairs(page_items) do
+			local name = components.maybe_text(label.name)
+			local color = components.maybe_text(label.color)
+			local description = components.maybe_text(label.description)
 
 			-- Name line: text MUST contain "<name> (#<color>)" exactly so the
 			-- colored highlight can target the name and tests can locate it.
 			local name_line = B:push({
-				{ " ", nil },
-				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowSectionIcon" },
+				{ components.spacing.gutter, nil },
+				{ tag_icon ~= "" and (tag_icon .. "  ") or "", "GitflowMeta" },
 				{ name, "GitflowCardTitle" },
 				{ (" (#%s)"):format(color), "GitflowMeta" },
 			})
 			local desc_line = B:push({
-				{ "      ", nil },
+				{ components.spacing.indent, nil },
 				{ description, "GitflowMeta" },
 			})
 
@@ -183,21 +170,11 @@ local function render_list(labels)
 		end
 	end
 
-	B:blank()
-	components.hint_bar(B, {
-		{ "c", "create" },
-		{ "d", "delete" },
-		{ "r", "refresh" },
-		{ "q", "close" },
-	})
+	P:push_hints(B)
 
-	ui.buffer.update("labels", B.lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		B:apply(bufnr, LABELS_HIGHLIGHT_NS)
-		components.cursorline(M.state.winid, true)
+	if not P:paint(B, line_entries) then
+		-- A failed paint must not leave the previous rows resolvable.
+		P:clear_entry_maps()
 	end
 end
 
@@ -214,7 +191,15 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	M.state.page = 1
+	if not P:ensure_window(cfg) then
+		return
+	end
+	-- Instant paint from what we already have (if any), then reconcile below.
+	local cached = scoped_cache()
+	if cached then
+		render_list(cached)
+	end
 	M.refresh()
 end
 
@@ -223,15 +208,67 @@ function M.refresh()
 		return
 	end
 
-	render_loading("Loading labels...")
-	gh_labels.list({}, function(err, labels)
-		if err then
-			render_loading("Failed to load labels")
-			utils.notify(err, vim.log.levels.ERROR)
+	local request_id = P:next_request()
+	-- The scope this fetch is issued under: a cwd change while it is in flight
+	-- must not stamp its rows as belonging to the new repo.
+	local requested_key = cache_key()
+	if not scoped_cache() then
+		P:render_loading("Loading labels…")
+	end
+	gh_labels.list({ limit = FETCH_LIMIT }, {}, function(err, labels)
+		if not P:is_active(request_id) then
 			return
 		end
-		render_list(labels or {})
+		-- Scope moved under the fetch: these rows describe somewhere we
+		-- left, so drop them and re-issue under the scope live now.
+		if requested_key ~= cache_key() then
+			M.state.cache, M.state.cache_key = nil, nil
+			M.refresh()
+			return
+		end
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			-- Drop the cache and paint the failure even when rows are on
+			-- screen: stale rows left actionable resolve `d` against a fetch
+			-- that failed.
+			M.state.cache, M.state.cache_key = nil, nil
+			P:render_error("Failed to load labels", {
+				detail = err,
+				hint = "r retries",
+			})
+			return
+		end
+		M.state.cache = labels or {}
+		M.state.cache_key = requested_key
+		M.state.page = 1
+		render_list(M.state.cache)
 	end)
+end
+
+---Advance to the next page of the cached list.
+function M.next_page()
+	local cached = scoped_cache()
+	if not cached then
+		return
+	end
+	local _, _, total_pages = paginate(cached, M.state.page)
+	if M.state.page >= total_pages then
+		utils.notify("No more labels", vim.log.levels.WARN)
+		return
+	end
+	M.state.page = M.state.page + 1
+	render_list(cached)
+end
+
+---Return to the previous page of the cached list.
+function M.prev_page()
+	local cached = scoped_cache()
+	if not cached or M.state.page <= 1 then
+		utils.notify("Already on the first page", vim.log.levels.WARN)
+		return
+	end
+	M.state.page = M.state.page - 1
+	render_list(cached)
 end
 
 function M.create_interactive()
@@ -274,7 +311,7 @@ function M.delete_under_cursor()
 		return
 	end
 
-	local label_name = maybe_text(entry.name)
+	local label_name = components.maybe_text(entry.name)
 	local confirmed = input.confirm(("Delete label '%s'?"):format(label_name), {
 		choices = { "&Delete", "&Cancel" },
 		default_choice = 2,
@@ -294,26 +331,13 @@ function M.delete_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("labels")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("labels")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

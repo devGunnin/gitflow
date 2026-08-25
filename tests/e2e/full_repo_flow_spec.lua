@@ -27,8 +27,18 @@ local git_status = require("gitflow.git.status")
 local gh_labels = require("gitflow.gh.labels")
 local form = require("gitflow.ui.form")
 local input = require("gitflow.ui.input")
+local cache = require("gitflow.review.cache")
 
 -- ── Helpers ────────────────────────────────────────────────────────────
+
+--- Open PR review mode with that PR's on-disk draft cache pre-cleared, so a
+--- prior test's crash-before-cleanup (or in-flight draft) can never leak
+--- into this one. Mirrors tests/e2e/pr_review_spec.lua's open_review.
+---@param pr_number integer
+local function open_review(pr_number)
+	cache.clear(pr_number, cache.repo_slug())
+	review_panel.open(cfg, pr_number)
+end
 
 ---@param patches table[]
 ---@param fn fun()
@@ -217,6 +227,100 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.cleanup_panels()
 	end,
 
+	["step 2: reopening the status panel paints from the last render"] = function()
+		T.cleanup_panels()
+		status_panel.open(cfg, {})
+		T.drain_jobs(5000)
+		T.wait_until(function()
+			return T.find_line(T.buf_lines(ui.buffer.get("status")), "Unstaged") ~= nil
+		end, "status panel should render its sections", 5000)
+		T.cleanup_panels()
+
+		-- Reopen and read the buffer BEFORE draining: the first frame must
+		-- already carry content, not a loading line.
+		status_panel.open(cfg, {})
+		local first_frame = T.buf_lines(ui.buffer.get("status"))
+		T.assert_true(
+			T.find_line(first_frame, "Unstaged") ~= nil,
+			"a reopen should paint the previous content in the first frame"
+		)
+		T.drain_jobs(5000)
+		T.cleanup_panels()
+	end,
+
+	["step 2: staging paints before git answers, and reverts if it fails"] = function()
+		T.cleanup_panels()
+		status_panel.open(cfg, {})
+		T.drain_jobs(5000)
+
+		local bufnr = ui.buffer.get("status")
+		T.wait_until(function()
+			return T.find_line(T.buf_lines(bufnr), "Unstaged") ~= nil
+		end, "status panel should render its sections", 5000)
+
+		--- Which section a path is rendered under, by its position between the
+		--- section headers.
+		---@param path string
+		---@return string|nil
+		local function section_of(path)
+			local lines = T.buf_lines(bufnr)
+			local current
+			for _, line in ipairs(lines) do
+				local header = line:match("(%a+) %(%d+%)%s*$")
+				if header then
+					current = header
+				elseif line:find(path, 1, true) then
+					return current
+				end
+			end
+			return nil
+		end
+
+		local target_line, target_path
+		for line, entry in pairs(status_panel.state.line_entries) do
+			if entry.kind == "file" and not entry.diff_staged
+				and not entry.entry.untracked
+			then
+				target_line, target_path = line, entry.entry.path
+				break
+			end
+		end
+		T.assert_true(
+			target_line ~= nil, "the git stub should give one unstaged file"
+		)
+		T.assert_equals(
+			section_of(target_path), "Unstaged", "it starts unstaged"
+		)
+
+		vim.api.nvim_set_current_win(status_panel.state.winid)
+		vim.api.nvim_win_set_cursor(status_panel.state.winid, { target_line, 0 })
+
+		-- Hold git's answer so the assertion sees the frame between the
+		-- keypress and the response.
+		local original_stage = git_status.stage_file
+		local answer
+		git_status.stage_file = function(_, _, cb)
+			answer = cb
+		end
+		local ok, err = pcall(function()
+			status_panel.stage_under_cursor()
+			T.assert_true(answer ~= nil, "git add should be in flight")
+			T.assert_equals(
+				section_of(target_path), "Staged",
+				"the file should read as staged while git is still running"
+			)
+
+			answer("git add failed")
+			T.assert_equals(
+				section_of(target_path), "Unstaged",
+				"a failed stage should put the file back"
+			)
+		end)
+		git_status.stage_file = original_stage
+		T.cleanup_panels()
+		T.assert_true(ok, tostring(err))
+	end,
+
 	["step 2: status panel shows no-upstream hint when upstream is missing"] = function()
 		T.cleanup_panels()
 		local prev = vim.env.GITFLOW_GIT_NO_UPSTREAM
@@ -380,7 +484,7 @@ T.run_suite("E2E: Full Repository Flow", {
 				{
 					table = gh_labels,
 					key = "list",
-					value = function(_, cb)
+					value = function(_, _, cb)
 						cb(nil, {})
 					end,
 				},
@@ -491,10 +595,10 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: review panel opens for PR"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_true(
 			bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr),
 			"review file list buffer should exist"
@@ -509,10 +613,10 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: review panel has expected keymaps"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_true(bufnr ~= nil,
 			"review file list buffer should exist")
 		-- File list bindings exposed for navigation + review actions
@@ -526,7 +630,7 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: review tracks PR number"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
 		T.assert_equals(
@@ -539,7 +643,7 @@ T.run_suite("E2E: Full Repository Flow", {
 
 	["step 5: inline comment adds to pending list"] = function()
 		T.cleanup_panels()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 
 		local before_count = #(review_panel.state.pending_comments or {})
@@ -568,7 +672,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		local input_mod = require("gitflow.ui.input")
 		with_temp_gh_log(function(log_path)
 			T.cleanup_panels()
-			review_panel.open(cfg, 42)
+			open_review(42)
 			T.drain_jobs(3000)
 
 			with_temporary_patches({
@@ -708,9 +812,9 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.cleanup_panels()
 
 		-- 4. Open review panel
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
-		local review_buf = review_panel.state.file_list_bufnr
+		local review_buf = review_panel.state.bufnr
 		T.assert_true(
 			review_buf ~= nil,
 			"review file list buffer should exist in flow"
@@ -788,7 +892,7 @@ T.run_suite("E2E: Full Repository Flow", {
 			T.cleanup_panels()
 
 			-- Open review
-			review_panel.open(cfg, 42)
+			open_review(42)
 			T.drain_jobs(3000)
 			T.cleanup_panels()
 
@@ -839,7 +943,7 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.drain_jobs(3000)
 		T.cleanup_panels()
 
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(3000)
 		T.cleanup_panels()
 

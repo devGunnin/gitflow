@@ -14,7 +14,10 @@ local stash_panel = require("gitflow.panels.stash")
 
 local M = {}
 
-M.panels = { status_panel, branch_panel, diff_panel, log_panel, stash_panel }
+M.panels = {
+	status_panel, branch_panel, diff_panel, diffview_panel,
+	log_panel, stash_panel,
+}
 
 ---@param message string|nil
 local function run_stash_push(message)

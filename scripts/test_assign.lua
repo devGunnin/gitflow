@@ -370,7 +370,11 @@ test("issue view shows assignees", function()
 			return false
 		end
 		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		return find_line(lines, "Assignees: alice") ~= nil
+		-- components.meta_row pads the key column to a shared width (12);
+		-- issues/prs used to hand-roll two different widths (T3, #3.5).
+		local assignees_line = find_line(lines, "Assignees:")
+		return assignees_line ~= nil
+			and lines[assignees_line]:find("alice", 1, true) ~= nil
 	end, "issue view should show assignees")
 end)
 
@@ -579,20 +583,39 @@ end)
 -- in-buffer hint bar. These run last: they reopen the panels as floats, so
 -- they must not disturb the split-layout tests above.
 
+---Run `fn` with room for the full hint bar. These two assertions check that
+---`A` reaches the footer surface at all; what a CRAMPED bar keeps is the
+---elision order, covered in test_t3_github_panels.lua.
+---@param fn fun(): any
+---@return any
+local function with_room_for_all_hints(fn)
+	local original_columns = vim.o.columns
+	vim.o.columns = 220
+	local ok, result = pcall(fn)
+	vim.o.columns = original_columns
+	if not ok then
+		error(result, 0)
+	end
+	return result
+end
+
 test("issue panel float footer includes assign hint", function()
 	local float_cfg = vim.deepcopy(cfg)
 	float_cfg.ui.default_layout = "float"
 	float_cfg.ui.float.footer = true
 
-	issues_panel.close()
-	issues_panel.open(float_cfg)
-	wait_until(function()
-		return issues_panel.state.winid ~= nil
-			and vim.api.nvim_win_is_valid(issues_panel.state.winid)
-	end, "issue float should open")
+	local footer = with_room_for_all_hints(function()
+		issues_panel.close()
+		issues_panel.open(float_cfg)
+		wait_until(function()
+			return issues_panel.state.winid ~= nil
+				and vim.api.nvim_win_is_valid(issues_panel.state.winid)
+		end, "issue float should open")
 
-	local footer = footer_text(issues_panel.state.winid)
-	issues_panel.close()
+		local text = footer_text(issues_panel.state.winid)
+		issues_panel.close()
+		return text
+	end)
 	assert_true(
 		footer:find("A assign", 1, true) ~= nil,
 		"issue float footer should include the assign hint"
@@ -604,15 +627,18 @@ test("pr panel float footer includes assign hint", function()
 	float_cfg.ui.default_layout = "float"
 	float_cfg.ui.float.footer = true
 
-	pr_panel.close()
-	pr_panel.open(float_cfg)
-	wait_until(function()
-		return pr_panel.state.winid ~= nil
-			and vim.api.nvim_win_is_valid(pr_panel.state.winid)
-	end, "pr float should open")
+	local footer = with_room_for_all_hints(function()
+		pr_panel.close()
+		pr_panel.open(float_cfg)
+		wait_until(function()
+			return pr_panel.state.winid ~= nil
+				and vim.api.nvim_win_is_valid(pr_panel.state.winid)
+		end, "pr float should open")
 
-	local footer = footer_text(pr_panel.state.winid)
-	pr_panel.close()
+		local text = footer_text(pr_panel.state.winid)
+		pr_panel.close()
+		return text
+	end)
 	assert_true(
 		footer:find("A assign", 1, true) ~= nil,
 		"pr float footer should include the assign hint"

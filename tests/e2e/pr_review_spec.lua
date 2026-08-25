@@ -12,7 +12,6 @@ local cfg = _G.TestConfig
 
 local gh_prs = require("gitflow.gh.prs")
 local input = require("gitflow.ui.input")
-local utils = require("gitflow.utils")
 local review_panel = require("gitflow.panels.review")
 local cache = require("gitflow.review.cache")
 local inline = require("gitflow.review.inline")
@@ -101,13 +100,24 @@ local function cleanup_panels()
 	T.cleanup_panels()
 end
 
+--- Open PR review mode with that PR's on-disk draft cache pre-cleared, so a
+--- prior test's crash-before-cleanup (or in-flight draft) can never leak
+--- into this one — a real failure once poisoned every run after it until
+--- the cache file was removed by hand. Tests that exercise cache
+--- *rehydration* seed the cache and call review_panel.open directly instead.
+---@param pr_number integer
+local function open_review(pr_number)
+	cache.clear(pr_number, cache.repo_slug())
+	review_panel.open(cfg, pr_number)
+end
+
 T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 	-- ── Layout: tabpage + file-list + diff pane ────────────────────────
 
 	["open creates a new tabpage with file list and diff pane"] = function()
 		local initial_tabs = #vim.api.nvim_list_tabpages()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		T.assert_true(review_panel.is_open(),
@@ -118,13 +128,13 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			vim.api.nvim_tabpage_is_valid(review_panel.state.tabpage),
 			"a new tabpage should be created")
 		T.assert_true(
-			vim.api.nvim_win_is_valid(review_panel.state.file_list_winid),
+			vim.api.nvim_win_is_valid(review_panel.state.winid),
 			"file list window should exist")
 		T.assert_true(
 			vim.api.nvim_win_is_valid(review_panel.state.diff_winid),
 			"diff window should exist")
 		T.assert_true(
-			vim.api.nvim_buf_is_valid(review_panel.state.file_list_bufnr),
+			vim.api.nvim_buf_is_valid(review_panel.state.bufnr),
 			"file list buffer should exist")
 		T.assert_true(#vim.api.nvim_list_tabpages() > initial_tabs,
 			"opening review mode should add a tabpage")
@@ -133,14 +143,14 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file list buffer lists the PR's changed files"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		T.wait_until(function()
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		local lines = T.buf_lines(bufnr)
 		local combined = table.concat(lines, "\n")
 
@@ -155,10 +165,10 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file list has the expected keybindings"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		T.assert_keymaps(bufnr, {
 			"<CR>", "o", "S", "r", "q", "]f", "[f",
 			"<Tab>", "za", "zM", "zR",
@@ -170,13 +180,13 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── File tree: folders, folding, leaf rendering ────────────────────
 
 	["file list renders changed files as a collapsible folder tree"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 		local combined = table.concat(T.buf_lines(bufnr), "\n")
 
 		-- A directory row is shown (compacted) with a fold arrow + trailing /.
@@ -190,21 +200,21 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		T.assert_contains(combined, "highlights.lua",
 			"leaf file basename should be shown")
 		T.assert_true(
-			review_panel.state._dir_line_map ~= nil
-				and next(review_panel.state._dir_line_map) ~= nil,
+			review_panel.state.dir_line_map ~= nil
+				and next(review_panel.state.dir_line_map) ~= nil,
 			"a directory line map should be populated for folding")
 
 		cleanup_panels()
 	end,
 
 	["collapse_all hides leaves and expand_all restores them"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
 		end, "files should be populated after open")
 
-		local bufnr = review_panel.state.file_list_bufnr
+		local bufnr = review_panel.state.bufnr
 
 		-- Inject a draft so the collapsed folder should advertise it. Anchor
 		-- it to config.lua so the Drafts section (which lists the draft's
@@ -236,7 +246,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["state.files is populated and is keyed by path"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -257,7 +267,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── File diff parsing: inline annotation contract ──────────────────
 
 	["state.file_diffs parses hunks from the PR diff"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return next(review_panel.state.file_diffs) ~= nil
@@ -290,7 +300,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Open file from list applies annotations ────────────────────────
 
 	["open_file shows file in the diff pane with inline annotations"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -344,7 +354,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["opening a diff file via :edit (e.g. Telescope) shows annotations"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -376,7 +386,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["opening a non-diff file via :edit leaves it untouched"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -403,7 +413,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Thread discussion popup ────────────────────────────────────────
 
 	["<CR> on a comment line opens the full discussion popup"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -448,7 +458,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["<CR> on a line with no comment opens no popup"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -473,7 +483,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Comment workflow + persistence ─────────────────────────────────
 
 	["inline_comment queues a draft and persists to cache"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -570,7 +580,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Approve / request-changes wiring ───────────────────────────────
 
 	["review_approve calls gh pr review --approve with no pending"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		with_temp_gh_log(function(log_path)
@@ -609,7 +619,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["approve with a pending comment batches via reviews API"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -679,7 +689,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	--    resolved" error) ────────────────────────────────────────────────
 
 	["inline_comment on a non-diff line is rejected, not queued"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -732,7 +742,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["submitting an out-of-diff comment is blocked, not sent to GitHub"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -784,7 +794,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Drafts section in the file-list pane ───────────────────────────
 
 	["file-list pane lists drafts and flags off-diff ones"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -801,22 +811,22 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		review_panel.open_file("lua/gitflow/highlights.lua")
 		T.drain_jobs(1000)
 
-		local lines = T.buf_lines(review_panel.state.file_list_bufnr)
+		local lines = T.buf_lines(review_panel.state.bufnr)
 		local combined = table.concat(lines, "\n")
 		T.assert_contains(combined, "Drafts (2)",
 			"file-list should show a Drafts section with the count")
 		T.assert_contains(combined, "✗1 off-diff",
 			"header should report the off-diff draft count")
 		T.assert_true(
-			review_panel.state._draft_line_map ~= nil
-				and next(review_panel.state._draft_line_map) ~= nil,
+			review_panel.state.draft_line_map ~= nil
+				and next(review_panel.state.draft_line_map) ~= nil,
 			"a draft line map should be populated")
 
 		cleanup_panels()
 	end,
 
 	["delete_off_diff_drafts removes only out-of-scope drafts"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -850,7 +860,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["inline_comment anchors to the diff-window file, not stale active_path"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -894,7 +904,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["request changes submits with --request-changes flag"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		with_temp_gh_log(function(log_path)
@@ -928,7 +938,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── Close cleans up tabpage and clears state ───────────────────────
 
 	["close removes the tabpage and resets state"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		local tab = review_panel.state.tabpage
@@ -950,7 +960,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["close_with_guard prompts when pending comments exist"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		review_panel.state.pending_comments = {
@@ -987,7 +997,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["close_with_guard does NOT close on cancel"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 
 		review_panel.state.pending_comments = {
@@ -1015,10 +1025,88 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	["close_with_guard stops promising disk when the last save failed"] = function()
+		open_review(42)
+		T.drain_jobs(5000)
+
+		-- Exactly the state an unwritable data dir leaves behind: drafts in
+		-- memory, nothing of them on disk.
+		review_panel.state.pending_comments = {
+			{
+				id = 1,
+				path = "lua/gitflow/highlights.lua",
+				body = "Draft",
+				new_line = 13,
+			},
+		}
+		review_panel.state.draft_save_error =
+			"could not open /nope/42.json for writing: Not a directory"
+
+		local confirm_message = nil
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					confirm_message = msg
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(confirm_message ~= nil,
+			"close_with_guard should still prompt")
+		T.assert_false(
+			confirm_message:find("kept on disk", 1, true) ~= nil,
+			"the prompt must not claim drafts are on disk after a failed save")
+		T.assert_contains(confirm_message, "FAILED",
+			"it should say the save failed")
+		T.assert_contains(confirm_message, "Not a directory",
+			"and carry the reason")
+
+		cleanup_panels()
+	end,
+
+	["close_with_guard still warns when the last draft was deleted mid-failure"] = function()
+		open_review(42)
+		T.drain_jobs(5000)
+
+		-- Deleting the last draft while the data dir is unwritable leaves
+		-- nothing in memory and a stale copy on disk that comes back.
+		review_panel.state.pending_comments = {}
+		review_panel.state.draft_save_error =
+			"could not open /nope/42.json for writing: Not a directory"
+
+		local confirm_message = nil
+		with_temporary_patches({
+			{
+				table = input,
+				key = "confirm",
+				value = function(msg, _)
+					confirm_message = msg
+					return true, 1
+				end,
+			},
+		}, function()
+			review_panel.close_with_guard()
+		end)
+
+		T.assert_true(confirm_message ~= nil,
+			"a failed save must still prompt with no drafts in memory")
+		T.assert_contains(confirm_message, "FAILED",
+			"it should say the save failed")
+		T.assert_contains(confirm_message, "Not a directory",
+			"and carry the reason")
+
+		cleanup_panels()
+	end,
+
 	-- ── Toggle command path ────────────────────────────────────────────
 
 	["toggle on an open review closes it"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.assert_true(review_panel.is_open(),
 			"review should be open before toggle")
@@ -1035,7 +1123,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #359: next/prev file keybinds in the diff pane ─────────────────
 
 	["diff pane has ]f/[f next/prev file keybinds"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1052,7 +1140,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["next_file and prev_file walk the file list and wrap"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 1
@@ -1085,7 +1173,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #357: toggle the diff overlay on/off ───────────────────────────
 
 	["toggle_diff_view hides and restores diff annotations"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1121,7 +1209,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file list names the active view layer while the diff is hidden"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1132,7 +1220,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		local function file_list_text()
 			return table.concat(
-				T.buf_lines(review_panel.state.file_list_bufnr), "\n")
+				T.buf_lines(review_panel.state.bufnr), "\n")
 		end
 
 		T.assert_false(file_list_text():find("view: full file", 1, true) ~= nil,
@@ -1158,7 +1246,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		vim.api.nvim_set_option_value("winbar", "USER BAR",
 			{ win = outside_win })
 
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1191,7 +1279,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["closing the file list window directly ends review mode"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1205,7 +1293,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		-- Abnormal exit: the user closes a review window by hand (:q) instead
 		-- of pressing q in the file list.
-		pcall(vim.api.nvim_win_close, review_panel.state.file_list_winid, true)
+		pcall(vim.api.nvim_win_close, review_panel.state.winid, true)
 		T.wait_until(function()
 			return not review_panel.is_open()
 		end, "review mode should end when its layout is dismantled")
@@ -1268,7 +1356,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 			end
 
 			-- PR 42's metadata and files land, its comments are still in flight.
-			review_panel.open(cfg, 42)
+			open_review(42)
 			run_next()
 			run_next()
 			local stale_comments = table.remove(deferred, 1)
@@ -1276,7 +1364,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 				"PR 42's comment request should be in flight")
 
 			-- The user switches to PR 99 before PR 42 finishes loading.
-			review_panel.open(cfg, 99)
+			open_review(99)
 			while #deferred > 0 do
 				run_next()
 			end
@@ -1298,7 +1386,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["retrying a failed submit does not repost file comments"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1367,7 +1455,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 					}, { code = 0, signal = 0, stdout = "", stderr = "", cmd = {} })
 				end },
 		}, function()
-			review_panel.open(cfg, 42)
+			open_review(42)
 			T.drain_jobs(5000)
 			T.wait_until(function()
 				return #review_panel.state.comment_threads > 0
@@ -1382,8 +1470,48 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		cleanup_panels()
 	end,
 
+	-- ── M2: a failed review-comments fetch must render, but not in silence ─
+
+	["a failed review-comments fetch still opens the review and surfaces the error"] = function()
+		local notified = {}
+		local utils = require("gitflow.utils")
+
+		with_temporary_patches({
+			{ table = gh_prs, key = "review_comments",
+				value = function(_, _, cb)
+					cb("comments fetch failed")
+				end },
+			{ table = utils, key = "notify",
+				value = function(msg, level)
+					notified[#notified + 1] = { msg = msg, level = level }
+				end },
+		}, function()
+			open_review(42)
+			T.drain_jobs(5000)
+			T.wait_until(function()
+				return #review_panel.state.files > 0
+			end, "files should be populated after open despite the failed comments fetch")
+
+			T.assert_equals(#review_panel.state.comment_threads, 0,
+				"a failed fetch must not populate comment threads")
+
+			local surfaced = false
+			for _, entry in ipairs(notified) do
+				if entry.msg:find("comments fetch failed", 1, true)
+					and entry.level == vim.log.levels.ERROR
+				then
+					surfaced = true
+				end
+			end
+			T.assert_true(surfaced,
+				"the review-comments failure must be surfaced, not swallowed")
+		end)
+
+		cleanup_panels()
+	end,
+
 	["toggle_thread folds the replies out under the first comment"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1445,7 +1573,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #382: jump to next comment + overview of all comments ──────────
 
 	["diff pane has ]C/[C and the comments overview keybind"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1458,14 +1586,14 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		local overview = (vim.g.mapleader or "\\") .. "c"
 		T.assert_keymaps(review_panel.state.active_bufnr,
 			{ "]C", "[C", overview })
-		T.assert_keymaps(review_panel.state.file_list_bufnr,
+		T.assert_keymaps(review_panel.state.bufnr,
 			{ "]C", "[C", overview })
 
 		cleanup_panels()
 	end,
 
 	["comments_overview lists every comment and jumps to the chosen one"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1516,7 +1644,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #358: edit a draft comment ─────────────────────────────────────
 
 	["edit_draft updates the body and persists to cache"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1557,7 +1685,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #361: file-level comments (incl. deleted files) ────────────────
 
 	["file_comment queues a file-level draft with no line"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1586,7 +1714,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["edit_draft_under_cursor edits a file comment from the file row"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1604,16 +1732,16 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 
 		-- Put the cursor on the config.lua *file* row (not the Drafts row).
 		local file_row
-		for line, idx in pairs(review_panel.state._file_line_map or {}) do
+		for line, idx in pairs(review_panel.state.file_line_map or {}) do
 			if review_panel.state.files[idx]
 				and review_panel.state.files[idx].path == "lua/gitflow/config.lua" then
 				file_row = line
 			end
 		end
 		T.assert_true(file_row ~= nil, "config.lua file row should be mapped")
-		vim.api.nvim_set_current_win(review_panel.state.file_list_winid)
+		vim.api.nvim_set_current_win(review_panel.state.winid)
 		vim.api.nvim_win_set_cursor(
-			review_panel.state.file_list_winid, { file_row, 0 })
+			review_panel.state.winid, { file_row, 0 })
 
 		with_temporary_patches({
 			{ table = input, key = "prompt",
@@ -1636,7 +1764,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["file-level comment posts via comments API with subject_type=file"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1697,7 +1825,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #355: comment on a deleted (LEFT-side) line ────────────────────
 
 	["comment on a deleted line anchors to old_line (LEFT side)"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1753,10 +1881,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #367: suggested code changes ───────────────────────────────────
 
 	["starting a suggestion prefills the anchored diff line"] = function()
-		-- A draft left on disk by an earlier failed run rehydrates on open and
-		-- shifts the drafts under test; start from a known-empty cache.
-		cache.clear(42, cache.repo_slug())
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1805,8 +1930,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	end,
 
 	["a multi-line suggestion spans the selected range"] = function()
-		cache.clear(42, cache.repo_slug())
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0
@@ -1947,6 +2071,100 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 		end
 	end,
 
+	-- The slug lookup is a network round-trip, and a review opened from
+	-- another repo inside that window used to join it and be handed the first
+	-- repo's slug — hydrating one repo's unsent drafts into another repo's
+	-- review, submittable onto its PR.
+	["a review opened from another repo restores its own drafts"] = function()
+		local gh = require("gitflow.gh")
+		local real_run = gh.run
+		local SLUG_A, SLUG_B = "owner_repo_a", "owner_repo_b"
+
+		local function seed(pr_number, slug, body)
+			cache.save(pr_number, {
+				pr_number = pr_number,
+				comments = { {
+					id = 1,
+					path = "lua/gitflow/highlights.lua",
+					body = body,
+					new_line = 13,
+					created_at = "2026-01-01T00:00:00Z",
+				} },
+			}, slug)
+		end
+
+		-- Both repos have unsent drafts on PR 22; only repo B's belong in the
+		-- review opened from repo B.
+		cache.invalidate_repo_slug()
+		seed(22, SLUG_A, "repo A draft")
+		seed(22, SLUG_B, "repo B draft")
+
+		local original_cwd = vim.fn.getcwd()
+		local repo_b = vim.fn.tempname()
+		vim.fn.mkdir(repo_b, "p")
+
+		local held = {}
+		local ok, err = pcall(function()
+			with_temporary_patches({
+				{
+					table = gh,
+					key = "run",
+					value = function(args, opts, cb)
+						if args[1] == "repo" and args[2] == "view" then
+							held[#held + 1] = { cwd = vim.fn.getcwd(), cb = cb }
+							return
+						end
+						return real_run(args, opts, cb)
+					end,
+				},
+			}, function()
+				review_panel.open(cfg, 11)
+				T.drain_jobs(200)
+				vim.cmd.cd(repo_b)
+				review_panel.open(cfg, 22)
+				T.drain_jobs(200)
+
+				-- Answer each lookup with the repo it was actually launched
+				-- from. A shared lookup has only the first, and hands the
+				-- second review repo A's answer.
+				local slugs = { "owner/repo_a\n", "owner/repo_b\n" }
+				for index, lookup in ipairs(held) do
+					lookup.cb({ code = 0, stdout = slugs[index], stderr = "" })
+				end
+				T.drain_jobs(2000)
+			end)
+
+			T.assert_equals(review_panel.state.pr_number, 22,
+				"the second review is the open one")
+			local bodies = {}
+			for _, pc in ipairs(review_panel.state.pending_comments) do
+				bodies[#bodies + 1] = pc.body
+			end
+			T.assert_equals(table.concat(bodies, ", "), "repo B draft",
+				"it must restore its own repo's unsent comments, not another repo's")
+			T.assert_equals(review_panel.state.repo_slug, SLUG_B,
+				"and be named by its own repo")
+			T.assert_equals(#held, 2,
+				"each repo's slug needs its own lookup, not a shared one")
+			T.assert_true(held[1].cwd ~= held[2].cwd,
+				"and the two came from different working dirs")
+		end)
+
+		vim.cmd.cd(original_cwd)
+		pcall(vim.fn.delete, repo_b, "rf")
+		cache.clear(22, SLUG_A)
+		cache.clear(22, SLUG_B)
+		for _, slug in ipairs({ SLUG_A, SLUG_B }) do
+			pcall(vim.fn.delete,
+				("%s/gitflow/review/%s"):format(vim.fn.stdpath("data"), slug), "d")
+		end
+		cache.invalidate_repo_slug()
+		cleanup_panels()
+		if not ok then
+			error(err, 0)
+		end
+	end,
+
 	["repo_slug resolves once across repeated comment loads"] = function()
 		cache.invalidate_repo_slug()
 
@@ -1981,7 +2199,7 @@ T.run_suite("E2E: PR Review Mode (tabpage)", {
 	-- ── #363: scope review to a commit range via a local git diff ───────
 
 	["apply_commit_scope builds files from a local git diff"] = function()
-		review_panel.open(cfg, 42)
+		open_review(42)
 		T.drain_jobs(5000)
 		T.wait_until(function()
 			return #review_panel.state.files > 0

@@ -1,11 +1,10 @@
-local ui = require("gitflow.ui")
-local utils = require("gitflow.utils")
 local git = require("gitflow.git")
+local utils = require("gitflow.utils")
 local git_cherry_pick = require("gitflow.git.cherry_pick")
 local git_branch = require("gitflow.git.branch")
 local git_conflict = require("gitflow.git.conflict")
 local icons = require("gitflow.icons")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 local list_picker = require("gitflow.ui.list_picker")
 local status_panel = require("gitflow.panels.status")
@@ -19,27 +18,49 @@ local status_panel = require("gitflow.panels.status")
 ---@field stage "branch"|"commits"
 ---@field cfg GitflowConfig|nil
 ---@field picker_request_id integer
----@field refresh_request_id integer
+---@field request_id integer
 
 local M = {}
-local CP_FLOAT_TITLE = "Gitflow Cherry Pick"
-local CP_FLOAT_FOOTER_COMMITS =
-	" <CR> pick · B into branch · b branches · r refresh · q close "
-local CP_HIGHLIGHT_NS =
-	vim.api.nvim_create_namespace("gitflow_cherry_pick_hl")
 
 ---@type GitflowCherryPickPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	source_branch = nil,
 	current_branch = nil,
 	stage = "branch",
 	cfg = nil,
 	picker_request_id = 0,
-	refresh_request_id = 0,
 }
+
+local POSITION_KEYS = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+
+local P = panel.new({
+	name = "cherry_pick",
+	title = "Gitflow Cherry Pick",
+	filetype = "gitflowcherrypick",
+	loading = "Loading branches…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "pick", essential = true, run = function()
+			M.select_under_cursor()
+		end },
+		{ key = "1-9", keys = POSITION_KEYS, hint = false, run = function(key)
+			M.select_by_position(tonumber(key))
+		end },
+		{ key = "B", desc = "into branch", run = function()
+			M.cherry_pick_into_branch()
+		end },
+		{ key = "b", desc = "branches", run = function()
+			M.show_branch_picker()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 local function next_picker_request_id()
 	M.state.picker_request_id = (M.state.picker_request_id or 0) + 1
@@ -53,17 +74,13 @@ local function is_active_picker_request(request_id)
 		and M.is_open()
 end
 
-local function next_refresh_request_id()
-	M.state.refresh_request_id = (M.state.refresh_request_id or 0) + 1
-	return M.state.refresh_request_id
-end
-
+---A refresh belongs to the (stage, source branch) it started under: a result
+---for a branch the user has since switched away from must be dropped.
 ---@param request_id integer
 ---@param source_branch string
 ---@return boolean
 local function is_active_refresh_request(request_id, source_branch)
-	return M.state.refresh_request_id == request_id
-		and M.is_open()
+	return P:is_active(request_id)
 		and M.state.stage == "commits"
 		and M.state.source_branch == source_branch
 end
@@ -102,105 +119,22 @@ local function emit_post_operation()
 	)
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("cherry_pick", {
-			filetype = "gitflowcherrypick",
-			lines = { "Loading branches..." },
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-
-	if M.state.winid
-		and vim.api.nvim_win_is_valid(M.state.winid)
-	then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "cherry_pick",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = CP_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer
-				and CP_FLOAT_FOOTER_COMMITS or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "cherry_pick",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.select_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	for i = 1, 9 do
-		vim.keymap.set("n", tostring(i), function()
-			M.select_by_position(i)
-		end, { buffer = bufnr, silent = true, nowait = true })
-	end
-
-	vim.keymap.set("n", "B", function()
-		M.cherry_pick_into_branch()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "b", function()
-		M.show_branch_picker()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@param commits GitflowCherryPickEntry[]
 ---@param source_branch string
 ---@param current_branch string
 local function render_commits(commits, source_branch, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Cherry Pick", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: commit count + the branch we're picking onto.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("git_state", "commit") .. "  ", "GitflowSectionIcon" },
 		{
 			("%d commit%s"):format(#commits, #commits == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " onto ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " onto ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -208,15 +142,9 @@ local function render_commits(commits, source_branch, current_branch)
 	-- Source section header (HARD INVARIANT: a header line containing
 	-- "Source: <branch>" highlighted GitflowCherryPickBranch, then a separator).
 	local source_label = ("Source: %s"):format(source_branch)
-	B:push({
-		{ " ", nil },
-		{ icons.get("branch", "remote") .. "  ", "GitflowSectionIcon" },
-		{ source_label, "GitflowCherryPickBranch" },
+	components.section(B, icons.get("branch", "remote"), source_label, {
+		title_hl = "GitflowCherryPickBranch",
 	})
-	B:raw(
-		" " .. string.rep("-", math.max(8, vim.fn.strdisplaywidth(source_label) + 4)),
-		"GitflowSeparator"
-	)
 
 	local line_entries = {}
 	if #commits == 0 then
@@ -226,13 +154,13 @@ local function render_commits(commits, source_branch, current_branch)
 			local summary = display_summary(entry)
 			local marker = idx <= 9 and ("[%d] "):format(idx) or ""
 			local chunks = {
-				{ "  ", nil },
+				{ components.spacing.gutter, nil },
 				{ marker, "GitflowNumber" },
-				{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+				{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowCherryPickHash" },
 			}
 			if summary ~= "" then
-				chunks[#chunks + 1] = { "  " .. summary, "GitflowCardTitle" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. summary, "GitflowCardTitle" }
 			end
 			local line_no = B:push(chunks)
 			line_entries[line_no] = entry
@@ -240,23 +168,9 @@ local function render_commits(commits, source_branch, current_branch)
 	end
 
 	B:blank()
-	components.hint_bar(B, {
-		{ "<CR>", "pick" },
-		{ "B", "into branch" },
-		{ "b", "branches" },
-		{ "r", "refresh" },
-		{ "q", "close" },
-	})
+	P:push_hints(B, nil, { blank_before = false })
 
-	ui.buffer.update("cherry_pick", B.lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, CP_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowCherryPickEntry|nil
@@ -362,7 +276,9 @@ end
 function M.open(cfg)
 	M.state.cfg = cfg
 	M.state.stage = "branch"
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.show_branch_picker()
 end
 
@@ -443,7 +359,7 @@ function M.refresh()
 	end
 
 	local source_branch = M.state.source_branch
-	local request_id = next_refresh_request_id()
+	local request_id = P:next_request()
 	git_branch.current({}, function(_, branch)
 		if not is_active_refresh_request(request_id, source_branch) then
 			return
@@ -460,6 +376,9 @@ function M.refresh()
 
 				if err then
 					utils.notify(err, vim.log.levels.ERROR)
+					P:render_error("Could not list commits to pick", {
+						detail = err, hint = "r retries",
+					})
 					return
 				end
 				M.state.current_branch = current_branch
@@ -696,22 +615,7 @@ end
 
 function M.close()
 	next_picker_request_id()
-	next_refresh_request_id()
-
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("cherry_pick")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("cherry_pick")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.source_branch = nil
 	M.state.current_branch = nil
@@ -720,8 +624,7 @@ end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

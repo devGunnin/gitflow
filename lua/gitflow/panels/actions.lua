@@ -1,45 +1,315 @@
 local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
+local input = require("gitflow.ui.input")
 local gh_actions = require("gitflow.gh.actions")
 local git_branch = require("gitflow.git.branch")
 local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
+local help = require("gitflow.ui.help")
 local icons = require("gitflow.icons")
+
+---@class GitflowActionsFilters
+---@field workflow string|nil
+---@field status string|nil
+---@field event string|nil
+---@field actor string|nil
+---@field all_branches boolean
+
+---@class GitflowActionsWatchState
+---@field active boolean
+---@field generation integer  the watch's own token; never the panel's request_id
+---@field timer any|nil  luv_timer_t from vim.defer_fn, stopped/closed on cancel
+---@field run_id integer|nil
+---@field errors integer  consecutive failed polls
+
+---@class GitflowActionsLogState
+---@field run_id integer
+---@field job GitflowActionJob|nil  nil means the full run log
+---@field parent_view "list"|"detail"
+---@field title string
+---@field lines string[]|nil  nil while loading; the rendered tail when capped
+---@field omitted integer  lines dropped off the head by the render cap
+---@field error string|nil
+---@field content_start integer|nil  1-based buffer line where log content begins
+
+---@class GitflowActionsBusyState
+---@field id integer|string
+---@field message string
 
 ---@class GitflowActionsPanelState
 ---@field bufnr integer|nil
 ---@field winid integer|nil
----@field line_entries table<integer, GitflowActionRun>
+---@field line_entries table<integer, GitflowActionRun|GitflowActionWorkflow>
+---@field detail_line_entries table<integer, GitflowActionJob>
 ---@field cfg GitflowConfig|nil
----@field view "list"|"detail"
+---@field view "list"|"detail"|"log"|"workflows"
 ---@field detail_run GitflowActionRun|nil
+---@field workflows GitflowActionWorkflow[]|nil
+---@field filters GitflowActionsFilters
+---@field limit integer
+---@field busy GitflowActionsBusyState|nil
+---@field watch GitflowActionsWatchState
+---@field log GitflowActionsLogState|nil
 ---@field request_id integer
 ---@field post_operation_augroup integer|nil
 
 local M = {}
 local ACTIONS_FLOAT_TITLE = "  Gitflow Actions  "
-local ACTIONS_LIST_FOOTER = " <CR> detail · o open · r refresh · q close "
-local ACTIONS_DETAIL_FOOTER = " <BS> back · o open · r refresh · q close "
 local ACTIONS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_actions_hl")
+
+local DEFAULT_LIMIT = 20
+local PAGE_STEP = 20
+
+local SPACING = ui_render.spacing
+local SEPARATORS = ui_render.separators
+local ROW_META_INDENT = SPACING.indent
+
+-- Rendered-line cap for one log. Formatting + painting is linear and
+-- blocking (~0.3s for a 100k-line, 8.8MB log), so this is passed to
+-- gh_actions.log/job_log as max_lines to bound the raw input *before*
+-- formatting runs, not just the paint. The slice below stays as a backstop
+-- for any lines a caller hands us uncapped — CI failures land at the end,
+-- so keep the tail, and say in the buffer what was dropped.
+local MAX_LOG_LINES = 20000
+
+-- Consecutive failed polls that stop a watch. Without a bound a persistent
+-- failure (expired token, offline, deleted run) errors once per interval
+-- forever.
+local WATCH_MAX_ERRORS = 3
+
+---@return GitflowActionsFilters
+local function default_filters()
+	return {
+		workflow = nil,
+		status = nil,
+		event = nil,
+		actor = nil,
+		all_branches = false,
+	}
+end
 
 ---@type GitflowActionsPanelState
 M.state = {
 	bufnr = nil,
 	winid = nil,
 	line_entries = {},
+	detail_line_entries = {},
 	cfg = nil,
 	view = "list",
 	detail_run = nil,
+	workflows = nil,
+	filters = default_filters(),
+	limit = DEFAULT_LIMIT,
+	busy = nil,
+	watch = {
+		active = false, generation = 0, timer = nil, run_id = nil, errors = 0,
+	},
+	log = nil,
 	request_id = 0,
 	post_operation_augroup = nil,
 }
 
+-- Last successfully rendered run list, kept across close/reopen (unlike
+-- M.state, which resets) so a reopen paints instantly before reconciling.
+-- Keyed by cwd + filter signature: unkeyed, it painted another repository's
+-- (or another filter's) runs until the live fetch landed.
+local list_cache = { key = nil, runs = nil, branch = nil }
+
+---Scope signature for the cached list: same cwd, same query, same page size.
+---@return string
+local function list_cache_key()
+	local filters = M.state.filters
+	return table.concat({
+		vim.fn.getcwd(),
+		filters.workflow or "",
+		filters.status or "",
+		filters.event or "",
+		filters.actor or "",
+		filters.all_branches and "all" or "branch",
+		tostring(M.state.limit),
+	}, "\0")
+end
+
+local ALL_VIEWS = { "list", "detail", "log", "workflows" }
+local LIST_DETAIL = { "list", "detail" }
+
+local function noop() end
+
+-- Buffer-local maps, declared per view. A *motion* key a view does not use
+-- is left UNMAPPED there, so vim's own motion keeps working — the log view
+-- is a plain text buffer where l/w/b/L must move the cursor, and a panel
+-- action there would only warn that it does not apply. R/C/J/o are not
+-- motions: unmapped, they reach vim's Replace/Change/Join/open-line and
+-- raise E21 against the nomodifiable buffer, so every view maps them to a
+-- no-op instead.
+--
+-- This list is the panel's only key registry: the hint bar, the float footer
+-- and the `?` overlay are all generated from it. Entries without a `desc`
+-- are bound but never advertised. Order is reading order for the hints.
+---@type GitflowPanelKeymap[]
+local KEYMAPS = {
+	{ key = "<CR>", desc = "detail", essential = true, views = { "list" },
+		run = function() M.open_detail_under_cursor() end },
+	{ key = "<CR>", desc = "dispatch", essential = true, views = { "workflows" },
+		run = function() M.dispatch_under_cursor() end },
+	-- Bound in the detail view too, but the hint bar there leads with `<BS>`.
+	{ key = "<CR>", views = { "detail" },
+		run = function() M.open_detail_under_cursor() end },
+	{ key = "<BS>", desc = "back", essential = true,
+		views = { "detail", "log", "workflows" },
+		run = function() M.back() end },
+	{ key = "l", desc = "log", views = LIST_DETAIL,
+		run = function() M.view_log_under_cursor() end },
+	{ key = "f", desc = "filter", views = { "list" },
+		run = function() M.open_filter_menu() end },
+	{ key = "b", desc = "branch", views = { "list" },
+		run = function() M.toggle_branch_scope() end },
+	{ key = "L", desc = "more", views = { "list" },
+		run = function() M.load_more() end },
+	{ key = "W", desc = "workflows", views = { "list" },
+		run = function() M.open_workflows() end },
+	{ key = "R", desc = "rerun", views = LIST_DETAIL,
+		run = function() M.rerun_under_cursor() end },
+	{ key = "R", views = { "log", "workflows" }, run = noop },
+	{ key = "F", desc = "failed", views = LIST_DETAIL,
+		run = function() M.rerun_failed_under_cursor() end },
+	{ key = "J", desc = "job", views = { "detail" },
+		run = function() M.rerun_job_under_cursor() end },
+	{ key = "J", views = { "list", "log", "workflows" }, run = noop },
+	{ key = "C", desc = "cancel", views = LIST_DETAIL,
+		run = function() M.cancel_under_cursor() end },
+	{ key = "C", views = { "log", "workflows" }, run = noop },
+	{ key = "w", desc = "watch", views = { "detail" },
+		run = function() M.toggle_watch() end },
+	-- Not `E`: the log view must not shadow a motion.
+	{ key = "]e", desc = "jump error", views = { "log" },
+		run = function() M.jump_to_first_error() end },
+	{ key = "o", desc = "open", views = LIST_DETAIL,
+		run = function() M.open_in_browser() end },
+	{ key = "o", views = { "log", "workflows" }, run = noop },
+	{ key = "r", desc = "refresh", views = ALL_VIEWS,
+		run = function() M.refresh() end },
+	{ key = "q", desc = "close", essential = true, views = ALL_VIEWS,
+		run = function() M.close() end },
+	-- The affordance that reveals every other key: never elided.
+	{ key = "?", desc = "help", always = true, views = ALL_VIEWS,
+		run = function() M.open_help() end },
+}
+
+panel.register_surface({
+	name = "actions",
+	title = "Gitflow Actions",
+	keymaps = KEYMAPS,
+})
+
+---The registry with the user's `panel_keybindings.actions` applied. The
+---per-view binds, the hint bar, the float footer and the `?` overlay all read
+---this, so an override can never move a key without moving what advertises it.
+---@return GitflowPanelKeymap[]
+local function keymaps()
+	return panel.surface_keymaps(
+		"actions", M.state.cfg or require("gitflow.config").get()
+	)
+end
+
+---@param entry GitflowPanelKeymap
+---@param view string
+---@return boolean
+local function in_view(entry, view)
+	for _, candidate in ipairs(entry.views) do
+		if candidate == view then
+			return true
+		end
+	end
+	return false
+end
+
+---The advertised `{ key, desc }` pairs for a view, in declaration order.
+---@param view string
+---@return table[]
+local function hints_for(view)
+	local out = {}
+	for _, entry in ipairs(keymaps()) do
+		if entry.desc and in_view(entry, view) then
+			out[#out + 1] = {
+				entry.key, entry.desc,
+				essential = entry.essential,
+				destructive = entry.destructive,
+				always = entry.always,
+			}
+		end
+	end
+	return out
+end
+
+---This panel owns its own window, so it measures its own chrome. Nil width
+---means "not that layout" — the base then leaves the list unelided, which is
+---right for the surface that is not on screen.
+---@return integer|nil
+local function float_footer_width()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return nil
+	end
+	local ok, win_cfg = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(win_cfg) ~= "table"
+		or not win_cfg.relative or win_cfg.relative == "" then
+		return nil
+	end
+	return math.max(1, vim.api.nvim_win_get_width(winid) - 2)
+end
+
+---@return integer|nil
+local function split_width()
+	local winid = M.state.winid
+	if not winid or not vim.api.nvim_win_is_valid(winid) then
+		return nil
+	end
+	local ok, win_cfg = pcall(vim.api.nvim_win_get_config, winid)
+	if not ok or type(win_cfg) ~= "table" then
+		return nil
+	end
+	if win_cfg.relative and win_cfg.relative ~= "" then
+		return nil
+	end
+	return math.max(1, vim.api.nvim_win_get_width(winid))
+end
+
+---The hint bar's pairs for a view, elided to the split's width.
+---@param view string
+---@return table[]
+local function hint_bar_for(view)
+	return panel.fitted_hint_bar(hints_for(view), split_width())
+end
+
+---@param view string
+---@return string
+local function footer_for(view)
+	return panel.fitted_footer(hints_for(view), float_footer_width())
+end
+
+---The `?` overlay: every view's keys, so the panel documents all of itself
+---rather than only where the user happens to be standing.
+function M.open_help()
+	local sections = {}
+	for _, view in ipairs(ALL_VIEWS) do
+		local rows = {}
+		for _, hint in ipairs(hints_for(view)) do
+			rows[#rows + 1] = { key = hint[1], desc = hint[2] }
+		end
+		sections[#sections + 1] = { label = view, rows = rows }
+	end
+	help.open(M.state.cfg or require("gitflow.config").get(), {
+		title = "Gitflow Actions",
+		sections = sections,
+		note = "Remap these: panel_keybindings.actions",
+	})
+end
+
 ---@return string
 local function current_footer()
-	if M.state.view == "detail" then
-		return ACTIONS_DETAIL_FOOTER
-	end
-	return ACTIONS_LIST_FOOTER
+	return footer_for(M.state.view)
 end
 
 local function update_float_footer()
@@ -74,7 +344,7 @@ local function next_request_id()
 end
 
 ---@param request_id integer
----@param expected_view "list"|"detail"|nil
+---@param expected_view "list"|"detail"|"log"|"workflows"|nil
 ---@return boolean
 local function is_active_request(request_id, expected_view)
 	if M.state.request_id ~= request_id then
@@ -104,16 +374,76 @@ local function setup_post_operation_autocmd()
 		{ clear = true }
 	)
 	M.state.post_operation_augroup = augroup
+	-- Coalesced: one command emits this event several times (a stage fires it
+	-- from the panel and again from the command layer), and each one here is
+	-- a `gh` round trip.
+	local refresh_soon = panel.debounced(function()
+		if M.is_open() then
+			M.refresh()
+		end
+	end)
 	vim.api.nvim_create_autocmd("User", {
 		group = augroup,
 		pattern = "GitflowPostOperation",
-		callback = function()
-			if not M.is_open() then
-				return
-			end
-			M.refresh()
-		end,
+		callback = refresh_soon,
 	})
+end
+
+---Stop the watch timer (if any) and invalidate any tick still in flight.
+---Safe to call when not watching.
+local function stop_watch()
+	local watch = M.state.watch
+	watch.active = false
+	watch.generation = (watch.generation or 0) + 1
+	if watch.timer then
+		pcall(function()
+			watch.timer:stop()
+			watch.timer:close()
+		end)
+		watch.timer = nil
+	end
+	watch.run_id = nil
+	watch.errors = 0
+end
+
+---Re-map the panel buffer for the current view: drop every panel key, then
+---set back only the ones this view uses.
+local function apply_view_keymaps()
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	local resolved = keymaps()
+	for _, entry in ipairs(resolved) do
+		for _, key in ipairs(panel.bound_keys(entry)) do
+			pcall(vim.keymap.del, "n", key, { buffer = bufnr })
+		end
+	end
+	for _, entry in ipairs(resolved) do
+		if in_view(entry, M.state.view) then
+			for _, binding in ipairs(panel.bindings(entry)) do
+				vim.keymap.set("n", binding.key, function()
+					entry.run(binding.run_key)
+				end, { buffer = bufnr, silent = true, nowait = true })
+			end
+		end
+	end
+end
+
+---The single point a view changes: state, keymaps and float footer move
+---together, so no view can be shown with another view's bindings.
+---@param view "list"|"detail"|"log"|"workflows"
+local function set_view(view)
+	M.state.view = view
+	apply_view_keymaps()
+	update_float_footer()
+end
+
+---Every close route (`q`, `:q`, `<C-w>c`, a layout change) lands here —
+---the poller must die with the window, not outlive it invisibly.
+local function on_window_closed()
+	M.state.winid = nil
+	stop_watch()
 end
 
 ---@param cfg GitflowConfig
@@ -124,7 +454,7 @@ local function ensure_window(cfg)
 	if not bufnr then
 		bufnr = ui.buffer.create("actions", {
 			filetype = "gitflowactions",
-			lines = { "Loading workflow runs..." },
+			lines = components.loading_lines("Loading workflow runs…"),
 		})
 		M.state.bufnr = bufnr
 	end
@@ -133,6 +463,7 @@ local function ensure_window(cfg)
 
 	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
 		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
+		apply_view_keymaps()
 		return
 	end
 
@@ -147,41 +478,22 @@ local function ensure_window(cfg)
 			title_pos = cfg.ui.float.title_pos,
 			footer = cfg.ui.float.footer and current_footer() or nil,
 			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
+			on_close = on_window_closed,
 		})
+		-- The footer above was built with no window to measure. Re-fit it now
+		-- that there is one, or a narrow float clips its last hint (`? help`).
+		update_float_footer()
 	else
 		M.state.winid = ui.window.open_split({
 			name = "actions",
 			bufnr = bufnr,
 			orientation = cfg.ui.split.orientation,
 			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
+			on_close = on_window_closed,
 		})
 	end
 
-	vim.keymap.set("n", "<CR>", function()
-		M.open_detail_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "o", function()
-		M.open_in_browser()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "<BS>", function()
-		M.back_to_list()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
+	apply_view_keymaps()
 end
 
 ---@param started_at string
@@ -189,8 +501,9 @@ end
 ---@return string
 local function format_duration_range(started_at, completed_at)
 	if started_at ~= "" and completed_at ~= "" then
-		return ("  (%s → %s)"):format(
+		return ("  (%s %s %s)"):format(
 			started_at:sub(12, 19) or "",
+			ui_render.glyphs.arrow,
 			completed_at:sub(12, 19) or ""
 		)
 	end
@@ -208,7 +521,6 @@ local function run_title(run)
 end
 
 ---Push a duration range chunk (dim) when both endpoints are present.
----@param B GitflowRenderBuilder
 ---@param chunks table[]
 ---@param started_at string|nil
 ---@param completed_at string|nil
@@ -219,9 +531,25 @@ local function append_duration_chunk(chunks, started_at, completed_at)
 	end
 end
 
+---Push a dim "verb…" banner (from ui.components.loading) when a mutation is
+---in flight, so rerun/cancel/dispatch have a visible in-progress affordance
+---beyond the transient notification.
+---@param B GitflowRenderBuilder
+local function push_busy_banner(B)
+	local busy = M.state.busy
+	if not busy then
+		return
+	end
+	components.loading(B, busy.message .. "…")
+	B:blank()
+end
+
 ---@param runs GitflowActionRun[]
 ---@param current_branch string
-local function render_list(runs, current_branch)
+---@param cache_scope_key string|nil  scope the fetch was issued under, if
+---this paint came from an async response; defaults to the current scope for
+---a synchronous (already-scoped) paint like the cached instant paint.
+local function render_list(runs, current_branch, cache_scope_key)
 	update_float_footer()
 	local render_opts = {
 		bufnr = M.state.bufnr,
@@ -229,15 +557,42 @@ local function render_list(runs, current_branch)
 	}
 	local B = ui_render.builder()
 	components.header(B, "Gitflow Actions", render_opts)
+	push_busy_banner(B)
 
-	-- Summary bar: run count + current branch context.
+	local filters = M.state.filters
+	-- Summary bar: run count + branch scope.
 	B:push({
-		{ "  ", nil },
+		{ SPACING.gutter, nil },
 		{ icons.get("palette", "actions") .. "  ", "GitflowSectionIcon" },
 		{ ("%d run%s"):format(#runs, #runs == 1 and "" or "s"), "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
-		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
+		{ SEPARATORS.field .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{
+			filters.all_branches and "all branches"
+				or (current_branch ~= "" and current_branch or "(unknown)"),
+			"GitflowMeta",
+		},
 	})
+
+	local chips = {}
+	if filters.workflow then
+		chips[#chips + 1] = "workflow:" .. filters.workflow
+	end
+	if filters.status then
+		chips[#chips + 1] = "status:" .. filters.status
+	end
+	if filters.event then
+		chips[#chips + 1] = "event:" .. filters.event
+	end
+	if filters.actor then
+		chips[#chips + 1] = "actor:" .. filters.actor
+	end
+	if #chips > 0 then
+		B:push({
+			{ ROW_META_INDENT, nil },
+			{ icons.get("ui", "search") .. " ", "GitflowMetaKey" },
+			{ table.concat(chips, SEPARATORS.hint), "GitflowChip" },
+		})
+	end
 	B:blank()
 
 	local line_entries = {}
@@ -250,7 +605,7 @@ local function render_list(runs, current_branch)
 			local status_hl = gh_actions.status_highlight(run)
 			local name = run_title(run)
 			local time = ui_render.relative_time(run.created_at)
-			local left = " " .. icon .. "  "
+			local left = SPACING.gutter .. icon .. "  "
 			local left_w = vim.fn.strdisplaywidth(left)
 			local time_w = vim.fn.strdisplaywidth(time)
 			local name_max = math.max(8, width - left_w - time_w - 2)
@@ -259,7 +614,7 @@ local function render_list(runs, current_branch)
 				2, width - left_w - vim.fn.strdisplaywidth(name) - time_w
 			)
 			local title_line = B:push({
-				{ " ", nil },
+				{ SPACING.gutter, nil },
 				{ icon .. "  ", status_hl },
 				{ name, "GitflowCardTitle" },
 				{ string.rep(" ", gap), nil },
@@ -268,10 +623,10 @@ local function render_list(runs, current_branch)
 			line_entries[title_line] = run
 
 			local meta_line = B:push({
-				{ "     ", nil },
+				{ ROW_META_INDENT, nil },
 				{ icons.get("branch", "current") .. " ", "GitflowMeta" },
 				{ run.branch ~= "" and run.branch or "\u{2014}", "GitflowChip" },
-				{ "    " .. icons.get("ui", "dot") .. " ", "GitflowMeta" },
+				{ SEPARATORS.field .. icons.get("ui", "dot") .. " ", "GitflowMeta" },
 				{ run.event ~= "" and run.event or "\u{2014}", "GitflowMeta" },
 			})
 			line_entries[meta_line] = run
@@ -279,14 +634,25 @@ local function render_list(runs, current_branch)
 		end
 	end
 
-	ui.buffer.update("actions", B.lines)
+	if #runs >= M.state.limit then
+		B:push({
+			{ ROW_META_INDENT, nil },
+			{ ("showing %d · L load more"):format(M.state.limit), "GitflowMeta" },
+		})
+		B:blank()
+	end
+
+	components.split_hint_bar(B, render_opts, hint_bar_for("list"))
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = line_entries
+	list_cache.key = cache_scope_key or list_cache_key()
+	list_cache.runs = runs
+	list_cache.branch = current_branch
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 
@@ -301,22 +667,30 @@ local function render_detail(run)
 	local B = ui_render.builder()
 	components.header(B, ("Gitflow Actions — %s"):format(title), render_opts)
 	B:blank()
+	push_busy_banner(B)
 
-	-- Summary bar: title + colored status.
+	-- Summary bar: title + colored status (+ watch indicator when live).
 	local icon = gh_actions.status_icon(run)
 	local status_hl = gh_actions.status_highlight(run)
 	local status_text = run.conclusion ~= "" and run.conclusion or run.status
 	if status_text == "" then
 		status_text = "unknown"
 	end
-	B:push({
-		{ "  ", nil },
+	local status_chunks = {
+		{ SPACING.gutter, nil },
 		{ icons.get("palette", "actions") .. "  ", "GitflowSectionIcon" },
 		{ title ~= "" and title or "(run)", "GitflowSectionTitle" },
-		{ "     ", nil },
+		{ SEPARATORS.field, nil },
 		{ icon .. " ", status_hl },
 		{ status_text, status_hl },
-	})
+	}
+	local watch = M.state.watch
+	if watch.active and watch.run_id == run.id then
+		status_chunks[#status_chunks + 1] = { SEPARATORS.field, nil }
+		status_chunks[#status_chunks + 1] =
+			{ "\u{25cf} watching", "GitflowActionsPending" }
+	end
+	B:push(status_chunks)
 	B:blank()
 
 	components.meta_row(B, "Branch:", {
@@ -336,12 +710,14 @@ local function render_detail(run)
 		icons.get("palette", "actions"),
 		("Jobs (%d)"):format(#jobs)
 	)
+	local job_line_entries = {}
 	if #jobs == 0 then
 		components.empty(B, "no job details available")
 	else
 		for _, job in ipairs(jobs) do
+			local job_start_line = B:count() + 1
 			local job_chunks = {
-				{ " ", nil },
+				{ SPACING.edge, nil },
 				{ gh_actions.status_icon(job) .. "  ", gh_actions.status_highlight(job) },
 				{ job.name, "GitflowCardTitle" },
 			}
@@ -351,7 +727,7 @@ local function render_detail(run)
 			local has_step_snippet = false
 			for _, step in ipairs(job.steps or {}) do
 				local step_chunks = {
-					{ "    ", nil },
+					{ SPACING.indent, nil },
 					{ gh_actions.status_icon(step) .. " ", gh_actions.status_highlight(step) },
 					{ ("%d. "):format(step.number), "GitflowNumber" },
 					{ step.name, "GitflowMeta" },
@@ -363,7 +739,7 @@ local function render_detail(run)
 				if snippet ~= "" then
 					has_step_snippet = true
 					B:push({
-						{ "      ", nil },
+						{ SPACING.indent .. SPACING.gutter, nil },
 						{ "log: ", "GitflowMetaKey" },
 						{ snippet, "GitflowMeta" },
 					})
@@ -374,28 +750,170 @@ local function render_detail(run)
 				local job_snippet = vim.trim(job.log_snippet or "")
 				if job_snippet ~= "" then
 					B:push({
-						{ "    ", nil },
+						{ SPACING.indent, nil },
 						{ "log: ", "GitflowMetaKey" },
 						{ job_snippet, "GitflowMeta" },
 					})
 				end
 			end
+
+			local job_end_line = B:count()
+			for line_no = job_start_line, job_end_line do
+				job_line_entries[line_no] = job
+			end
 			B:blank()
 		end
 	end
 
-	ui.buffer.update("actions", B.lines)
+	components.split_hint_bar(B, render_opts, hint_bar_for("detail"))
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
+	M.state.line_entries = {}
+	M.state.detail_line_entries = job_line_entries
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	components.cursorline(M.state.winid, true)
+end
+
+local function render_log()
+	update_float_footer()
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local log = M.state.log or {}
+	local B = ui_render.builder()
+	components.header(
+		B, ("Gitflow Actions — %s"):format(log.title or "log"), render_opts
+	)
+	B:blank()
+	push_busy_banner(B)
+
+	if log.error then
+		components.error_state(B, "Failed to load log", { detail = log.error })
+	elseif log.lines == nil then
+		components.loading(B, "Loading log…")
+	elseif #log.lines == 0 then
+		components.empty(B, "no log output")
+	else
+		if (log.omitted or 0) > 0 then
+			B:push({
+				{ SPACING.gutter, nil },
+				{
+					("showing the last %d lines · %d earlier lines omitted")
+						:format(#log.lines, log.omitted),
+					"GitflowMeta",
+				},
+			})
+			B:blank()
+		end
+		local content_start = B:count() + 1
+		for _, line in ipairs(log.lines) do
+			local line_no = B:raw(line)
+			if line:find("##%[error%]", 1, false) then
+				B:hl(line_no, 0, -1, "GitflowActionsFail")
+			end
+		end
+		M.state.log.content_start = content_start
+	end
+
+	components.split_hint_bar(B, render_opts, hint_bar_for("log"))
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
 	M.state.line_entries = {}
 
 	local bufnr = M.state.bufnr
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return
 	end
-	B:apply(bufnr, ACTIONS_HIGHLIGHT_NS)
 	components.cursorline(M.state.winid, true)
 end
 
----@return GitflowActionRun|nil
+---@param workflows GitflowActionWorkflow[]
+local function render_workflows(workflows)
+	update_float_footer()
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local B = ui_render.builder()
+	components.header(B, "Gitflow Actions — Workflows", render_opts)
+	B:blank()
+	push_busy_banner(B)
+
+	local line_entries = {}
+	if #workflows == 0 then
+		components.empty(B, "no workflows found")
+	else
+		for _, workflow in ipairs(workflows) do
+			local state_hl = workflow.state == "active"
+				and "GitflowActionsPass" or "GitflowMeta"
+			local line_no = B:push({
+				{ SPACING.gutter, nil },
+				{ icons.get("ui", "dot") .. " ", state_hl },
+				{ workflow.name, "GitflowCardTitle" },
+				{ SEPARATORS.hint .. workflow.path, "GitflowMeta" },
+			})
+			line_entries[line_no] = workflow
+		end
+	end
+
+	components.split_hint_bar(B, render_opts, hint_bar_for("workflows"))
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
+	M.state.line_entries = line_entries
+	M.state.workflows = workflows
+
+	local bufnr = M.state.bufnr
+	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
+	components.cursorline(M.state.winid, true)
+end
+
+---Paint a full-panel error state, replacing whatever was on screen — a
+---failed fetch must never leave the seeded "Loading…" behind a transient
+---notification.
+---@param header string
+---@param message string
+---@param detail string|nil
+---@param hints table[]
+local function render_error(header, message, detail, hints)
+	update_float_footer()
+	local render_opts = {
+		bufnr = M.state.bufnr,
+		winid = M.state.winid,
+	}
+	local B = ui_render.builder()
+	components.header(B, header, render_opts)
+	B:blank()
+	components.error_state(B, message, { detail = detail })
+	components.split_hint_bar(B, render_opts, hints)
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
+	M.state.line_entries = {}
+	M.state.detail_line_entries = {}
+end
+
+---Re-render whatever view is currently showing from state already in hand
+---(no fetch) — used to paint the busy banner the instant a mutation starts.
+local function render_current_view()
+	if not M.is_open() then
+		return
+	end
+	if M.state.view == "detail" and M.state.detail_run then
+		render_detail(M.state.detail_run)
+	elseif M.state.view == "log" then
+		render_log()
+	elseif M.state.view == "workflows" then
+		render_workflows(M.state.workflows or {})
+	elseif list_cache.key == list_cache_key() then
+		-- Only when the cache was filled under this scope; painting another
+		-- filter's (or repo's) runs is worse than leaving the view as-is.
+		render_list(list_cache.runs or {}, list_cache.branch or "(unknown)")
+	end
+end
+
+---@return GitflowActionRun|GitflowActionWorkflow|nil
 local function entry_under_cursor()
 	if not M.state.bufnr
 		or vim.api.nvim_get_current_buf() ~= M.state.bufnr then
@@ -405,13 +923,175 @@ local function entry_under_cursor()
 	return M.state.line_entries[line]
 end
 
+---@return GitflowActionJob|nil
+local function job_under_cursor()
+	if not M.state.bufnr
+		or vim.api.nvim_get_current_buf() ~= M.state.bufnr then
+		return nil
+	end
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	return M.state.detail_line_entries[line]
+end
+
+---The run a run-level mutation (rerun/rerun-failed/cancel) should target:
+---the cursor's entry in list view, or the open run in detail view.
+---@return integer|nil
+local function target_run_id()
+	if M.state.view == "detail" and M.state.detail_run then
+		return M.state.detail_run.id
+	end
+	if M.state.view == "list" then
+		local run = entry_under_cursor()
+		return run and run.id or nil
+	end
+	return nil
+end
+
+---@param run_id integer
+---@param job GitflowActionJob|nil
+---@param title string
+---@param parent_view "list"|"detail"
+local function open_log(run_id, job, title, parent_view)
+	M.state.log = {
+		run_id = run_id,
+		job = job,
+		parent_view = parent_view,
+		title = title,
+		lines = nil,
+		omitted = 0,
+		error = nil,
+	}
+	set_view("log")
+	render_log()
+
+	local request_id = next_request_id()
+	local function deliver(err, lines)
+		if not is_active_request(request_id, "log") then
+			return
+		end
+		M.state.log.error = err
+		if lines and #lines > MAX_LOG_LINES then
+			M.state.log.omitted = #lines - MAX_LOG_LINES
+			M.state.log.lines = vim.list_slice(
+				lines, #lines - MAX_LOG_LINES + 1, #lines
+			)
+		else
+			M.state.log.omitted = 0
+			M.state.log.lines = lines
+		end
+		render_log()
+	end
+
+	local log_opts = { max_lines = MAX_LOG_LINES }
+	if job then
+		gh_actions.job_log(run_id, job.id, log_opts, deliver)
+	else
+		gh_actions.log(run_id, log_opts, deliver)
+	end
+end
+
+local function refresh_log()
+	local log = M.state.log
+	if not log then
+		return
+	end
+	open_log(log.run_id, log.job, log.title, log.parent_view)
+end
+
+local function fetch_workflows()
+	local request_id = next_request_id()
+	gh_actions.workflow_list(nil, function(err, workflows)
+		if not is_active_request(request_id, "workflows") then
+			return
+		end
+		if err then
+			render_error(
+				"Gitflow Actions — Workflows",
+				"Failed to load workflows", err, hint_bar_for("workflows")
+			)
+			return
+		end
+		render_workflows(workflows or {})
+	end)
+end
+
+---Run a confirm-gated, single-flight mutation (rerun/cancel/dispatch): shows
+---a confirm prompt, blocks a second attempt while one is already in flight,
+---renders a busy banner, and notifies + refreshes on completion.
+---@param opts { id: integer|string, confirm_message: string, in_progress_message: string, done_message: string, call: fun(cb: fun(err: string|nil)) }
+local function perform_mutation(opts)
+	if M.state.busy then
+		utils.notify(
+			("Already busy: %s — wait for it to finish"):format(M.state.busy.message),
+			vim.log.levels.WARN
+		)
+		return
+	end
+
+	local confirmed = input.confirm(opts.confirm_message, {
+		choices = { "&Yes", "&No" },
+		default_choice = 2,
+	})
+	if not confirmed then
+		return
+	end
+
+	M.state.busy = { id = opts.id, message = opts.in_progress_message }
+	utils.notify(opts.in_progress_message .. "…", vim.log.levels.INFO)
+	render_current_view()
+
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
+		M.state.busy = nil
+		if err then
+			utils.notify(err, vim.log.levels.ERROR)
+			if M.is_open() then
+				render_current_view()
+			end
+			return
+		end
+		utils.notify(opts.done_message, vim.log.levels.INFO)
+		if M.is_open() then
+			M.refresh()
+		end
+	end
+	-- vim.system throws at spawn (gh off PATH, unreadable cwd) instead of
+	-- calling back; without this the busy banner wedges every verb.
+	local ok, spawn_err = pcall(opts.call, settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
+end
+
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
+	-- Once per open, not per view switch: apply_view_keymaps runs on every one.
+	panel.warn_overrides("actions", cfg)
 	M.state.view = "list"
 	M.state.detail_run = nil
+	M.state.workflows = nil
+	M.state.filters = default_filters()
+	M.state.limit = DEFAULT_LIMIT
+	M.state.busy = nil
+	M.state.log = nil
+	M.state.detail_line_entries = {}
+	stop_watch()
 	next_request_id()
 	ensure_window(cfg)
+
+	-- Cached instant paint: show the last-known list immediately, then
+	-- M.refresh() below reconciles it against a live fetch underneath.
+	-- Only when the cache was filled under this same scope.
+	if list_cache.runs and list_cache.key == list_cache_key() then
+		render_list(list_cache.runs, list_cache.branch or "")
+	end
+
 	update_float_footer()
 	setup_post_operation_autocmd()
 	M.refresh()
@@ -428,6 +1108,10 @@ function M.refresh()
 			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				render_error(
+					"Gitflow Actions",
+					"Failed to load run detail", err, hint_bar_for("detail")
+				)
 				return
 			end
 			M.state.detail_run = run
@@ -436,12 +1120,41 @@ function M.refresh()
 		return
 	end
 
+	if M.state.view == "workflows" then
+		fetch_workflows()
+		return
+	end
+
+	if M.state.view == "log" then
+		refresh_log()
+		return
+	end
+
+	-- Captured now, not when the response paints: a `:cd` (or filter
+	-- change) while this fetch is in flight must not stamp the cache under
+	-- the *new* scope for runs that were actually fetched under the old one.
+	local requested_scope_key = list_cache_key()
+
 	git_branch.current({}, function(_, branch)
 		if not is_active_request(request_id, "list") then
 			return
 		end
+		local filters = M.state.filters
+		-- Not `filters.all_branches and nil or branch`: that Lua ternary
+		-- trap always falls through to `branch` because `nil` is falsy.
+		local list_branch = branch
+		if filters.all_branches then
+			list_branch = nil
+		end
 		gh_actions.list(
-			{ branch = branch, limit = 20 },
+			{
+				branch = list_branch,
+				limit = M.state.limit,
+				workflow = filters.workflow,
+				status = filters.status,
+				event = filters.event,
+				actor = filters.actor,
+			},
 			nil,
 			function(err, runs)
 				if not is_active_request(request_id, "list") then
@@ -449,9 +1162,13 @@ function M.refresh()
 				end
 				if err then
 					utils.notify(err, vim.log.levels.ERROR)
+					render_error(
+						"Gitflow Actions",
+						"Failed to load workflow runs", err, hint_bar_for("list")
+					)
 					return
 				end
-				render_list(runs or {}, branch or "(unknown)")
+				render_list(runs or {}, branch or "(unknown)", requested_scope_key)
 			end
 		)
 	end)
@@ -462,6 +1179,9 @@ function M.open_detail_under_cursor()
 		M.open_in_browser()
 		return
 	end
+	if M.state.view ~= "list" then
+		return
+	end
 
 	local run = entry_under_cursor()
 	if not run then
@@ -469,9 +1189,8 @@ function M.open_detail_under_cursor()
 		return
 	end
 
-	M.state.view = "detail"
 	M.state.detail_run = run
-	update_float_footer()
+	set_view("detail")
 	local request_id = next_request_id()
 	gh_actions.view(run.id, nil, function(err, detailed_run)
 		if not is_active_request(request_id, "detail") then
@@ -479,6 +1198,10 @@ function M.open_detail_under_cursor()
 		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
+			render_error(
+				"Gitflow Actions",
+				"Failed to load run detail", err, hint_bar_for("detail")
+			)
 			return
 		end
 		M.state.detail_run = detailed_run
@@ -490,7 +1213,7 @@ function M.open_in_browser()
 	local url = nil
 	if M.state.view == "detail" and M.state.detail_run then
 		url = M.state.detail_run.url
-	else
+	elseif M.state.view == "list" then
 		local run = entry_under_cursor()
 		if run then
 			url = run.url
@@ -509,14 +1232,397 @@ function M.back_to_list()
 	if M.state.view ~= "detail" then
 		return
 	end
-	M.state.view = "list"
+	stop_watch()
 	M.state.detail_run = nil
-	update_float_footer()
+	M.state.detail_line_entries = {}
+	set_view("list")
 	M.refresh()
+end
+
+---General "go back one level": log -> its parent view, workflows -> list,
+---detail -> list. A no-op in list view (nothing above it).
+function M.back()
+	if M.state.view == "log" then
+		local parent = (M.state.log and M.state.log.parent_view) or "list"
+		M.state.log = nil
+		if parent == "detail" and M.state.detail_run then
+			set_view("detail")
+			render_detail(M.state.detail_run)
+		else
+			set_view("list")
+			M.refresh()
+		end
+		return
+	end
+
+	if M.state.view == "workflows" then
+		M.state.workflows = nil
+		set_view("list")
+		M.refresh()
+		return
+	end
+
+	if M.state.view == "detail" then
+		M.back_to_list()
+	end
+end
+
+-- ── Filters and pagination (list view) ──────────────────────────────────
+
+local FILTER_FIELDS = {
+	{ key = "workflow", label = "Workflow (name or filename): " },
+	{ key = "status", label = "Status (e.g. success, failure, in_progress): " },
+	{ key = "event", label = "Event (e.g. push, pull_request): " },
+	{ key = "actor", label = "Actor (GitHub username): " },
+}
+
+function M.open_filter_menu()
+	if M.state.view ~= "list" then
+		utils.notify("Filters are only available in the run list", vim.log.levels.WARN)
+		return
+	end
+
+	local items = {}
+	for _, field in ipairs(FILTER_FIELDS) do
+		items[#items + 1] = field
+	end
+	items[#items + 1] = { key = "__clear__", label = "Clear all filters" }
+
+	vim.ui.select(items, {
+		prompt = "Filter runs by…",
+		format_item = function(item)
+			if item.key == "__clear__" then
+				return item.label
+			end
+			local current = M.state.filters[item.key]
+			local suffix = (current and current ~= "")
+				and (" [current: " .. current .. "]") or ""
+			return item.label .. suffix
+		end,
+	}, function(choice)
+		if not choice then
+			return
+		end
+		if choice.key == "__clear__" then
+			M.state.filters = default_filters()
+			M.state.limit = DEFAULT_LIMIT
+			M.refresh()
+			return
+		end
+		input.prompt({
+			prompt = choice.label,
+			default = M.state.filters[choice.key] or "",
+		}, function(value)
+			local trimmed = vim.trim(value or "")
+			M.state.filters[choice.key] = trimmed ~= "" and trimmed or nil
+			M.state.limit = DEFAULT_LIMIT
+			M.refresh()
+		end)
+	end)
+end
+
+function M.toggle_branch_scope()
+	if M.state.view ~= "list" then
+		utils.notify("Branch scope only applies to the run list", vim.log.levels.WARN)
+		return
+	end
+	M.state.filters.all_branches = not M.state.filters.all_branches
+	M.state.limit = DEFAULT_LIMIT
+	M.refresh()
+end
+
+function M.load_more()
+	if M.state.view ~= "list" then
+		utils.notify("Load more only applies to the run list", vim.log.levels.WARN)
+		return
+	end
+	M.state.limit = M.state.limit + PAGE_STEP
+	M.refresh()
+end
+
+-- ── Log viewer ───────────────────────────────────────────────────────────
+
+function M.view_log_under_cursor()
+	if M.state.view == "list" then
+		local run = entry_under_cursor()
+		if not run then
+			utils.notify("No workflow run selected", vim.log.levels.WARN)
+			return
+		end
+		open_log(run.id, nil, run_title(run), "list")
+		return
+	end
+
+	if M.state.view == "detail" and M.state.detail_run then
+		local run = M.state.detail_run
+		local job = job_under_cursor()
+		local title = job
+			and ("%s — %s"):format(run_title(run), job.name)
+			or run_title(run)
+		open_log(run.id, job, title, "detail")
+		return
+	end
+
+	utils.notify("Open a run first", vim.log.levels.WARN)
+end
+
+function M.jump_to_first_error()
+	if M.state.view ~= "log" or not M.state.log or not M.state.log.lines then
+		utils.notify("Open a log first", vim.log.levels.WARN)
+		return
+	end
+
+	local index = gh_actions.find_first_error_line(M.state.log.lines)
+	if not index then
+		utils.notify("No error found in this log", vim.log.levels.WARN)
+		return
+	end
+
+	local buffer_line = (M.state.log.content_start or 1) + index - 1
+	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
+		pcall(vim.api.nvim_win_set_cursor, M.state.winid, { buffer_line, 0 })
+		pcall(vim.api.nvim_win_call, M.state.winid, function()
+			vim.cmd("normal! zz")
+		end)
+	end
+end
+
+-- ── Rerun / cancel ───────────────────────────────────────────────────────
+
+function M.rerun_under_cursor()
+	local run_id = target_run_id()
+	if not run_id then
+		utils.notify("No workflow run selected", vim.log.levels.WARN)
+		return
+	end
+	perform_mutation({
+		id = run_id,
+		confirm_message = ("Rerun run #%s?"):format(tostring(run_id)),
+		in_progress_message = ("Rerunning run #%s"):format(tostring(run_id)),
+		done_message = ("Rerun triggered for run #%s"):format(tostring(run_id)),
+		call = function(cb)
+			gh_actions.rerun(run_id, nil, function(err)
+				cb(err)
+			end)
+		end,
+	})
+end
+
+function M.rerun_failed_under_cursor()
+	local run_id = target_run_id()
+	if not run_id then
+		utils.notify("No workflow run selected", vim.log.levels.WARN)
+		return
+	end
+	perform_mutation({
+		id = run_id,
+		confirm_message = ("Rerun failed jobs for run #%s?"):format(tostring(run_id)),
+		in_progress_message = ("Rerunning failed jobs for run #%s"):format(tostring(run_id)),
+		done_message = ("Rerun (failed jobs) triggered for run #%s"):format(tostring(run_id)),
+		call = function(cb)
+			gh_actions.rerun_failed(run_id, nil, function(err)
+				cb(err)
+			end)
+		end,
+	})
+end
+
+function M.rerun_job_under_cursor()
+	if M.state.view ~= "detail" or not M.state.detail_run then
+		utils.notify("Open a run detail view first", vim.log.levels.WARN)
+		return
+	end
+	local job = job_under_cursor()
+	if not job then
+		utils.notify("Move the cursor onto a job", vim.log.levels.WARN)
+		return
+	end
+
+	local run_id = M.state.detail_run.id
+	perform_mutation({
+		id = run_id,
+		confirm_message = ("Rerun job '%s' for run #%s?"):format(job.name, tostring(run_id)),
+		in_progress_message = ("Rerunning job '%s' for run #%s"):format(job.name, tostring(run_id)),
+		done_message = ("Rerun triggered for job '%s'"):format(job.name),
+		call = function(cb)
+			gh_actions.rerun_job(run_id, job.id, nil, function(err)
+				cb(err)
+			end)
+		end,
+	})
+end
+
+function M.cancel_under_cursor()
+	local run_id = target_run_id()
+	if not run_id then
+		utils.notify("No workflow run selected", vim.log.levels.WARN)
+		return
+	end
+	perform_mutation({
+		id = run_id,
+		confirm_message = ("Cancel run #%s?"):format(tostring(run_id)),
+		in_progress_message = ("Cancelling run #%s"):format(tostring(run_id)),
+		done_message = ("Cancelled run #%s"):format(tostring(run_id)),
+		call = function(cb)
+			gh_actions.cancel(run_id, nil, function(err)
+				cb(err)
+			end)
+		end,
+	})
+end
+
+-- ── Watch (bounded polling) ──────────────────────────────────────────────
+
+---@return integer
+local function watch_interval_ms()
+	local cfg = M.state.cfg
+	local interval = cfg and cfg.actions and cfg.actions.watch_interval
+	return (type(interval) == "number" and interval > 0) and interval or 10000
+end
+
+---One watch tick. The watch owns `watch.generation` and never touches the
+---panel's `request_id`: sharing that counter meant any user fetch killed the
+---watch silently, and every tick stranded an in-flight log fetch.
+---@param run_id integer
+---@param generation integer
+local function poll_watch_once(run_id, generation)
+	gh_actions.view(run_id, nil, function(err, run)
+		local watch = M.state.watch
+		if not watch.active or watch.generation ~= generation then
+			return
+		end
+
+		if err then
+			watch.errors = watch.errors + 1
+			utils.notify(err, vim.log.levels.ERROR)
+			if watch.errors >= WATCH_MAX_ERRORS then
+				stop_watch()
+				utils.notify(
+					("Stopped watching run #%s after %d consecutive errors")
+						:format(tostring(run_id), WATCH_MAX_ERRORS),
+					vim.log.levels.WARN
+				)
+				render_current_view()
+				return
+			end
+		else
+			watch.errors = 0
+			-- Repaint only the run actually on screen; a watch that outlives
+			-- a view change keeps polling but must not paint over the
+			-- current view.
+			local showing = M.state.detail_run
+				and M.state.detail_run.id == run_id
+			if showing then
+				M.state.detail_run = run
+			end
+			local finished = gh_actions.is_terminal_status(run.status)
+			if finished then
+				stop_watch()
+			end
+			if showing and M.state.view == "detail" and M.is_open() then
+				render_detail(run)
+			end
+			if finished then
+				return
+			end
+		end
+
+		watch.timer = vim.defer_fn(function()
+			if not watch.active or watch.generation ~= generation then
+				return
+			end
+			-- Panel buffer replaced in its own window fires no WinClosed;
+			-- catch that here instead of polling an invisible panel forever.
+			if not M.is_open() then
+				stop_watch()
+				return
+			end
+			poll_watch_once(run_id, generation)
+		end, watch_interval_ms())
+	end)
+end
+
+local function start_watch()
+	if M.state.view ~= "detail" or not M.state.detail_run then
+		utils.notify("Open a run detail view first", vim.log.levels.WARN)
+		return
+	end
+	if gh_actions.is_terminal_status(M.state.detail_run.status) then
+		utils.notify("Run has already finished", vim.log.levels.WARN)
+		return
+	end
+
+	local run_id = M.state.detail_run.id
+	M.state.watch.active = true
+	M.state.watch.generation = (M.state.watch.generation or 0) + 1
+	M.state.watch.run_id = run_id
+	M.state.watch.errors = 0
+	utils.notify(("Watching run #%s…"):format(tostring(run_id)), vim.log.levels.INFO)
+	poll_watch_once(run_id, M.state.watch.generation)
+end
+
+function M.toggle_watch()
+	if M.state.watch.active then
+		stop_watch()
+		utils.notify("Stopped watching", vim.log.levels.INFO)
+		render_current_view()
+		return
+	end
+	start_watch()
+end
+
+-- ── Workflow list + dispatch ─────────────────────────────────────────────
+
+function M.open_workflows()
+	if M.state.view ~= "list" then
+		utils.notify("Open the run list first", vim.log.levels.WARN)
+		return
+	end
+
+	set_view("workflows")
+	local B = ui_render.builder()
+	components.header(
+		B, "Gitflow Actions — Workflows",
+		{ bufnr = M.state.bufnr, winid = M.state.winid }
+	)
+	components.loading(B, "Loading workflows…")
+	B:flush("actions", M.state.bufnr, ACTIONS_HIGHLIGHT_NS)
+
+	fetch_workflows()
+end
+
+function M.dispatch_under_cursor()
+	if M.state.view ~= "workflows" then
+		utils.notify("Open the workflow list first", vim.log.levels.WARN)
+		return
+	end
+	local workflow = entry_under_cursor()
+	if not workflow then
+		utils.notify("No workflow selected", vim.log.levels.WARN)
+		return
+	end
+
+	git_branch.current({}, function(_, branch)
+		perform_mutation({
+			id = workflow.id,
+			confirm_message = ("Dispatch workflow '%s' on %s?"):format(
+				workflow.name, branch or "(current branch)"
+			),
+			in_progress_message = ("Dispatching '%s'"):format(workflow.name),
+			done_message = ("Dispatched '%s'"):format(workflow.name),
+			call = function(cb)
+				local target = workflow.path ~= "" and workflow.path or workflow.id
+				gh_actions.workflow_run(target, branch, nil, function(err)
+					cb(err)
+				end)
+			end,
+		})
+	end)
 end
 
 function M.close()
 	next_request_id()
+	stop_watch()
 	clear_post_operation_autocmd()
 
 	if M.state.winid then
@@ -534,14 +1640,28 @@ function M.close()
 	M.state.bufnr = nil
 	M.state.winid = nil
 	M.state.line_entries = {}
+	M.state.detail_line_entries = {}
 	M.state.view = "list"
 	M.state.detail_run = nil
+	M.state.workflows = nil
+	M.state.filters = default_filters()
+	M.state.limit = DEFAULT_LIMIT
+	M.state.busy = nil
+	M.state.log = nil
 end
 
+---Open means visible: the buffer survives a window close (bufhidden=hide),
+---so a buffer-only check reported an invisible panel as open and every
+---guard built on it kept running. The tracked winid is not enough either —
+---replacing the panel buffer in its own window (`:enew`, `:e`, a clone
+---split) fires no WinClosed, so key liveness to whether the buffer is
+---actually displayed, not to the window id.
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	if M.state.bufnr == nil or not vim.api.nvim_buf_is_valid(M.state.bufnr) then
+		return false
+	end
+	return vim.fn.bufwinid(M.state.bufnr) ~= -1
 end
 
 return M

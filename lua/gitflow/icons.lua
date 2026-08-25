@@ -56,6 +56,7 @@ local NF = {
 	info = "\u{f449}",             -- nf-oct-info
 	empty = "\u{f487}",            -- nf-oct-inbox
 	keyboard = "\u{f40b}",         -- nf-oct-keyboard (hint blocks)
+	warning = "\u{f071}",          -- nf-fa-warning
 }
 
 ---@type table<string, table<string, {nerd: string, ascii: string}>>
@@ -94,7 +95,7 @@ local registry = {
 	branch = {
 		current = { nerd = NF.branch_current, ascii = "*" },
 		remote = { nerd = NF.branch_remote, ascii = "@" },
-		local_branch = { nerd = NF.branch_local, ascii = " " },
+		local_branch = { nerd = NF.branch_local, ascii = "-" },
 	},
 	file_status = {
 		A = { nerd = NF.file_add, ascii = "[+]" },
@@ -131,13 +132,13 @@ local registry = {
 	},
 	ui = {
 		author = { nerd = NF.author, ascii = "@" },
-		comment = { nerd = NF.comment, ascii = "" },
-		clock = { nerd = NF.clock, ascii = "" },
-		search = { nerd = NF.search, ascii = "" },
+		comment = { nerd = NF.comment, ascii = "\"" },
+		clock = { nerd = NF.clock, ascii = "~" },
+		search = { nerd = NF.search, ascii = "/" },
 		check = { nerd = NF.check, ascii = "x" },
-		tag = { nerd = NF.tag, ascii = "" },
-		ref = { nerd = NF.ref, ascii = "" },
-		merge = { nerd = NF.merge, ascii = "" },
+		tag = { nerd = NF.tag, ascii = "#" },
+		ref = { nerd = NF.ref, ascii = "*" },
+		merge = { nerd = NF.merge, ascii = "&" },
 		dot = { nerd = NF.dot, ascii = "\u{b7}" },
 		chevron = { nerd = NF.chevron, ascii = ">" },
 		loading = { nerd = NF.loading, ascii = "\u{2026}" },
@@ -145,6 +146,7 @@ local registry = {
 		info = { nerd = NF.info, ascii = "i" },
 		empty = { nerd = NF.empty, ascii = "\u{2014}" },
 		keyboard = { nerd = NF.keyboard, ascii = "::" },
+		warning = { nerd = NF.warning, ascii = "!" },
 	},
 }
 
@@ -169,6 +171,13 @@ function M.get(category, name)
 		return entry.nerd
 	end
 	return entry.ascii
+end
+
+---Every registry entry, for tests and for callers that need to enumerate the
+---icon set (e.g. to assert the ASCII fallbacks stay complete).
+---@return table<string, table<string, {nerd: string, ascii: string}>>
+function M.entries()
+	return registry
 end
 
 return M

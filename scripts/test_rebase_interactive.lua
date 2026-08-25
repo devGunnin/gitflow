@@ -269,10 +269,10 @@ end)
 
 -- ─── Keybinding tests ───
 
-test("default rebase_interactive keybinding is gI", function()
+test("default rebase_interactive keybinding is <leader>gI", function()
 	assert_equals(
-		cfg.keybindings.rebase_interactive, "gI",
-		"default rebase_interactive keybinding should be gI"
+		cfg.keybindings.rebase_interactive, "<leader>gI",
+		"default rebase_interactive keybinding should be <leader>gI"
 	)
 end)
 
@@ -286,9 +286,9 @@ end)
 
 test("default rebase_interactive keymap maps to plug", function()
 	assert_mapping(
-		cfg.keybindings.rebase_interactive,
+		(cfg.keybindings.rebase_interactive:gsub("<leader>", vim.g.mapleader or "\\")),
 		"<Plug>(GitflowRebaseInteractive)",
-		"gI should map to <Plug>(GitflowRebaseInteractive)"
+		"<leader>gI should map to <Plug>(GitflowRebaseInteractive)"
 	)
 end)
 
@@ -1028,7 +1028,7 @@ end)
 test("config validation accepts rebase_interactive keybinding", function()
 	local config = require("gitflow.config")
 	local test_cfg = config.defaults()
-	test_cfg.keybindings.rebase_interactive = "gI"
+	test_cfg.keybindings.rebase_interactive = "<leader>gI"
 	local ok = pcall(config.validate, test_cfg)
 	assert_true(
 		ok,
@@ -1206,6 +1206,243 @@ test("delayed callback is ignored after panel close", function()
 
 	git_rebase.list_commits = original_list_commits
 	git_branch.current = original_current
+	rb_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test("moving the cursor repaints only the detail bar", function()
+	local rb_panel = require("gitflow.panels.rebase")
+	local git_branch = require("gitflow.git.branch")
+	local list_picker = require("gitflow.ui.list_picker")
+
+	local original_list = git_branch.list
+	local original_picker_open = list_picker.open
+	git_branch.list = function(_, cb)
+		cb(nil, { { name = "main", is_current = false, kind = "local" } })
+	end
+	list_picker.open = function() end
+
+	local set_lines_calls = {}
+	local original_set_lines = vim.api.nvim_buf_set_lines
+
+	local ok, err = pcall(function()
+		rb_panel.close()
+		rb_panel.open(cfg)
+		rb_panel.state.base_ref = "main"
+		rb_panel.state.stage = "normal"
+		rb_panel.state.entries = {
+			{ action = "pick", sha = "a1", short_sha = "a1",
+				subject = "first", author = "ann", relative_time = "1d ago" },
+			{ action = "pick", sha = "b2", short_sha = "b2",
+				subject = "second", author = "bob", relative_time = "2d ago" },
+			{ action = "pick", sha = "c3", short_sha = "c3",
+				subject = "third", author = "cat", relative_time = "3d ago" },
+		}
+		rb_panel.switch_to_interactive()
+
+		local bufnr = rb_panel.state.bufnr
+		local winid = rb_panel.state.winid
+		assert_true(bufnr ~= nil and winid ~= nil, "todo stage should have a window")
+		local before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+		-- A cursor move re-renders the panel to move the focus detail bar. With
+		-- the diffing render that must rewrite one line, not the whole buffer.
+		vim.api.nvim_buf_set_lines = function(buf, start, stop, strict, lines)
+			if buf == bufnr then
+				set_lines_calls[#set_lines_calls + 1] = { start = start, stop = stop }
+			end
+			return original_set_lines(buf, start, stop, strict, lines)
+		end
+		-- CursorMoved does not fire from a headless `-l` script (no main loop),
+		-- so move the cursor and run the panel's own autocmd directly.
+		vim.api.nvim_set_current_win(winid)
+		for _, line in ipairs({ 6, 7, 8 }) do
+			vim.api.nvim_win_set_cursor(winid, { line, 0 })
+			vim.api.nvim_exec_autocmds("CursorMoved", { buffer = bufnr })
+		end
+		assert_true(
+			rb_panel.state.focused_line == 8,
+			"the focus should have followed the cursor"
+		)
+		assert_true(#set_lines_calls > 0, "a focus move should re-render the panel")
+		vim.api.nvim_buf_set_lines = original_set_lines
+
+		local after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		assert_equals(#after, #before, "a focus move should not change the line count")
+
+		local changed = 0
+		for index, line in ipairs(after) do
+			if line ~= before[index] then
+				changed = changed + 1
+			end
+		end
+		assert_true(
+			changed <= 1,
+			("a focus move should change at most the detail bar, changed=%d"):format(changed)
+		)
+		for _, call in ipairs(set_lines_calls) do
+			assert_true(
+				call.stop - call.start <= 1,
+				("a focus move should rewrite one line, got %d..%d"):format(call.start, call.stop)
+			)
+		end
+	end)
+
+	vim.api.nvim_buf_set_lines = original_set_lines
+	git_branch.list = original_list
+	list_picker.open = original_picker_open
+	rb_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test("the preview does not keep another commit's diff when the cursor settles off a row", function()
+	local rb_panel = require("gitflow.panels.rebase")
+	local git_branch = require("gitflow.git.branch")
+	local list_picker = require("gitflow.ui.list_picker")
+	local git = require("gitflow.git")
+
+	local original_list = git_branch.list
+	local original_picker_open = list_picker.open
+	local original_git = git.git
+	git_branch.list = function(_, cb)
+		cb(nil, { { name = "main", is_current = false, kind = "local" } })
+	end
+	list_picker.open = function() end
+	git.git = function(args, opts, cb)
+		if args[1] == "show" then
+			cb({ stdout = "diff of " .. args[#args], stderr = "", code = 0 })
+			return
+		end
+		return original_git(args, opts, cb)
+	end
+
+	local ok, err = pcall(function()
+		rb_panel.close()
+		rb_panel.open(cfg)
+		rb_panel.state.base_ref = "main"
+		rb_panel.state.stage = "normal"
+		rb_panel.state.entries = {
+			{ action = "pick", sha = "a1", short_sha = "a1",
+				subject = "first", author = "ann", relative_time = "1d ago" },
+		}
+		rb_panel.switch_to_interactive()
+		rb_panel.state.preview_bufnr = vim.api.nvim_create_buf(false, true)
+
+		local commit_line
+		for line, entry in pairs(rb_panel.state.line_entries or {}) do
+			if entry.sha == "a1" then
+				commit_line = line
+			end
+		end
+		assert_true(commit_line ~= nil, "the todo list should render the commit")
+
+		rb_panel.state.focused_line = commit_line
+		rb_panel.refresh_preview()
+		vim.wait(200, function()
+			return vim.api.nvim_buf_get_lines(
+				rb_panel.state.preview_bufnr, 0, -1, false
+			)[1] == "diff of a1"
+		end, 10)
+
+		-- The cursor settles on a header line, which maps to no commit.
+		rb_panel.state.focused_line = 1
+		rb_panel.refresh_preview()
+		local shown = vim.api.nvim_buf_get_lines(
+			rb_panel.state.preview_bufnr, 0, -1, false
+		)
+		assert_true(
+			table.concat(shown, "\n"):find("diff of a1", 1, true) == nil,
+			"a row with no commit must not show the previous commit's diff"
+		)
+
+		vim.api.nvim_buf_delete(rb_panel.state.preview_bufnr, { force = true })
+		rb_panel.state.preview_bufnr = nil
+	end)
+
+	git.git = original_git
+	git_branch.list = original_list
+	list_picker.open = original_picker_open
+	rb_panel.close()
+
+	if not ok then
+		error(err, 0)
+	end
+end)
+
+test("a burst of cursor moves coalesces into one preview fetch", function()
+	local rb_panel = require("gitflow.panels.rebase")
+	local git_branch = require("gitflow.git.branch")
+	local list_picker = require("gitflow.ui.list_picker")
+	local git = require("gitflow.git")
+
+	local original_list = git_branch.list
+	local original_picker_open = list_picker.open
+	local original_git = git.git
+	git_branch.list = function(_, cb)
+		cb(nil, { { name = "main", is_current = false, kind = "local" } })
+	end
+	list_picker.open = function() end
+
+	local shows = {}
+	git.git = function(args, opts, cb)
+		if args[1] == "show" then
+			shows[#shows + 1] = args[#args]
+			cb({ stdout = "", stderr = "", code = 0 })
+			return
+		end
+		return original_git(args, opts, cb)
+	end
+
+	local ok, err = pcall(function()
+		rb_panel.close()
+		rb_panel.open(cfg)
+		rb_panel.state.base_ref = "main"
+		rb_panel.state.stage = "normal"
+		rb_panel.state.entries = {
+			{ action = "pick", sha = "a1", short_sha = "a1",
+				subject = "first", author = "ann", relative_time = "1d ago" },
+			{ action = "pick", sha = "b2", short_sha = "b2",
+				subject = "second", author = "bob", relative_time = "2d ago" },
+			{ action = "pick", sha = "c3", short_sha = "c3",
+				subject = "third", author = "cat", relative_time = "3d ago" },
+		}
+		rb_panel.switch_to_interactive()
+
+		local bufnr = rb_panel.state.bufnr
+		local winid = rb_panel.state.winid
+		assert_true(bufnr ~= nil and winid ~= nil, "todo stage should have a window")
+
+		-- Stand in for an open preview float: the panel only asks whether the
+		-- window is alive before refreshing it.
+		rb_panel.state.preview_winid = winid
+		rb_panel.state.preview_bufnr = vim.api.nvim_create_buf(false, true)
+
+		vim.api.nvim_set_current_win(winid)
+		for _, line in ipairs({ 6, 7, 8 }) do
+			vim.api.nvim_win_set_cursor(winid, { line, 0 })
+			vim.api.nvim_exec_autocmds("CursorMoved", { buffer = bufnr })
+		end
+		assert_equals(#shows, 0, "no git show should run while the cursor is moving")
+
+		vim.wait(400, function()
+			return #shows > 0
+		end, 10)
+		assert_equals(#shows, 1, "a burst of cursor moves is one fetch")
+
+		vim.api.nvim_buf_delete(rb_panel.state.preview_bufnr, { force = true })
+		rb_panel.state.preview_winid = nil
+		rb_panel.state.preview_bufnr = nil
+	end)
+
+	git.git = original_git
+	git_branch.list = original_list
+	list_picker.open = original_picker_open
 	rb_panel.close()
 
 	if not ok then

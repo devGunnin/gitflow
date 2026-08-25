@@ -114,9 +114,20 @@ T.run_suite("E2E: Tag Panel", {
 		local bufnr = ui.buffer.get("tag")
 		T.assert_true(bufnr ~= nil, "tag buffer should exist")
 		local lines = T.buf_lines(bufnr)
+		-- The whole fitted bar, not just `q close`: that alone would pass
+		-- against a hardcoded string rather than the panel's own registry.
+		local bar_line = T.find_line(lines, "q close")
 		T.assert_true(
-			T.find_line(lines, "remote del") ~= nil,
-			"tag panel split layout should render its keybind hints"
+			bar_line ~= nil, "tag split layout should render a hint bar"
+		)
+		local bar = lines[bar_line]
+		for _, hint in ipairs({ "c create", "q close", "? help" }) do
+			T.assert_contains(bar, hint, "tag hint bar should keep " .. hint)
+		end
+		T.assert_contains(bar, "\u{2026}", "an elided bar should say so")
+		T.assert_true(
+			not bar:find("X remote del", 1, true),
+			"the destructive key should elide first: " .. bar
 		)
 
 		tag_panel.close()
@@ -427,11 +438,14 @@ T.run_suite("E2E: Tag Panel", {
 		)
 	end,
 
-	["gT keybinding wired to Plug(GitflowTag)"] = function()
+	["<leader>gt keybinding wired to Plug(GitflowTag)"] = function()
 		local maps = vim.api.nvim_get_keymap("n")
+		-- The default is `<leader>`-prefixed, and a map's lhs carries the real
+		-- leader character, not the placeholder.
+		local lhs = cfg.keybindings.tag:gsub("<leader>", vim.g.mapleader or "\\")
 		local found = false
 		for _, map in ipairs(maps) do
-			if map.lhs == cfg.keybindings.tag then
+			if map.lhs == lhs then
 				T.assert_contains(
 					map.rhs or "",
 					"GitflowTag",

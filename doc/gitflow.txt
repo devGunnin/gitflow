@@ -13,6 +13,7 @@ CONTENTS                                                   *gitflow-contents*
     5. Configuration ........... |gitflow-config|
     6. Commands ................ |gitflow-commands|
     7. Keybindings ............. |gitflow-keybindings|
+       Migration from pre-v2 .. |gitflow-keymaps-v2|
     8. Highlights .............. |gitflow-highlights|
     9. Signs ................... |gitflow-signs|
    10. Icons ................... |gitflow-icons|
@@ -86,20 +87,32 @@ keybinding by specifying the action name and desired mapping: >lua
       commit = "<leader>gc",
     }
 <
+These are ordinary normal-mode mappings installed in every buffer, so they are
+opt-out at two grains.  Set one action to `false` to leave that key alone: >lua
+    keybindings = { commit = false }
+<
+Or set the whole table to `false` to install none of them.  The <Plug> targets
+below are still defined, so you can bind your own keys to any action: >lua
+    require("gitflow").setup({ keybindings = false })
+    vim.keymap.set("n", "<leader>c", "<Plug>(GitflowCommit)", { remap = true })
+<
+A duplicate mapping is an error; a disabled action claims no key and so cannot
+collide.  See |gitflow-keymaps-v2| for what moved in v2 and how to restore it.
+
 
 Default keybindings:
 
     Action          Default             Plug Mapping ~
     help            <leader>gh          <Plug>(GitflowHelp)
     open            <leader>go          <Plug>(GitflowOpen)
-    refresh         gr                  <Plug>(GitflowRefresh)
+    refresh         <leader>gz          <Plug>(GitflowRefresh)
     close           <leader>gq          <Plug>(GitflowClose)
-    status          gs                  <Plug>(GitflowStatus)
-    commit          gc                  <Plug>(GitflowCommit)
+    status          <leader>gs          <Plug>(GitflowStatus)
+    commit          <leader>gc          <Plug>(GitflowCommit)
     push            <leader>gP          <Plug>(GitflowPush)
     pull            <leader>gp          <Plug>(GitflowPull)
     fetch           <leader>gf          <Plug>(GitflowFetch)
-    diff            gD                  <Plug>(GitflowDiff)
+    diff            <leader>gd          <Plug>(GitflowDiff)
     log             gl                  <Plug>(GitflowLog)
     stash           gS                  <Plug>(GitflowStash)
     stash_push      gZ                  <Plug>(GitflowStashPush)
@@ -109,17 +122,60 @@ Default keybindings:
     pr              <leader>gr          <Plug>(GitflowPr)
     label           <leader>gL          <Plug>(GitflowLabel)
     conflict        <leader>gm          <Plug>(GitflowConflicts)
-    palette         gP                  <Plug>(GitflowPalette)
+    palette         <leader>gx          <Plug>(GitflowPalette)
     pr_review       <leader>gG          <Plug>(GitflowPrReview)
     blame           gB                  <Plug>(GitflowBlame)
     blame_inline    <leader>gB          <Plug>(GitflowBlameInline)
     worktree        gW                  <Plug>(GitflowWorktree)
+    reset           <leader>gR          <Plug>(GitflowReset)
+    revert          <leader>gv          <Plug>(GitflowRevert)
+    tag             <leader>gt          <Plug>(GitflowTag)
+    reflog          <leader>gF          <Plug>(GitflowReflog)
+    cherry_pick     gC                  <Plug>(GitflowCherryPick)
+    rebase_interactive <leader>gI          <Plug>(GitflowRebaseInteractive)
+    actions         gA                  <Plug>(GitflowActions)
+    notifications   <leader>gn          <Plug>(GitflowNotifications)
+
+                                            *gitflow-config-panel-keybindings*
+panel_keybindings ~
+
+Per-panel key overrides (issue #307).  Keyed by the panel's registry name,
+then by the DEFAULT key label that panel advertises; the value is the
+replacement key, or `false` to unbind it entirely: >lua
+    panel_keybindings = {
+      status = { X = "<leader>X" },   -- move "discard changes"
+      tag    = { D = false },         -- remove "delete tag"
+    }
+<
+Panel names and their key labels are exactly what `?` lists inside the panel,
+and what KEYBINDINGS.md documents.  An override moves the hint and the `?`
+entry with the binding, so the panel never advertises a key it does not bind.
+This covers every registered surface, including the three that are not panels
+(actions, conflict_resolver, review_diff) and the command palette.
+
+A pair or range entry (`s/u`, `p/w/e/s/f`, `1-9`) can be re-keyed whole: name
+several keys separated by `/`.  Behaviour follows position, so `r` below does
+what `w` did.  A single key collapses the entry to that key, keeping the first
+of its actions; naming more keys than the entry binds is refused.
+>lua
+    panel_keybindings = {
+      rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },  -- r rewords again
+    }
+<
+Two guards, both loud.  A label that matches no key in that panel warns when
+the panel opens.  An override that would land on a key the panel already binds
+is REFUSED whole for that panel -- every other override for that panel goes
+back with it -- with a warning naming the clash; otherwise
+one verb silently wins the key while the hints advertise both.  Move the other
+key in the same table, as `r = "R"` does above, and both apply.
 
                                                           *gitflow-config-ui*
 ui ~
 
     Option              Type        Default     Description ~
     default_layout      string      "split"     "split" or "float"
+    separator_width     number      0           Panel content width, clamped to
+                                                 the window; 0 = adapt to window
     split.orientation   string      "vertical"  "vertical" or "horizontal"
     split.size          number      50          Column/row count
     float.width         number      0.8         Fraction or absolute columns
@@ -172,6 +228,14 @@ inline_blame ~
     auto            boolean     false           Auto-show in every file buffer
     delay           number      200             Debounce (ms) before blaming
     date_format     string      "%Y-%m-%d"      os.date() format for the date
+
+                                                    *gitflow-config-actions*
+actions ~
+
+    Option              Type        Default     Description ~
+    watch_interval      number      10000       Poll interval (ms) for the
+                                                 actions panel's live-watch
+                                                 (`w`); minimum 1000
 
                                                   *gitflow-config-validation*
 validation ~
@@ -232,20 +296,33 @@ GitHub ~
     :Gitflow issue view <number>        View an issue
     :Gitflow issue create               Create a new issue
     :Gitflow issue comment <number>     Comment on an issue
-    :Gitflow issue close <number>       Close an issue
+    :Gitflow issue close <number> [completed|not_planned]
+                                        Close an issue, with a reason
     :Gitflow issue reopen <number>      Reopen an issue
     :Gitflow issue edit <number> [opts] Edit issue attributes
+                                        (title=, body=, milestone=,
+                                        add=, remove=, add_assignees=,
+                                        remove_assignees=)
     :Gitflow pr list                    List pull requests
     :Gitflow pr view <number>           View a pull request
     :Gitflow pr create                  Create a new pull request
     :Gitflow pr comment <number>        Comment on a PR
-    :Gitflow pr merge <number>          Merge a PR
+    :Gitflow pr merge <number> [merge|squash|rebase]
+                     [--delete-branch] [--auto]
+                                        Merge a PR, optionally deleting
+                                        its branch or queueing auto-merge
     :Gitflow pr checkout <number>       Check out a PR branch
     :Gitflow pr close <number>          Close a PR
+    :Gitflow pr reopen <number>         Reopen a PR
+    :Gitflow pr ready <number> [--undo] Mark a PR ready for review, or
+                                        (--undo) back to a draft
     :Gitflow pr review <number>         Open review panel for a PR
     :Gitflow pr submit-review <number>  Submit pending review
     :Gitflow pr respond <number>        Respond to a review thread
-    :Gitflow pr edit <number> [opts]    Edit PR attributes
+    :Gitflow pr edit <number> [opts]    Edit PR attributes (title=,
+                                        body=, add=, remove=,
+                                        add_assignees=, remove_assignees=,
+                                        reviewers=, remove_reviewers=)
     :Gitflow label list                 List repository labels
     :Gitflow label create               Create a new label
     :Gitflow label delete <name>        Delete a label
@@ -253,264 +330,110 @@ GitHub ~
 ==============================================================================
 7. KEYBINDINGS                                          *gitflow-keybindings*
 
-See |gitflow-config-keybindings| for global mappings.
+See |gitflow-config-keybindings| for the global mappings and how to move or
+disable them, and |gitflow-config-panel-keybindings| for panel-local ones.
 
-Panel-local keybindings are set on each panel buffer. These are fixed and
-cannot be overridden through configuration.
+Discovering keys ~
+    ?                   In any gitflow panel: open a scrollable help buffer
+                        listing every key that panel binds.  The merge
+                        conflict resolver uses c? instead, so plain ? stays
+                        vim's reverse search in that editable pane.
+    :Gitflow help       The same buffer for :Gitflow subcommands and the
+                        global mappings currently installed.
 
-Status panel ~
-    s       Stage file under cursor (or visual-line selection)
-    u       Unstage file under cursor (or visual-line selection)
-    a       Stage all files
-    A       Unstage all files
-    <CR>    Open the file under cursor for editing
-    cc      Commit
-    dd      Review diff for file under cursor (diff review viewer)
-    cx      Open conflict resolution for file
-    p       Push
-    X       Revert uncommitted changes in file
-    r       Refresh
-    q       Close
+Both are generated from the panel's own key registry, so they cannot drift
+from what is actually bound.  KEYBINDINGS.md in the repository is the full
+written reference.
 
-Diff view ~
-    r       Refresh diff
-    ]f/[f   Next / previous file
-    ]c/[c   Next / previous hunk
-    q       Close
+Cross-panel rules ~
+    r                   Refresh, in every panel.
+    q                   Close, in every panel.
+    ?                   Key help, in every panel.
+    Destructive keys    d D x X H M, plus cD and <leader>x, are the
+                        delete/discard/rewrite verbs.  No
+                        key that is destructive in one panel is a benign
+                        action in another -- hence the issue milestone on
+                        T and the PR draft toggle on t -- scripts/test_keymap_contract.lua
+                        fails the build if that stops being true.  Every
+                        destructive verb asks before it acts and declining
+                        changes nothing; that is audited by hand, and
+                        scripts/test_confirm_gates.lua drives three of the
+                        gates with the answer NO.  Rebase's `d drop` is the
+                        one deliberate exception: it edits a todo list you
+                        have not executed yet.
 
-Diff review viewer ~
-    A separate, richer diff surface: a tabpage with a file-list pane on
-    the left and a per-file diff on the right.  Opens for `dd` in the
-    status panel (working tree, or --staged) and for <CR> / range-review
-    in the log view (a single commit, or a marked commit range).  No
-    direct :Gitflow command opens it.
+                                                         *gitflow-keymaps-v2*
+Migration from the pre-v2 keymaps ~
 
-    File list pane:
-      <CR>/o  Open file under cursor in the right pane
-      ]f/[f   Next / previous file
-      ]c/[c   Next / previous hunk
-      r       Refresh
-      q       Close
+Global mappings.  Gitflow no longer claims any bare g-sequence that Neovim
+itself defines: >
 
-    Diff pane:
-      ]f/[f   Next / previous file
-      ]c/[c   Next / previous hunk
-      q       Close
-
-Branch list ~
-    <CR>    Switch to branch under cursor
-    c       Create new branch
-    d       Delete branch
-    D       Force delete branch
-    m       Merge branch into current
-    u       Update branch to its upstream (fast-forward, no checkout)
-    r       Rename branch
-    R       Refresh branch list (with fetch)
-    f       Fetch remote branches
-    .       Jump to the current branch (list view only)
-    G       Toggle list / graph view
-    q       Close
-
-Log view ~
-    <CR>    Review commit under cursor (or, with a range marked, the range)
-    V       Mark commit under cursor as range start (<CR> on another
-            commit reviews the combined range; V on the same commit clears)
-    <Esc>   Cancel a pending range selection
-    r       Refresh
-    q       Close
-
-Stash panel ~
-    P       Pop stash entry under cursor
-    D       Drop stash entry under cursor
-    A       Apply stash entry under cursor
-    S       Stash with message prompt
-    r       Refresh
-    q       Close
-
-Issue list ~
-    <CR>    View issue under cursor (list mode)
-    c       Create new issue
-    C       Comment on issue
-    E       Edit issue title/body
-    x       Close issue
-    L       Edit labels
-    A       Edit assignees
-    f       Open filter menu (state/labels/assignee/milestone)
-    X       Clear all filters
-    s       Cycle sort key (updated/number/title/milestone)
-    S       Toggle sort direction
-    G       Cycle grouping (none/milestone/assignee/label)
-    <Tab>   Fold/unfold group under cursor (list mode, when grouped)
-    o       Switch to a saved view
-    O       Save current filters/sort as a named view
-    D       Delete a saved view
-    B       Create a branch from the selected issue
-    r       Refresh
-    b       Back to list (detail view)
-    q       Close
-
-PR list ~
-    <CR>    View PR under cursor (list mode)
-    c       Create new PR
-    C       Comment on PR
-    L       Edit labels
-    A       Edit assignees
-    m       Merge PR
-    x       Close PR
-    o       Checkout PR branch
-    v       Open review panel
-    r       Refresh
-    b       Back to list (detail view)
-    q       Close
-
-Review view ~
-    The review opens in its own tabpage: a collapsible file tree on the
-    left, the real working-tree file (with inline PR diff annotations) on
-    the right.  Removed lines are shown as syntax-highlighted virt_lines;
-    comments render as rounded note boxes beneath the line they target.
-    Files with review comments show a [n] badge in the tree (remote threads
-    from any author) plus a running total in the Files header; ]C / [C walk
-    through every comment in the PR.
-
-    Files that belong to the PR are decorated with the inline diff overlay
-    no matter how you open them inside the review tabpage — the file tree,
-    a fuzzy finder (e.g. Telescope find_files), :edit, or a quickfix jump.
-
-  File tree (left pane) ~
-    <CR>/o  Open file under cursor, or fold/unfold a folder row
-    <Tab>   Same as <CR>/o
-    za      Toggle the folder under the cursor
-    zR      Unfold all folders
-    zM      Fold all folders
-    ]f      Jump to / open next file
-    [f      Jump to / open previous file
-    ]C      Jump to next comment thread (any file)
-    [C      Jump to previous comment thread (any file)
-    c       Comment on the whole file under cursor (deleted files too)
-    C       Scope the review to a single commit or a range of commits
-    S       Submit pending review
-    <leader>c   Comments overview (picker over every thread in the PR)
-    <leader>d   Toggle diff overlay: PR changes vs. the file on the branch
-    r       Refresh
-    q       Close
-
-    On a draft row in the Drafts section: <CR> jumps to the comment, e
-    edits the draft body, dd (or x) deletes it, X deletes all off-diff
-    drafts.  e on a file row edits any draft on that file.
-
-  Diff pane (right) ~
-    <CR>    View the full discussion (all replies + drafts) for the
-            comment on the current line, in a floating window.  When the
-            line has no comment, behaves like the native <CR> motion.
-    ]f      Next file (without leaving the editing pane)
-    [f      Previous file
-    ]c      Jump to next hunk
-    [c      Jump to previous hunk
-    ]C      Jump to next comment thread (opens file, crosses files)
-    [C      Jump to previous comment thread
-    c       Inline comment (normal and visual mode)
-    s       Start a GitHub suggestion block for the current line (normal
-            and visual mode): opens the comment composer prefilled with
-            a suggestion code fence for the selected lines
-    S       Submit pending review (Comment / Request changes / Approve)
-    R       Reply to comment thread on the current line
-    <leader>t   Fold/unfold the reply thread on the current line
-    <leader>c   Comments overview (picker over every thread in the PR)
-    <leader>i   Toggle inline comment bodies (boxes) on/off
-    <leader>x   Delete draft/comment on the current line
-    <leader>d   Toggle diff overlay: PR changes vs. the file on the branch
-
-  Thread popup ~
-    R       Reply to the thread (remote threads only)
-    q/<Esc> Close the popup
-
-Conflict list ~
-    <CR>    Open the conflict resolver for the file under the cursor
-    r/R     Refresh conflict list
-    C       Continue active merge/rebase/cherry-pick
-    A       Abort active operation
-    q       Close
-
-Merge conflict resolver ~
-    Resolution actions are c-prefixed so plain vim motions keep working.
-    co      Take OURS (current) for the hunk
-    ct      Take THEIRS (incoming) for the hunk
-    cb      Keep BOTH sides for the hunk
-    cB      Take BASE version for the hunk
-    ca      Resolve all hunks (prompts for side)
-    ce      Enter manual edit mode for hunk
-    cx      Reset the file to its original conflicted state (undo all
-            edits and hunk choices for this file)
-    cr      Refresh from disk
-    ]c      Jump to next conflict hunk
-    [c      Jump to previous conflict hunk
-    q       Save & close conflict view
-
-Label panel ~
-    c       Create new label
-    d       Delete label under cursor
-    r       Refresh
-    q       Close
-
-Worktree panel ~
-    a       Add a worktree. Prompts for a path, then opens a searchable
-            branch picker for the base ref, then asks for an optional new
-            branch name. Leave the branch name empty to check out the
-            picked ref directly. (In the picker: / filter, <CR> select.)
-    d       Remove worktree under cursor (refuses if locked)
-    D       Force-remove worktree under cursor (discards changes; locked too)
-    m       Move worktree under cursor to a new path
-    L       Lock / unlock worktree under cursor
-    p       Prune stale worktree entries
-    <CR>    Switch to worktree under cursor (changes cwd)
-    r       Refresh
-    q       Close
-
-Command palette ~
-    <CR>            Select highlighted command
-    <Esc>           Close palette
-    <Down>/<C-n>    Move selection down
-    <Up>/<C-p>      Move selection up
-    <Tab>/<S-Tab>   Move selection down/up
-    <C-j>/<C-k>     Move selection down/up
-    1-9             Run the numbered command directly (index shown next
-                    to the first 9 entries)
-    j/k             Move selection (list normal mode)
-    q               Close (list normal mode)
-
-Known conflicts ~
-    Gitflow's global keybindings are ordinary normal-mode mappings
-    installed in every buffer, so they can shadow a plugin or LSP mapping.
-
-    gc vs vim-commentary: gitflow binds gc to `commit`; vim-commentary
-    uses gc as a comment operator.  Remap gitflow's commit action to free
-    gc: >lua
-        require("gitflow").setup({ keybindings = { commit = "<leader>gc" } })
+    Action              Old         New
+    refresh             gr          <leader>gz    (gr is 0.11's LSP prefix)
+    status              gs          <leader>gs    (gs sleeps)
+    commit              gc          <leader>gc    (gc is the comment operator)
+    diff                gD          <leader>gd    (gD goes to declaration)
+    palette             gP          <leader>gx    (gP pastes)
+    revert              gV          <leader>gv    (gV keeps the selection)
+    tag                 gT          <leader>gt    (gT is previous tab)
+    reflog              gF          <leader>gF    (gF edits file at line)
+    rebase_interactive  gI          <leader>gI    (gI inserts at column 1)
+    notifications       gN          <leader>gn    (gN is a text object)
 <
-    gd vs LSP go-to-definition: not an actual conflict.  Gitflow's diff
-    command is gD (capital D), not gd; there is no default gitflow
-    mapping on lowercase gd.
+Restore any of them with, for example: >lua
+    require("gitflow").setup({ keybindings = { commit = "gc" } })
+<
+Panel keys.  The keys that changed meaning: >
 
-    If your LSP config binds the common (non-default-Neovim) convention
-    of bare gr for references, note gitflow uses bare gr for `refresh`.
-    Remap one side if both are active.
+    Panel               Old         New
+    branch              r rename    e rename; r is refresh
+    branch              R refresh   r refresh
+    conflict list       A abort     X abort
+    conflict list       R refresh   removed; r refreshes
+    conflict resolver   cx reset    cD reset (cx opens the resolver from
+                                    the status panel)
+    reflog              R reset     H reset (soft/mixed/hard)
+    issue list          X clear     F clear filters
+    issue list          D in o/O/D  D on its own, and it confirms
+    rebase (todo)       r reword    w reword
+    rebase (todo)       d drop      d drop, confirmed by X execute
+    review file list    dd delete   x delete
+    every panel         ? searched  ? opens that panel's key help
+                        backwards
+<
+Restore any of them per panel: >lua
+    require("gitflow").setup({
+      panel_keybindings = {
+        conflict = { X = "A" },
+        conflict_resolver = { cD = "cx" },
+        rebase = { ["p/w/e/s/f"] = "p/r/e/s/f", r = "R" },
+        status = { ["?"] = false },  -- ? back to reverse search
+      },
+    })
+<
 
-Cross-panel inconsistencies ~
-    Panel-local bindings are fixed per panel, so the same key means
-    something different in different panels — a documentation note, not
-    a proposal to change any binding.
+GitHub panel behaviour ~
+    Every destructive PR/issue verb defaults its confirmation prompt to
+    the safe answer and names exactly what it will do -- which PR, which
+    strategy, which branch gets deleted.  Declining sends nothing to
+    GitHub; a second press while one is in flight is refused, not
+    queued.
 
-    A: abort active merge/rebase/cherry-pick (conflict list, destructive,
-       confirms first) / unstage all files (status panel) / apply stash
-       under cursor (stash panel) / edit assignees (issue list, PR list).
-    R: reset to entry under cursor (reflog panel, destructive, confirms
-       first, default choice Cancel) / refresh (branch list, conflict
-       list) / reply to comment thread (review view).
-    "Back to list": b (issue list, PR list) or <BS> (actions panel).
-    No panel uses <Esc> for this.
+    Every such prompt also names the repository it will act on, resolved
+    the way gh resolves it (a `gh repo set-default` override first, else
+    upstream > github > origin).  When git cannot say which repo gh
+    would pick, the prompt names the directory rather than assert a repo
+    the command would not touch.
 
-    Both destructive cases above default their confirmation prompt to
-    Cancel.
+    The PR panel renders the PR's CI checks from `statusCheckRollup`: a
+    per-state count plus the verdict on each list card, every check
+    named with its state in the detail view.  The verdict never reads
+    greener than the worst check -- a cancelled or unrecognised check
+    outranks a pass -- and cancelled has its own glyph and failure
+    colouring so it cannot be mistaken for a skip.  Issue cards carry a
+    cue for any open PR that LOOKS like it closes them, inferred from
+    the PR text (a "Closes #<n>" keyword in the body, or the <n>-slug
+    branch name the issue panel's B generates).
 
 ==============================================================================
 8. HIGHLIGHTS                                            *gitflow-highlights*
@@ -539,7 +462,7 @@ Palette values are defined in `lua/gitflow/highlights.lua` and can be
 referenced from user highlight overrides:
 
     Name                Dark         Light        Used by ~
-    accent_primary      #56B6C2      #0E7490      Border, Title, Header, Footer, icons
+    accent_primary      #56B6C2      #0E7490      Border, Title, Footer, icons
     accent_secondary    #DCA561      #B5651D      Palette header bar background
     separator_fg        #3E4452      #C8CCD4      Separator lines
     backdrop_bg         #000000      #E8E8E8      Palette backdrop overlay
@@ -554,7 +477,6 @@ group individually: >lua
       highlights = {
         GitflowBorder  = { fg = "#98C379" },
         GitflowTitle   = { fg = "#98C379", bold = true },
-        GitflowHeader  = { fg = "#98C379", bold = true },
         GitflowFooter  = { fg = "#98C379", italic = true },
       },
     })
@@ -614,13 +536,17 @@ affordance: `GitflowLoadingText` styles in-progress labels, the
 `GitflowStateError*` family styles in-buffer error blocks, and the
 `GitflowEmpty*` family styles empty-state placeholders and their action hints.
 
+The two accent tokens (`accent_primary`, `accent_secondary`) are taken from
+the colorscheme's `Special` and `Identifier` foregrounds when it defines them,
+so gitflow inherits your theme instead of stamping its own teal into it. The
+hexes below are the fallback used when it does not.
+
 Accent-colored groups (dark-background defaults shown below; light mode uses
 `PALETTE_LIGHT` values from the table above):
 
     Group                       Default Attrs ~
     GitflowBorder               fg=#56B6C2
     GitflowTitle                fg=#56B6C2, bold
-    GitflowHeader               fg=#56B6C2, bold
     GitflowFooter               fg=#56B6C2, italic
     GitflowSeparator            fg=#3E4452
     GitflowFormLabel            fg=#56B6C2, bold
@@ -643,7 +569,6 @@ colors, override them with link-based definitions: >lua
       highlights = {
         GitflowBorder = { link = "FloatBorder" },
         GitflowTitle  = { link = "Title" },
-        GitflowHeader = { link = "TabLineSel" },
         GitflowFooter = { link = "Comment" },
       },
     })

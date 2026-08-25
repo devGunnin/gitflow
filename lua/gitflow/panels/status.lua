@@ -1,6 +1,6 @@
 local ui = require("gitflow.ui")
-local ui_render = require("gitflow.ui.render")
 local components = require("gitflow.ui.components")
+local panel = require("gitflow.ui.panel")
 local devicons = require("gitflow.ui.devicons")
 local utils = require("gitflow.utils")
 local git = require("gitflow.git")
@@ -37,46 +37,98 @@ local icons = require("gitflow.icons")
 ---@field cfg GitflowConfig|nil
 ---@field opts GitflowStatusPanelOpts
 ---@field line_entries table<integer, GitflowStatusLineEntry>
----@field active boolean
----@field generation integer
+---@field request_id integer
+---@field busy string|nil
 
 local M = {}
-local STATUS_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_status_hl")
-local STATUS_FLOAT_TITLE = "  Gitflow Status  "
 local STATUS_NO_UPSTREAM_HEADER = "Outgoing / Incoming"
-local STATUS_FLOAT_FOOTER = " s/u stage · V then s/u batch · a/A all · cc commit"
-	.. " · dd diff · cx conflict · X discard changes · p push · r refresh · q close "
--- Compact in-buffer hints for split layout (floats use the footer above).
-local STATUS_HINTS = {
-	{ "s/u", "stage/unstage" },
-	{ "a/A", "all" },
-	{ "<CR>", "open" },
-	{ "cc", "commit" },
-	{ "dd", "diff" },
-	{ "X", "discard changes" },
-	{ "p", "push" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
 
 ---@type GitflowStatusPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	cfg = nil,
 	opts = {},
 	line_entries = {},
-	active = false,
-	-- Monotonic refresh counter. Every callback in a refresh chain checks it
-	-- and bails if a newer refresh has started, so a slow stale response can
-	-- never repaint over fresher data (#283).
-	generation = 0,
 	-- Cached commit-section data from the last full refresh, so staging /
 	-- unstaging (which never changes commits or upstream) can repaint from a
 	-- single `git status` call instead of re-running upstream + two git logs
 	-- on every keypress (#362).
 	last = nil,
+	-- Single-flight: what a stage/unstage in flight is doing, or nil. A second
+	-- mutation is refused rather than queued, so two guesses never compose.
+	busy = nil,
 }
+
+local P = panel.new({
+	name = "status",
+	title = "Gitflow Status",
+	filetype = "gitflowstatus",
+	loading = "Loading git status…",
+	state = M.state,
+	-- A partially-staged path renders in BOTH sections, so the path alone is
+	-- not unique — the section is half the key.
+	identity = function(line_entry)
+		if type(line_entry) == "table" and line_entry.kind == "file" then
+			return ("file:%s:%s"):format(
+				line_entry.diff_staged and "staged" or "unstaged",
+				line_entry.entry and line_entry.entry.path or "?"
+			)
+		end
+		return panel.entry_identity(line_entry)
+	end,
+	keymaps = {
+		{ key = "s/u", keys = { "s", "u" }, desc = "stage/unstage",
+			essential = true, run = function(key)
+				if key == "u" then
+					M.unstage_under_cursor()
+				else
+					M.stage_under_cursor()
+				end
+			end },
+		{ key = "V then s/u", keys = { "s", "u" }, mode = "x", desc = "batch",
+			run = function(key)
+				if key == "u" then
+					M.unstage_visual()
+				else
+					M.stage_visual()
+				end
+			end },
+		{ key = "a/A", keys = { "a", "A" }, desc = "all", run = function(key)
+			if key == "A" then
+				M.unstage_all()
+			else
+				M.stage_all()
+			end
+		end },
+		{ key = "<CR>", desc = "open", run = function()
+			M.open_file_under_cursor()
+		end },
+		{ key = "cc", desc = "commit", essential = true, run = function()
+			if M.state.opts.on_commit then
+				M.state.opts.on_commit()
+			else
+				utils.notify("Commit handler is not configured", vim.log.levels.WARN)
+			end
+		end },
+		{ key = "dd", desc = "diff", run = function()
+			M.open_diff_under_cursor()
+		end },
+		{ key = "cx", desc = "conflict", run = function()
+			M.open_conflict_under_cursor()
+		end },
+		{ key = "X", desc = "discard changes", destructive = true, run = function()
+			M.revert_under_cursor()
+		end },
+		{ key = "p", desc = "push", run = function()
+			M.push_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 -- Porcelain codes that indicate an unmerged (conflicted) path.
 local UNMERGED_STATUS = {
@@ -121,7 +173,7 @@ local function append_file_section(B, title, entries, line_entries, diff_staged)
 
 		-- ●  <ft-icon>  [CODE  ]<dir><name>
 		local chunks = {
-			{ "   ", nil },
+			{ components.spacing.gutter, nil },
 			{ "\u{25cf}  ", state_hl },
 			{ glyph .. "  ", glyph_hl },
 		}
@@ -171,8 +223,8 @@ local function append_commit_section(B, title, entries, line_entries, pushable)
 			summary = summary:gsub("^" .. vim.pesc(sha) .. "%s*", "")
 		end
 		local line_no = B:push({
-			{ " ", nil },
-			{ icons.get("git_state", "commit") .. "  ", "GitflowLogHash" },
+			{ components.spacing.gutter, nil },
+			{ icons.get("git_state", "commit") .. "  ", "GitflowMeta" },
 			{ sha ~= "" and (sha .. "  ") or "", "GitflowLogHash" },
 			{ summary, "GitflowCardTitle" },
 		})
@@ -250,113 +302,6 @@ local function resolve_upstream(cb)
 	end)
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr and vim.api.nvim_buf_is_valid(M.state.bufnr) and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("status", {
-			filetype = "gitflowstatus",
-			lines = components.loading_lines("Loading git status…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "status",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = STATUS_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and STATUS_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-				M.state.active = false
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "status",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-				M.state.active = false
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "s", function()
-		M.stage_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "u", function()
-		M.unstage_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "a", function()
-		M.stage_all()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "A", function()
-		M.unstage_all()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	-- Visual-line batch staging: press V to select rows, then s / u.
-	vim.keymap.set("x", "s", function()
-		M.stage_visual()
-	end, { buffer = bufnr, silent = true })
-	vim.keymap.set("x", "u", function()
-		M.unstage_visual()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "cc", function()
-		if M.state.opts.on_commit then
-			M.state.opts.on_commit()
-		else
-			utils.notify("Commit handler is not configured", vim.log.levels.WARN)
-		end
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "dd", function()
-		M.open_diff_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "cx", function()
-		M.open_conflict_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "p", function()
-		M.push_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "X", function()
-		M.revert_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-	vim.keymap.set("n", "<CR>", function()
-		M.open_file_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@return GitflowStatusLineEntry|nil
 local function entry_under_cursor()
 	local bufnr = M.state.bufnr
@@ -395,38 +340,43 @@ end
 ---@param upstream_name string|nil
 ---@param current_branch string
 local function render(grouped, outgoing_entries, incoming_entries, upstream_name, current_branch)
-	local bufnr = M.state.bufnr
-	-- Async callbacks can land after the panel closed; never paint a dead buffer.
-	if not M.state.active or not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+	if not P:is_open() then
 		return
 	end
 
 	-- Remember the commit-section data so a files-only refresh can reuse it
 	-- without re-querying upstream + git log (#362).
 	M.state.last = {
+		-- The cwd this was true for: git resolves the repo from it, so an
+		-- unkeyed reopen would paint another repository's files.
+		cwd = vim.fn.getcwd(),
+		grouped = grouped,
 		outgoing = outgoing_entries,
 		incoming = incoming_entries,
 		upstream_name = upstream_name,
 		branch = current_branch,
 	}
 
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Status", render_opts)
+	local B = P:begin_render()
 
 	-- Branch + change-count summary bar.
 	local total_changes = #grouped.staged + #grouped.unstaged + #grouped.untracked
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
 		{ current_branch ~= "" and current_branch or "(detached)", "GitflowSectionTitle" },
-		{ upstream_name and ("   \u{2192} " .. upstream_name) or "", "GitflowMeta" },
 		{
-			total_changes == 0 and "     working tree clean"
-				or ("     %d change%s"):format(total_changes, total_changes == 1 and "" or "s"),
+			upstream_name
+				and (components.separators.field .. components.glyphs.arrow
+					.. " " .. upstream_name) or "",
+			"GitflowMeta",
+		},
+		{
+			total_changes == 0
+				and (components.separators.field .. "working tree clean")
+				or (components.separators.field .. "%d change%s"):format(
+					total_changes, total_changes == 1 and "" or "s"
+				),
 			total_changes == 0 and "GitflowReviewApproved" or "GitflowMeta",
 		},
 	})
@@ -439,15 +389,15 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	append_file_section(B, ("Untracked (%d)"):format(#grouped.untracked), grouped.untracked, line_entries, false)
 
 	if upstream_name then
-		if #outgoing_entries > 0 then
-			append_commit_section(B, "Commit History (oldest -> newest)", outgoing_entries, line_entries, true)
-		end
+		-- One section per direction: outgoing commits were listed twice before
+		-- (a "Commit History" copy of the same entries), doubling every row.
+		local flow = ("oldest %s newest"):format(components.glyphs.arrow)
 		append_commit_section(
-			B, ("Outgoing (oldest -> newest, not on %s)"):format(upstream_name),
+			B, ("Outgoing (%s, not on %s)"):format(flow, upstream_name),
 			outgoing_entries, line_entries, true
 		)
 		append_commit_section(
-			B, ("Incoming (oldest -> newest, only on %s)"):format(upstream_name),
+			B, ("Incoming (%s, only on %s)"):format(flow, upstream_name),
 			incoming_entries, line_entries, false
 		)
 	else
@@ -456,28 +406,18 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 		B:blank()
 	end
 
-	-- In-buffer hints for split layout (floats advertise the same keys in their
-	-- window footer). Kept above the branch footer so the final line stays the
-	-- exact "Current branch: <branch>" string other panels/tests rely on.
-	components.split_hint_bar(B, render_opts, STATUS_HINTS)
+	P:push_hints(B)
 
-	-- Final line must be exactly "Current branch: <branch>".
-	components.branch_footer(B, current_branch)
-
-	ui.buffer.update("status", B.lines)
-	M.state.line_entries = line_entries
-
-	B:apply(bufnr, STATUS_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	P:paint(B, line_entries)
 end
 
 --- True once a newer refresh has started, meaning this chain's result is stale
 --- and belongs to nobody. Checked before error reporting so a superseded chain
 --- stays silent, while a failure in the current chain still surfaces.
----@param generation integer
+---@param request_id integer
 ---@return boolean
-local function superseded(generation)
-	return M.state.generation ~= generation
+local function superseded(request_id)
+	return not P:is_active(request_id)
 end
 
 ---@param err string|nil
@@ -489,20 +429,294 @@ local function notify_if_error(err)
 	return false
 end
 
+---Refresh-chain failure: notify AND paint the panel, so a fetch that died is
+---never left looking like one still in flight.
+---@param err string|nil
+---@return boolean handled
+local function refresh_failed(err)
+	if not err then
+		return false
+	end
+	utils.notify(err, vim.log.levels.ERROR)
+	P:render_error("Could not read repository status", {
+		detail = err,
+		hint = "r retries",
+	})
+	return true
+end
+
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
 end
 
+
+-- ── optimistic staging ─────────────────────────────────────────────────
+-- `git add` / `git reset` on one file almost always succeeds, and the answer
+-- is two subprocesses away. So the file moves between sections the moment the
+-- key is pressed, and the real `git status` reconciles a moment later.
+--
+-- Three rules keep a guess from becoming a resting state:
+--   * one mutation at a time (`M.state.busy`), so guesses never compose;
+--   * the undo is per ROW, and only for a row still sitting where the guess
+--     put it — a refresh that landed meanwhile is newer truth and wins;
+--   * every path, success or failure, ends in a real `git status`.
+-- A guessed row is marked `optimistic`; destructive verbs refuse on it.
+
+---@param entry GitflowStatusEntry
+---@return boolean
+local function is_unmerged(entry)
+	local status = entry.index_status .. entry.worktree_status
+	return UNMERGED_STATUS[status] == true
+		or entry.index_status == "U"
+		or entry.worktree_status == "U"
+end
+
+---@param list GitflowStatusEntry[]
+---@param path string
+---@return GitflowStatusEntry[]
+local function without_path(list, path)
+	local out = {}
+	for _, item in ipairs(list) do
+		if item.path ~= path then
+			out[#out + 1] = item
+		end
+	end
+	return out
+end
+
+---@param list GitflowStatusEntry[]
+---@param entry GitflowStatusEntry
+---@return GitflowStatusEntry[]
+local function with_entry(list, entry)
+	local out = without_path(list, entry.path)
+	out[#out + 1] = entry
+	table.sort(out, function(a, b)
+		return a.path < b.path
+	end)
+	return out
+end
+
+local SECTIONS = { "staged", "unstaged", "untracked" }
+
+---Which section holds `path` right now, or nil when nothing does.
+---@param grouped GitflowStatusGroups
+---@param path string
+---@return string|nil
+local function section_of(grouped, path)
+	for _, name in ipairs(SECTIONS) do
+		for _, item in ipairs(grouped[name] or {}) do
+			if item.path == path then
+				return name
+			end
+		end
+	end
+	return nil
+end
+
+---`grouped` with `entry` present in exactly `section` and nowhere else.
+---@param grouped GitflowStatusGroups
+---@param entry GitflowStatusEntry
+---@param section string
+---@return GitflowStatusGroups
+local function place(grouped, entry, section)
+	local out = {}
+	for _, name in ipairs(SECTIONS) do
+		out[name] = without_path(grouped[name] or {}, entry.path)
+	end
+	out[section] = with_entry(out[section], entry)
+	return out
+end
+
+---True when any row in `grouped` was painted ahead of git. Closing the panel
+---mid-mutation can leave one behind; it must not seed the next open's frame.
+---@param grouped GitflowStatusGroups
+---@return boolean
+local function holds_a_guess(grouped)
+	for _, name in ipairs(SECTIONS) do
+		for _, item in ipairs(grouped[name] or {}) do
+			if item.optimistic then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+---What `git add` leaves in the index for this path.
+---@param entry GitflowStatusEntry
+---@return GitflowStatusEntry
+local function as_staged(entry)
+	local index = entry.index_status
+	if entry.untracked then
+		index = "A"
+	elseif entry.worktree_status ~= " " and entry.worktree_status ~= "" then
+		index = entry.worktree_status
+	end
+	return vim.tbl_extend("force", {}, entry, {
+		untracked = false, staged = true, unstaged = false,
+		index_status = index, worktree_status = " ",
+		optimistic = true,
+	})
+end
+
+---What `git reset` leaves for this path: a file the index had only just
+---added goes back to untracked, anything else back to unstaged.
+---@param entry GitflowStatusEntry
+---@return GitflowStatusEntry
+local function as_unstaged(entry)
+	if entry.untracked or entry.index_status == "A" then
+		return vim.tbl_extend("force", {}, entry, {
+			untracked = true, staged = false, unstaged = false,
+			index_status = "?", worktree_status = "?",
+			optimistic = true,
+		})
+	end
+	local worktree = entry.index_status
+	if worktree == " " or worktree == "" then
+		worktree = entry.worktree_status
+	end
+	return vim.tbl_extend("force", {}, entry, {
+		untracked = false, staged = false, unstaged = true,
+		index_status = " ", worktree_status = worktree,
+		optimistic = true,
+	})
+end
+
+---Repaint from the last render's data with `grouped` swapped in.
+---@param grouped GitflowStatusGroups
+local function repaint_groups(grouped)
+	local last = M.state.last
+	if not last or not P:is_open() then
+		return
+	end
+	render(grouped, last.outgoing or {}, last.incoming or {},
+		last.upstream_name, last.branch or "(unknown)")
+end
+
+---Where a moved entry lands.
+---@param moved GitflowStatusEntry
+---@param staging boolean
+---@return string
+local function target_section(moved, staging)
+	if staging then
+		return "staged"
+	end
+	return moved.untracked and "untracked" or "unstaged"
+end
+
+---Move `entries` between the sections the pending git command will move them
+---between, and repaint from memory.
+---
+---The undo it returns is per ROW: it restores only the paths it is asked
+---about, and only those still sitting where the guess put them. Anything a
+---later refresh has already moved is newer truth and is left alone.
+---@param entries GitflowStatusEntry[]
+---@param staging boolean  true for `git add`, false for `git reset`
+---@return fun(paths: string[]|nil)|nil  the undo, or nil when there is
+---   nothing safe to guess
+local function optimistic_move(entries, staging)
+	local last = M.state.last
+	local previous = last and last.grouped
+	if type(previous) ~= "table" then
+		return nil
+	end
+
+	local next_groups = previous
+	---@type { path: string, original: GitflowStatusEntry, from: string, to: string }[]
+	local moves = {}
+	for _, entry in ipairs(entries) do
+		local from = section_of(next_groups, entry.path)
+		-- A conflicted path is not a two-section move; leave it to git. So is
+		-- a path the panel is not currently showing.
+		if is_unmerged(entry) or not from then
+			return nil
+		end
+		local moved = staging and as_staged(entry) or as_unstaged(entry)
+		local to = target_section(moved, staging)
+		next_groups = place(next_groups, moved, to)
+		moves[#moves + 1] = { path = entry.path, original = entry, from = from, to = to }
+	end
+	repaint_groups(next_groups)
+
+	---@param paths string[]|nil  nil undoes every row this move guessed
+	return function(paths)
+		local current = M.state.last and M.state.last.grouped
+		if type(current) ~= "table" then
+			return
+		end
+		local wanted
+		if paths then
+			wanted = {}
+			for _, path in ipairs(paths) do
+				wanted[path] = true
+			end
+		end
+		local restored, changed = current, false
+		for _, move in ipairs(moves) do
+			if (not wanted or wanted[move.path])
+				and section_of(restored, move.path) == move.to
+			then
+				restored = place(restored, move.original, move.from)
+				changed = true
+			end
+		end
+		if changed then
+			repaint_groups(restored)
+		end
+	end
+end
+
+---True (and says so) when a stage/unstage is already in flight.
+---@return boolean
+local function refuse_while_busy()
+	if not M.state.busy then
+		return false
+	end
+	utils.notify(
+		("Already busy: %s — wait for it to finish"):format(M.state.busy),
+		vim.log.levels.WARN
+	)
+	return true
+end
+
+---@param label string  what is in flight, named in the busy refusal
 ---@param operation fun(cb: fun(err: string|nil))
-local function run_status_operation(operation)
-	operation(function(err)
-		if notify_if_error(err) then
+---@param optimistic fun():(fun(paths: string[]|nil)|nil)|nil  paint the
+---   expected outcome now, returning the undo to run if the operation fails
+local function run_status_operation(label, operation, optimistic)
+	if refuse_while_busy() then
+		return
+	end
+	M.state.busy = label
+	local revert = optimistic and optimistic() or nil
+	local settled = false
+	---@param err string|nil
+	local function settle(err)
+		if settled then
+			return
+		end
+		settled = true
+		M.state.busy = nil
+		if err then
+			if revert then
+				revert(nil)
+			end
+			utils.notify(err, vim.log.levels.ERROR)
+			-- A failed guess must never be the resting state: reconcile
+			-- against git even though nothing changed.
+			M.refresh({ files_only = true })
 			return
 		end
 		emit_post_operation()
 		-- Staging doesn't change commits/upstream → cheap files-only repaint.
 		M.refresh({ files_only = true })
-	end)
+	end
+	-- vim.system throws at spawn (git off PATH, unreadable cwd) instead of
+	-- calling back; without this the guess rests and `busy` wedges forever.
+	local ok, spawn_err = pcall(operation, settle)
+	if not ok then
+		settle(tostring(spawn_err))
+	end
 end
 
 ---@param cfg GitflowConfig
@@ -510,9 +724,22 @@ end
 function M.open(cfg, opts)
 	M.state.cfg = cfg
 	M.state.opts = opts or {}
-	M.state.active = true
 
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
+
+	-- Paint what was last true for this repo in the first frame, then refresh
+	-- underneath. Five subprocesses of "Loading git status…" is the longest
+	-- open-to-content gap in the plugin; the prs/issues/labels/actions panels
+	-- already open this way.
+	local last = M.state.last
+	if last and last.grouped and last.cwd == vim.fn.getcwd()
+		and not holds_a_guess(last.grouped)
+	then
+		render(last.grouped, last.outgoing or {}, last.incoming or {},
+			last.upstream_name, last.branch or "(unknown)")
+	end
 	M.refresh()
 end
 
@@ -525,20 +752,23 @@ function M.refresh(opts)
 
 	-- This refresh owns a generation; every callback below abandons its work if
 	-- a newer refresh has since started.
-	local generation = M.state.generation + 1
-	M.state.generation = generation
+	local generation = P:next_request()
 
 	-- Fast path: staging/unstaging only moves files between sections; the
 	-- commit history and upstream are unchanged, so reuse the cached commit
 	-- data and just re-read `git status` (#362). One subprocess instead of
 	-- five (branch + status + upstream + two git logs).
-	if opts and opts.files_only and M.state.last then
-		local last = M.state.last
+	local cached = M.state.last
+	if cached and cached.cwd ~= vim.fn.getcwd() then
+		cached = nil
+	end
+	if opts and opts.files_only and cached then
+		local last = cached
 		git_status.fetch({}, function(err, _, grouped)
 			if superseded(generation) then
 				return
 			end
-			if notify_if_error(err) then
+			if refresh_failed(err) then
 				return
 			end
 			render(grouped, last.outgoing or {}, last.incoming or {},
@@ -555,7 +785,7 @@ function M.refresh(opts)
 			if superseded(generation) then
 				return
 			end
-			if notify_if_error(err) then
+			if refresh_failed(err) then
 				return
 			end
 
@@ -565,7 +795,7 @@ function M.refresh(opts)
 				if superseded(generation) then
 					return
 				end
-				if notify_if_error(upstream_err) then
+				if refresh_failed(upstream_err) then
 					return
 				end
 
@@ -583,7 +813,7 @@ function M.refresh(opts)
 					if superseded(generation) then
 						return
 					end
-					if notify_if_error(outgoing_err) then
+					if refresh_failed(outgoing_err) then
 						return
 					end
 
@@ -596,7 +826,7 @@ function M.refresh(opts)
 						if superseded(generation) then
 							return
 						end
-						if notify_if_error(incoming_err) then
+						if refresh_failed(incoming_err) then
 							return
 						end
 
@@ -621,11 +851,13 @@ function M.stage_under_cursor()
 		return
 	end
 
-	run_status_operation(function(done)
+	run_status_operation("Staging " .. line_entry.entry.path, function(done)
 		local entry = line_entry.entry
 		git_status.stage_file(entry.path, {}, function(err)
 			done(err)
 		end)
+	end, function()
+		return optimistic_move({ line_entry.entry }, true)
 	end)
 end
 
@@ -636,11 +868,13 @@ function M.unstage_under_cursor()
 		return
 	end
 
-	run_status_operation(function(done)
+	run_status_operation("Unstaging " .. line_entry.entry.path, function(done)
 		local entry = line_entry.entry
 		git_status.unstage_file(entry.path, {}, function(err)
 			done(err)
 		end)
+	end, function()
+		return optimistic_move({ line_entry.entry }, false)
 	end)
 end
 
@@ -674,24 +908,60 @@ local function batch_stage_visual(stage)
 		utils.notify("No files in selection", vim.log.levels.WARN)
 		return
 	end
+	if refuse_while_busy() then
+		return
+	end
 
-	local pending = #entries
-	local function on_one(err)
+	local files = {}
+	for _, le in ipairs(entries) do
+		files[#files + 1] = le.entry
+	end
+	M.state.busy = ("%s %d files"):format(stage and "Staging" or "Unstaging", #files)
+	local revert = optimistic_move(files, stage)
+
+	local pending, failed = #entries, {}
+	---@param path string
+	---@param err string|nil
+	local function on_one(path, err)
 		if err then
+			failed[#failed + 1] = path
 			utils.notify(err, vim.log.levels.ERROR)
 		end
 		pending = pending - 1
-		if pending == 0 then
-			emit_post_operation()
-			M.refresh({ files_only = true })
+		if pending > 0 then
+			return
 		end
+		M.state.busy = nil
+		-- Only the rows that actually failed go back; the ones that landed
+		-- stay where git put them. The refresh below settles it either way.
+		if #failed > 0 and revert then
+			revert(failed)
+		end
+		emit_post_operation()
+		M.refresh({ files_only = true })
 	end
 
 	for _, le in ipairs(entries) do
-		if stage then
-			git_status.stage_file(le.entry.path, {}, on_one)
-		else
-			git_status.unstage_file(le.entry.path, {}, on_one)
+		local path = le.entry.path
+		local answered = false
+		local function done(err)
+			if answered then
+				return
+			end
+			answered = true
+			on_one(path, err)
+		end
+		-- A spawn throw is this path's failure, same as a nonzero exit: without
+		-- it `pending` never reaches zero and `busy` wedges forever.
+		local ok, spawn_err = pcall(function()
+			if stage then
+				git_status.stage_file(path, {}, done)
+			else
+				git_status.unstage_file(path, {}, done)
+			end
+		end)
+		if not ok then
+			done(tostring(spawn_err))
 		end
 	end
 end
@@ -707,7 +977,7 @@ function M.unstage_visual()
 end
 
 function M.stage_all()
-	run_status_operation(function(done)
+	run_status_operation("Staging all files", function(done)
 		git_status.stage_all({}, function(err)
 			done(err)
 		end)
@@ -715,7 +985,7 @@ function M.stage_all()
 end
 
 function M.unstage_all()
-	run_status_operation(function(done)
+	run_status_operation("Unstaging all files", function(done)
 		git_status.unstage_all({}, function(err)
 			done(err)
 		end)
@@ -800,6 +1070,19 @@ function M.revert_under_cursor()
 	end
 
 	local entry = line_entry.entry
+	-- A discard deletes work, and `entry.untracked` alone authorises
+	-- `git clean -f`. Never resolve it against a row git has not confirmed.
+	if refuse_while_busy() then
+		return
+	end
+	if entry.optimistic then
+		utils.notify(
+			("'%s' is not confirmed yet — wait for the refresh before discarding"):format(entry.path),
+			vim.log.levels.WARN
+		)
+		return
+	end
+
 	local confirmed = ui.input.confirm(
 		("Revert all uncommitted changes for '%s'?"):format(entry.path),
 		{ choices = { "&Revert", "&Cancel" }, default_choice = 2 }
@@ -867,29 +1150,17 @@ function M.open_file_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("status")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("status")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.cfg = nil
 	M.state.line_entries = {}
-	M.state.active = false
-	M.state.last = nil
+	-- state.last survives the close on purpose: it is what the next open
+	-- paints in its first frame. It carries the cwd it was true for, so it
+	-- can only ever be reused in the repo it came from.
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

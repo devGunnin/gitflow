@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1001,
+    "name": "CI",
+    "path": ".github/workflows/e2e.yml",
+    "state": "active"
+  },
+  {
+    "id": 1002,
+    "name": "Deploy",
+    "path": ".github/workflows/deploy.yml",
+    "state": "active"
+  },
+  {
+    "id": 1003,
+    "name": "Legacy",
+    "path": ".github/workflows/legacy.yml",
+    "state": "disabled_manually"
+  }
+]

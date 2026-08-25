@@ -1,6 +1,10 @@
 local ui = require("gitflow.ui")
+local components = require("gitflow.ui.components")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
+local matcher = require("gitflow.ui.matcher")
+local panel = require("gitflow.ui.panel")
 
 ---@class GitflowPaletteEntry
 ---@field name string
@@ -80,46 +84,6 @@ local NUMBERED_ORDER = {
 	"stash",
 }
 
----@param text string
----@return string
-local function normalize(text)
-	return (text or ""):lower()
-end
-
----@param haystack string
----@param needle string
----@return integer|nil
-local function fuzzy_score(haystack, needle)
-	if needle == "" then
-		return 0
-	end
-
-	local search = normalize(haystack)
-	local query = normalize(needle)
-	local offset = 1
-	local score = 0
-	local streak = 0
-
-	for index = 1, #query do
-		local char = query:sub(index, index)
-		local found = search:find(char, offset, true)
-		if not found then
-			return nil
-		end
-
-		if found == offset then
-			streak = streak + 1
-			score = score + 10 + streak
-		else
-			streak = 0
-			score = score + math.max(1, 6 - (found - offset))
-		end
-		offset = found + 1
-	end
-
-	return score
-end
-
 ---@param entry GitflowPaletteEntry
 ---@return string
 local function searchable_text(entry)
@@ -134,7 +98,7 @@ function M.filter_entries(entries, query)
 	local trimmed_query = vim.trim(query or "")
 
 	for _, entry in ipairs(entries or {}) do
-		local score = fuzzy_score(searchable_text(entry), trimmed_query)
+		local score = matcher.fuzzy_score(searchable_text(entry), trimmed_query)
 		if score ~= nil then
 			filtered[#filtered + 1] = {
 				name = entry.name,
@@ -219,7 +183,7 @@ local function apply_selection_highlight(line)
 		return
 	end
 
-	vim.api.nvim_buf_add_highlight(
+	ui_render.highlight(
 		bufnr, ns, SELECTION_HIGHLIGHT, line - 1, 0, -1
 	)
 end
@@ -323,7 +287,7 @@ end
 ---@param col_end integer  byte offset (-1 for end of line)
 ---@param hl_group string
 local function add_hl(bufnr, ns, row, col_start, col_end, hl_group)
-	vim.api.nvim_buf_add_highlight(
+	ui_render.highlight(
 		bufnr, ns, hl_group, row, col_start, col_end
 	)
 end
@@ -430,7 +394,7 @@ local function render()
 	if #filtered == 0 then
 		lines[#lines + 1] = ""
 		lines[#lines + 1] = ""
-		local no_match_msg = "No commands match the current query."
+		local no_match_msg = "no commands match the current query"
 		lines[#lines + 1] = center_text(no_match_msg, width)
 		lines[#lines + 1] = ""
 	else
@@ -606,29 +570,45 @@ local function refresh_query()
 	render()
 end
 
+-- The palette is two stacked floats (prompt above list) that must read as
+-- one block, so their combined geometry comes from window.float_geometry
+-- in two passes: first to size the list against cfg.ui.float.height (as
+-- before), then to centre the whole prompt+gap+list block, chrome-aware,
+-- inside window.float_area(). A too-small terminal returns nil plus the
+-- reason from float_geometry, same contract as open_float.
 ---@param cfg GitflowConfig
----@return integer, integer, integer, integer, integer
+---@return integer|nil width
+---@return integer|nil prompt_height
+---@return integer|nil list_height
+---@return integer|nil row
+---@return integer|nil col
+---@return string|nil err
 local function compute_layout(cfg)
-	local columns = vim.o.columns
-	local editor_lines = vim.o.lines - vim.o.cmdheight
-
-	local width = math.max(50, math.floor(columns * cfg.ui.float.width))
+	local area = ui.window.float_area()
 	local prompt_height = 3
-	local list_height = math.max(
-		10, math.floor(editor_lines * cfg.ui.float.height)
-	)
-	local combined_height = prompt_height + 1 + list_height
+	local gap = 1
 
-	if combined_height > editor_lines - 2 then
-		list_height = math.max(8, editor_lines - prompt_height - 3)
-		combined_height = prompt_height + 1 + list_height
+	local list_geometry, list_err = ui.window.float_geometry({
+		width = cfg.ui.float.width,
+		height = cfg.ui.float.height,
+		border = cfg.ui.float.border,
+	}, area)
+	if not list_geometry then
+		return nil, nil, nil, nil, nil, list_err
 	end
 
-	local row = math.max(
-		0, math.floor((editor_lines - combined_height) / 2)
-	)
-	local col = math.max(0, math.floor((columns - width) / 2))
-	return width, prompt_height, list_height, row, col
+	local block_geometry, block_err = ui.window.float_geometry({
+		width = list_geometry.width,
+		height = prompt_height + gap + list_geometry.height,
+		border = cfg.ui.float.border,
+	}, area)
+	if not block_geometry then
+		return nil, nil, nil, nil, nil, block_err
+	end
+
+	local list_height = math.max(1, block_geometry.height - prompt_height - gap)
+	return block_geometry.width, prompt_height, list_height,
+		block_geometry.row, block_geometry.col
 end
 
 local function setup_prompt_autocmd()
@@ -646,98 +626,98 @@ local function setup_prompt_autocmd()
 	})
 end
 
+-- ── keys ───────────────────────────────────────────────────────────────
+-- The palette's only key registry. It is not a `Panel` — it drives two
+-- buffers, a prompt the user types into and a list — so it registers itself
+-- and binds from here. `views` names which of the two buffers an entry binds
+-- on; `insert` says whether the prompt also binds it in insert mode, where
+-- the map is an <expr> returning "" so the key never reaches the text.
+local DIGITS = {}
+for digit = 1, 9 do
+	DIGITS[digit] = tostring(digit)
+end
+
+---@param key string
+local function execute_digit(key)
+	execute_numbered(M.state.numbered_entries[tonumber(key)])
+end
+
+---@type GitflowPanelKeymap[]
+local KEYMAPS = {
+	{ key = "1-9", keys = DIGITS, desc = "quick select", views = { "prompt" },
+		insert = "schedule", run = execute_digit },
+	{ key = "<CR>", desc = "confirm", views = { "prompt" }, essential = true,
+		mode = { "n", "i" }, run = function() execute_selected() end },
+	{ key = "<Down>/<C-n>/<Tab>/<C-j>", desc = "next",
+		keys = { "<Down>", "<C-n>", "<Tab>", "<C-j>" },
+		views = { "prompt" }, insert = "expr",
+		run = function() move_selection(1) end },
+	{ key = "<Up>/<S-Tab>/<C-p>/<C-k>", desc = "prev",
+		keys = { "<Up>", "<S-Tab>", "<C-p>", "<C-k>" },
+		views = { "prompt" }, insert = "expr",
+		run = function() move_selection(-1) end },
+	{ key = "<Esc>", desc = "close", views = { "prompt" }, essential = true,
+		mode = { "n", "i" }, run = function() M.close() end },
+
+	{ key = "1-9", keys = DIGITS, desc = "quick select", views = { "list" },
+		run = execute_digit },
+	{ key = "<CR>", desc = "select", views = { "list" }, essential = true,
+		run = function() execute_selected() end },
+	{ key = "j/k", keys = { "j", "k" }, desc = "move", views = { "list" },
+		run = function(key)
+			move_selection(key == "j" and 1 or -1)
+		end },
+	{ key = "<C-n>/<C-p>", keys = { "<C-n>", "<C-p>" }, hint = false,
+		views = { "list" },
+		run = function(key)
+			move_selection(key == "<C-n>" and 1 or -1)
+		end },
+	{ key = "q", desc = "close", views = { "list" }, essential = true,
+		run = function() M.close() end },
+	{ key = "<Esc>", hint = false, views = { "list" },
+		run = function() M.close() end },
+}
+
+panel.register_surface({
+	name = "palette",
+	title = "Gitflow Command Palette",
+	keymaps = KEYMAPS,
+})
+
 local function apply_keymaps()
 	local prompt_bufnr = M.state.prompt_bufnr
 	local list_bufnr = M.state.list_bufnr
 	if not prompt_bufnr or not list_bufnr then
 		return
 	end
+	local cfg = M.state.cfg or require("gitflow.config").get()
+	panel.warn_overrides("palette", cfg)
 
-	local prompt_normal_opts = {
-		buffer = prompt_bufnr, silent = true, nowait = true,
-	}
-	local prompt_insert_opts = {
-		buffer = prompt_bufnr,
-		silent = true,
-		nowait = true,
-		expr = true,
-	}
-	local list_opts = {
-		buffer = list_bufnr, silent = true, nowait = true,
-	}
-	local prompt_navigation_keys = {
-		{ key = "<Down>", delta = 1 },
-		{ key = "<Up>", delta = -1 },
-		{ key = "<C-n>", delta = 1 },
-		{ key = "<C-p>", delta = -1 },
-		{ key = "<Tab>", delta = 1 },
-		{ key = "<S-Tab>", delta = -1 },
-		{ key = "<C-j>", delta = 1 },
-		{ key = "<C-k>", delta = -1 },
-	}
-
-	vim.keymap.set({ "n", "i" }, "<Esc>", function()
-		M.close()
-	end, prompt_normal_opts)
-	vim.keymap.set({ "n", "i" }, "<CR>", function()
-		execute_selected()
-	end, prompt_normal_opts)
-	for _, mapping in ipairs(prompt_navigation_keys) do
-		vim.keymap.set("n", mapping.key, function()
-			move_selection(mapping.delta)
-		end, prompt_normal_opts)
-		vim.keymap.set("i", mapping.key, function()
-			move_selection(mapping.delta)
-			return ""
-		end, prompt_insert_opts)
+	for _, entry in ipairs(panel.surface_keymaps("palette", cfg)) do
+		local bufnr = entry.views[1] == "prompt" and prompt_bufnr or list_bufnr
+		for _, binding in ipairs(panel.bindings(entry)) do
+			vim.keymap.set(entry.mode or "n", binding.key, function()
+				entry.run(binding.run_key)
+			end, { buffer = bufnr, silent = true, nowait = true })
+			if entry.insert then
+				-- Deferred for the digits: they fire on the keystroke that
+				-- would otherwise be inserted, and closing the palette from
+				-- inside an <expr> map is not safe.
+				local deferred = entry.insert == "schedule"
+				vim.keymap.set("i", binding.key, function()
+					if deferred then
+						vim.schedule(function() entry.run(binding.run_key) end)
+					else
+						entry.run(binding.run_key)
+					end
+					return ""
+				end, {
+					buffer = prompt_bufnr, silent = true, nowait = true,
+					expr = true,
+				})
+			end
+		end
 	end
-
-	for i = 1, 9 do
-		local num_key = tostring(i)
-		vim.keymap.set("n", num_key, function()
-			local entry = M.state.numbered_entries[i]
-			if entry then
-				execute_numbered(entry)
-			end
-		end, prompt_normal_opts)
-		vim.keymap.set("i", num_key, function()
-			local entry = M.state.numbered_entries[i]
-			if entry then
-				vim.schedule(function()
-					execute_numbered(entry)
-				end)
-			end
-			return ""
-		end, prompt_insert_opts)
-		vim.keymap.set("n", num_key, function()
-			local entry = M.state.numbered_entries[i]
-			if entry then
-				execute_numbered(entry)
-			end
-		end, list_opts)
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		execute_selected()
-	end, list_opts)
-	vim.keymap.set("n", "j", function()
-		move_selection(1)
-	end, list_opts)
-	vim.keymap.set("n", "k", function()
-		move_selection(-1)
-	end, list_opts)
-	vim.keymap.set("n", "<C-n>", function()
-		move_selection(1)
-	end, list_opts)
-	vim.keymap.set("n", "<C-p>", function()
-		move_selection(-1)
-	end, list_opts)
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, list_opts)
-	vim.keymap.set("n", "<Esc>", function()
-		M.close()
-	end, list_opts)
 end
 
 function M.close()
@@ -793,24 +773,25 @@ end
 ---@param cfg GitflowConfig
 ---@return integer|nil winid, integer|nil bufnr
 local function open_backdrop(cfg)
-	local columns = vim.o.columns
-	local editor_lines = vim.o.lines
 	local backdrop_bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_set_option_value(
 		"bufhidden", "wipe", { buf = backdrop_bufnr }
 	)
-	local ok, winid = pcall(vim.api.nvim_open_win, backdrop_bufnr, false, {
-		relative = "editor",
-		width = columns,
-		height = editor_lines,
+	-- Full-editor dimensions are absolute cells (> 1), so open_float's own
+	-- float_geometry pass clamps them chrome-aware instead of re-deriving
+	-- raw vim.o.columns/lines by hand.
+	local winid = ui.window.open_float({
+		bufnr = backdrop_bufnr,
+		width = vim.o.columns,
+		height = vim.o.lines,
 		row = 0,
 		col = 0,
-		style = "minimal",
-		focusable = false,
-		zindex = 40,
 		border = "none",
+		zindex = 40,
+		focusable = false,
+		enter = false,
 	})
-	if not ok then
+	if not winid then
 		pcall(
 			vim.api.nvim_buf_delete, backdrop_bufnr,
 			{ force = true }
@@ -857,8 +838,17 @@ function M.open(cfg, entries, on_select)
 		"GitflowPaletteRender"
 	)
 
-	local width, prompt_height, list_height, row, col =
+	local width, prompt_height, list_height, row, col, layout_err =
 		compute_layout(cfg)
+	if not width then
+		M.close()
+		utils.notify(
+			layout_err
+				or "Gitflow: terminal too small to open the command palette",
+			vim.log.levels.WARN
+		)
+		return
+	end
 
 	-- Backdrop overlay for visual focus
 	local backdrop_winid, backdrop_bufnr = open_backdrop(cfg)
@@ -871,7 +861,7 @@ function M.open(cfg, entries, on_select)
 	})
 	local list_bufnr = ui.buffer.create("palette_list", {
 		filetype = "gitflowpalette",
-		lines = { "Loading palette..." },
+		lines = components.loading_lines("Loading palette…"),
 	})
 
 	M.state.prompt_bufnr = prompt_bufnr
@@ -913,6 +903,19 @@ function M.open(cfg, entries, on_select)
 			and PALETTE_LIST_FOOTER or nil,
 		footer_pos = cfg.ui.float.footer_pos,
 	})
+
+	-- open_float returns nil when the terminal is too small for the frame.
+	-- Without this the palette would half-open: buffers and keymaps live, no
+	-- window to show them, and the option writes below would land on whatever
+	-- window happens to be current.
+	if not M.state.prompt_winid or not M.state.list_winid then
+		M.close()
+		utils.notify(
+			"Gitflow: terminal too small to open the command palette",
+			vim.log.levels.WARN
+		)
+		return
+	end
 
 	-- Set palette-specific NormalFloat highlight
 	set_palette_winhighlight(M.state.prompt_winid)

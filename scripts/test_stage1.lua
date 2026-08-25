@@ -36,6 +36,11 @@ assert_true(command_defs.Gitflow ~= nil, ":Gitflow command should be registered"
 local commands = require("gitflow.commands")
 local usage = commands.dispatch({}, config)
 assert_true(usage:find("Gitflow usage", 1, true) ~= nil, ":Gitflow with no args should show usage")
+assert_true(
+	require("gitflow.ui.help").is_open(),
+	":Gitflow with no args should open the help buffer, not notify"
+)
+require("gitflow.ui.help").close()
 
 local buffer = require("gitflow.ui.buffer")
 local bufnr = buffer.create("test-panel", {

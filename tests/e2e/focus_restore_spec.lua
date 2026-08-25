@@ -75,7 +75,7 @@ T.run_suite("E2E: Focus Restore After Creation", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -158,7 +158,7 @@ T.run_suite("E2E: Focus Restore After Creation", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},
@@ -222,7 +222,7 @@ T.run_suite("E2E: Focus Restore After Creation", {
 			{
 				table = gh_labels,
 				key = "list",
-				value = function(_, cb)
+				value = function(_, _, cb)
 					cb(nil, {})
 				end,
 			},

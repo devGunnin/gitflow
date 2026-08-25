@@ -4,7 +4,7 @@ local git = require("gitflow.git")
 local git_worktree = require("gitflow.git.worktree")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 local list_picker = require("gitflow.ui.list_picker")
 
@@ -20,36 +20,62 @@ local list_picker = require("gitflow.ui.list_picker")
 ---@field cfg GitflowConfig|nil
 ---@field enrichment table<string, GitflowWorktreeEnrichment>
 ---@field enrich_gen integer
+---@field request_id integer
 
 local M = {}
-local WORKTREE_FLOAT_TITLE = "  Gitflow Worktrees  "
-local WORKTREE_FLOAT_FOOTER =
-	" a add · d/D remove · m move · L lock · p prune"
-	.. " · <CR> switch · r refresh · q close "
-local WORKTREE_HINTS = {
-	{ "<CR>", "switch" },
-	{ "a", "add" },
-	{ "d/D", "remove" },
-	{ "m", "move" },
-	{ "L", "lock" },
-	{ "p", "prune" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
-local WORKTREE_HIGHLIGHT_NS =
-	vim.api.nvim_create_namespace("gitflow_worktree_hl")
 local WORKTREE_AUGROUP =
 	vim.api.nvim_create_augroup("GitflowWorktreePanel", { clear = true })
 
 ---@type GitflowWorktreePanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	cfg = nil,
 	enrichment = {},
 	enrich_gen = 0,
 }
+
+local P = panel.new({
+	name = "worktree",
+	title = "Gitflow Worktrees",
+	filetype = "gitflowworktree",
+	loading = "Loading worktrees…",
+	state = M.state,
+	-- A bare worktree has an empty `sha`, and two worktrees on the same
+	-- commit share one; the checkout path is the real key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.path) == "string" then
+			return "path=" .. entry.path
+		end
+		return panel.entry_identity(entry)
+	end,
+	keymaps = {
+		{ key = "<CR>", desc = "switch", essential = true, run = function()
+			M.switch_under_cursor()
+		end },
+		{ key = "a", desc = "add", essential = true, run = function()
+			M.add_worktree()
+		end },
+		{ key = "d/D", keys = { "d", "D" }, desc = "remove", destructive = true,
+			run = function(key)
+				M.remove_under_cursor(key == "D")
+			end },
+		{ key = "m", desc = "move", run = function()
+			M.move_under_cursor()
+		end },
+		{ key = "L", desc = "lock", run = function()
+			M.toggle_lock_under_cursor()
+		end },
+		{ key = "p", desc = "prune", run = function()
+			M.prune()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
@@ -69,95 +95,6 @@ local function normalize(path)
 	return vim.fn.fnamemodify(path, ":p"):gsub("/$", "")
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("worktree", {
-			filetype = "gitflowworktree",
-			lines = components.loading_lines("Loading worktrees…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-
-	if M.state.winid
-		and vim.api.nvim_win_is_valid(M.state.winid)
-	then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "worktree",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = WORKTREE_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer
-				and WORKTREE_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "worktree",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "a", function()
-		M.add_worktree()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "d", function()
-		M.remove_under_cursor(false)
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "D", function()
-		M.remove_under_cursor(true)
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "m", function()
-		M.move_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "L", function()
-		M.toggle_lock_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "p", function()
-		M.prune()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "<CR>", function()
-		M.switch_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---Resolve the display ref for a worktree entry (branch / detached / bare).
 ---The detached form keeps the literal "detached" substring tests rely on.
 ---@param entry GitflowWorktreeEntry
@@ -175,38 +112,16 @@ local function entry_ref(entry)
 	return "(unknown)"
 end
 
----Paint the buffer with a single styled state block (loading / error) sharing
----the rendered panel's header chrome so transitions don't flicker.
----@param paint fun(B: GitflowRenderBuilder)
-local function render_state(paint)
-	local render_opts = { bufnr = M.state.bufnr, winid = M.state.winid }
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Worktrees", render_opts)
-	B:blank()
-	paint(B)
-	ui.buffer.update("worktree", B.lines)
-	M.state.line_entries = {}
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
-end
-
 local function render_loading()
-	render_state(function(B)
-		components.loading(B, "Loading worktrees…")
-	end)
+	P:render_loading("Loading worktrees…")
 end
 
 ---@param message string
 local function render_error(message)
-	render_state(function(B)
-		components.error_state(B, "Could not list worktrees", {
-			detail = message,
-			hint = "Press r to retry · q to close",
-		})
-	end)
+	P:render_error("Could not list worktrees", {
+		detail = message,
+		hint = "Press r to retry \u{b7} q to close",
+	})
 end
 
 ---Render the worktree list. Each entry occupies 2–3 lines:
@@ -217,10 +132,6 @@ end
 ---any line within a card. A blank line separates cards for readability.
 ---@param entries GitflowWorktreeEntry[]
 local function render(entries)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
 	local cwd = cwd_abs()
 
 	local current_ref
@@ -230,17 +141,17 @@ local function render(entries)
 		end
 	end
 
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Worktrees", render_opts)
+	local B = P:begin_render()
 
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("branch", "current") .. "  ", "GitflowSectionIcon" },
 		{
 			("%d worktree%s"):format(#entries, #entries == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_ref or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -251,9 +162,15 @@ local function render(entries)
 		("Worktrees (%d)"):format(#entries)
 	)
 
+	-- The card's dim meta line is the one row here that can run long; every
+	-- other panel truncates its variable field rather than let a row wrap
+	-- and break the column grid.
+	local meta_budget = components.content_width(P:render_opts())
+		- #components.spacing.indent
+
 	local line_entries = {}
 	if #entries == 0 then
-		components.empty(B, "No worktrees yet", {
+		components.empty(B, "no worktrees yet", {
 			hint = "Press a to add a worktree.",
 		})
 	else
@@ -275,25 +192,25 @@ local function render(entries)
 
 			-- Line 1: icon + branch/ref + state badges
 			local line1_chunks = {
-				{ " ", nil },
+				{ components.spacing.gutter, nil },
 				{ icons.get("branch", icon_name) .. "  ", ref_group },
 				{ ref, ref_group },
 			}
 			if is_current then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  [current]", "GitflowWorktreeCurrent" }
+					{ components.spacing.gutter .. "[current]", "GitflowWorktreeCurrent" }
 			end
 			if entry.is_locked then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  [locked]", "GitflowWorktreeLocked" }
+					{ components.spacing.gutter .. "[locked]", "GitflowWorktreeLocked" }
 			end
 			if entry.is_prunable then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  [prunable]", "GitflowWorktreePrunable" }
+					{ components.spacing.gutter .. "[prunable]", "GitflowWorktreePrunable" }
 			end
 			if enrich and enrich.is_dirty then
 				line1_chunks[#line1_chunks + 1] =
-					{ "  ~", "GitflowWorktreeDirty" }
+					{ components.spacing.gutter .. "~", "GitflowWorktreeDirty" }
 			end
 
 			local line1 = B:push(line1_chunks)
@@ -301,27 +218,45 @@ local function render(entries)
 
 			-- Line 2: sha · subject · rel_time · path (dim meta row)
 			local short_sha = (entry.sha ~= "" and entry.sha:sub(1, 7)) or nil
-			local line2_chunks = { { "       ", nil } }
+			local card_indent = components.spacing.indent
+			local line2_chunks = { { card_indent, nil } }
 
 			if entry.is_bare then
 				line2_chunks[#line2_chunks + 1] =
-					{ display_path, "GitflowMeta" }
+					{ components.truncate(display_path, meta_budget), "GitflowMeta" }
 			else
+				local rel_time = (enrich and enrich.rel_time ~= "" and enrich.rel_time)
+					or nil
+				local path_text = components.separators.inline .. display_path
+				local time_text = rel_time
+					and (components.separators.inline .. rel_time) or ""
+				-- The subject gives up its room first: the sha, the age and
+				-- the path are what identify the worktree.
+				local fixed = (short_sha and #short_sha or 0)
+					+ vim.fn.strdisplaywidth(time_text)
+					+ vim.fn.strdisplaywidth(path_text)
+
 				if short_sha then
-					line2_chunks[#line2_chunks + 1] =
-						{ short_sha, "GitflowMeta" }
+					line2_chunks[#line2_chunks + 1] = { short_sha, "GitflowMeta" }
 				end
-				if enrich and enrich.subject and enrich.subject ~= "" then
-					local prefix = short_sha and "  " or ""
-					line2_chunks[#line2_chunks + 1] =
-						{ prefix .. enrich.subject, "GitflowMeta" }
+				local subject = enrich and enrich.subject or ""
+				if subject ~= "" then
+					local prefix = short_sha and components.spacing.gutter or ""
+					local room = meta_budget - fixed - #prefix
+					subject = room >= 8 and components.truncate(subject, room) or ""
+					if subject ~= "" then
+						line2_chunks[#line2_chunks + 1] =
+							{ prefix .. subject, "GitflowMeta" }
+					end
 				end
-				if enrich and enrich.rel_time and enrich.rel_time ~= "" then
-					line2_chunks[#line2_chunks + 1] =
-						{ "  ·  " .. enrich.rel_time, "GitflowRelTime" }
+				if rel_time then
+					line2_chunks[#line2_chunks + 1] = { time_text, "GitflowRelTime" }
 				end
-				line2_chunks[#line2_chunks + 1] =
-					{ "  ·  " .. display_path, "GitflowMeta" }
+				line2_chunks[#line2_chunks + 1] = {
+					components.truncate(path_text, math.max(8, meta_budget - fixed
+						+ vim.fn.strdisplaywidth(path_text))),
+					"GitflowMeta",
+				}
 			end
 
 			local line2 = B:push(line2_chunks)
@@ -330,14 +265,16 @@ local function render(entries)
 			-- Line 3 (optional): lock or prune reason
 			if entry.is_locked and entry.lock_reason then
 				local line3 = B:push({
-					{ "       Locked: ", "GitflowWorktreeLocked" },
-					{ entry.lock_reason, "GitflowMeta" },
+					{ card_indent .. "Locked: ", "GitflowWorktreeLocked" },
+					{ components.truncate(entry.lock_reason, meta_budget - 8),
+						"GitflowMeta" },
 				})
 				line_entries[line3] = entry
 			elseif entry.is_prunable and entry.prune_reason then
 				local line3 = B:push({
-					{ "       Prunable: ", "GitflowWorktreePrunable" },
-					{ entry.prune_reason, "GitflowMeta" },
+					{ card_indent .. "Prunable: ", "GitflowWorktreePrunable" },
+					{ components.truncate(entry.prune_reason, meta_budget - 10),
+						"GitflowMeta" },
 				})
 				line_entries[line3] = entry
 			end
@@ -346,17 +283,9 @@ local function render(entries)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, WORKTREE_HINTS)
+	P:push_hints(B)
 
-	ui.buffer.update("worktree", B.lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, WORKTREE_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	P:paint(B, line_entries)
 end
 
 ---Fire async enrichment for each non-bare worktree: commit subject + relative
@@ -457,7 +386,9 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	render_loading()
 
 	vim.api.nvim_clear_autocmds({ group = WORKTREE_AUGROUP })
@@ -484,7 +415,11 @@ function M.refresh()
 	M.state.enrich_gen = M.state.enrich_gen + 1
 	M.state.enrichment = {}
 
+	local request_id = P:next_request()
 	git_worktree.list({}, function(err, entries)
+		if not P:is_active(request_id) then
+			return
+		end
 		if err then
 			utils.notify(err, vim.log.levels.ERROR)
 			render_error(err)
@@ -798,29 +733,14 @@ end
 
 function M.close()
 	pcall(vim.api.nvim_clear_autocmds, { group = WORKTREE_AUGROUP })
-
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("worktree")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("worktree")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.enrichment = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

@@ -125,13 +125,6 @@ assert_equals(
 )
 assert_true(title_hl.bold == true, "GitflowTitle should be bold after setup")
 
-local header_hl = get_highlight("GitflowHeader", { link = false })
-assert_equals(
-	header_hl.fg, accent_primary_num,
-	"GitflowHeader fg should match PALETTE.accent_primary"
-)
-assert_true(header_hl.bold == true, "GitflowHeader should be bold after setup")
-
 local footer_hl = get_highlight("GitflowFooter", { link = false })
 assert_equals(
 	footer_hl.fg, accent_primary_num,

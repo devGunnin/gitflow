@@ -4,7 +4,7 @@ local git = require("gitflow.git")
 local git_reset = require("gitflow.git.reset")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 local status_panel = require("gitflow.panels.status")
 
@@ -16,19 +16,43 @@ local status_panel = require("gitflow.panels.status")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local RESET_FLOAT_TITLE = "  Gitflow Reset  "
-local RESET_FLOAT_FOOTER =
-	" <CR> select · 1-9 jump · S soft reset · H hard reset · r refresh · q close "
-local RESET_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_reset_hl")
 
 ---@type GitflowResetPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	merge_base_sha = nil,
 	cfg = nil,
 }
+
+local JUMP_KEYS = { "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+
+local P = panel.new({
+	name = "reset",
+	title = "Gitflow Reset",
+	filetype = "gitflowreset",
+	loading = "Loading commits…",
+	state = M.state,
+	keymaps = {
+		{ key = "<CR>", desc = "select", essential = true, run = function()
+			M.select_under_cursor()
+		end },
+		{ key = "1-9", keys = JUMP_KEYS, desc = "jump", run = function(key)
+			M.select_by_position(tonumber(key))
+		end },
+		{ key = "S", desc = "soft reset", run = function()
+			M.reset_under_cursor("soft")
+		end },
+		{ key = "H", desc = "hard reset", destructive = true, run = function()
+			M.reset_under_cursor("hard")
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 local function refresh_status_panel_if_open()
 	if status_panel.is_open() then
@@ -40,97 +64,19 @@ local function emit_post_operation()
 	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("reset", {
-			filetype = "gitflowreset",
-			lines = { "Loading commits..." },
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "reset",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = RESET_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and RESET_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "reset",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.select_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	for i = 1, 9 do
-		vim.keymap.set("n", tostring(i), function()
-			M.select_by_position(i)
-		end, { buffer = bufnr, silent = true, nowait = true })
-	end
-
-	vim.keymap.set("n", "S", function()
-		M.reset_under_cursor("soft")
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "H", function()
-		M.reset_under_cursor("hard")
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@param entries GitflowResetEntry[]
 ---@param merge_base_sha string|nil
 ---@param current_branch string
 local function render(entries, merge_base_sha, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Reset", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: reset context + current branch.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("palette", "reset") .. "  ", "GitflowSectionIcon" },
 		{ "Reset", "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -150,7 +96,9 @@ local function render(entries, merge_base_sha, current_branch)
 		for idx, entry in ipairs(entries) do
 			-- HEAD (first row) has no position marker; subsequent rows show
 			-- the [N] jump target offset from HEAD.
-			local position_marker = ""
+			-- Blank-padded to the marker's own width so the shas below and
+			-- above an unnumbered row still line up.
+			local position_marker = "    "
 			if idx >= 2 and idx <= 10 then
 				position_marker = ("[%d] "):format(idx - 1)
 			end
@@ -166,11 +114,11 @@ local function render(entries, merge_base_sha, current_branch)
 				summary = vim.trim(summary:sub(#entry.short_sha + 1))
 			end
 			local line_no = B:push({
-				{ " ", nil },
+				{ components.spacing.gutter, nil },
 				{ position_marker, "GitflowNumber" },
-				{ commit_icon .. "  ", "GitflowLogHash" },
+				{ commit_icon .. "  ", "GitflowMeta" },
 				{ entry.short_sha, "GitflowLogHash" },
-				{ summary ~= "" and ("  " .. summary) or "", "GitflowCardTitle" },
+				{ summary ~= "" and (components.spacing.gutter .. summary) or "", "GitflowCardTitle" },
 			})
 			line_entries[line_no] = entry
 
@@ -182,17 +130,11 @@ local function render(entries, merge_base_sha, current_branch)
 		end
 	end
 
-	ui.buffer.update("reset", B.lines)
-	M.state.line_entries = line_entries
-	M.state.merge_base_sha = merge_base_sha
+	P:push_hints(B)
 
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
+	if P:paint(B, line_entries) then
+		M.state.merge_base_sha = merge_base_sha
 	end
-
-	B:apply(bufnr, RESET_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
 end
 
 ---@return GitflowResetEntry|nil
@@ -283,7 +225,9 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -293,16 +237,28 @@ function M.refresh()
 		return
 	end
 
+	local request_id = P:next_request()
 	git_branch.current({}, function(_, branch)
+		if not P:is_active(request_id) then
+			return
+		end
 		git_reset.list_commits({
 			count = cfg.git.log.count,
 		}, function(log_err, entries)
+			if not P:is_active(request_id) then
+				return
+			end
 			if log_err then
 				utils.notify(log_err, vim.log.levels.ERROR)
+				P:render_error("Could not list commits", { detail = log_err,
+					hint = "r retries" })
 				return
 			end
 
 			git_reset.find_merge_base({}, function(_, merge_base)
+				if not P:is_active(request_id) then
+					return
+				end
 				render(entries or {}, merge_base, branch or "(unknown)")
 			end)
 		end)
@@ -342,28 +298,14 @@ function M.reset_under_cursor(mode)
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("reset")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("reset")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.merge_base_sha = nil
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

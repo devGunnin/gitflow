@@ -4,7 +4,7 @@ local git = require("gitflow.git")
 local git_tag = require("gitflow.git.tag")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 
 ---@class GitflowTagPanelState
@@ -14,28 +14,48 @@ local components = require("gitflow.ui.components")
 ---@field cfg GitflowConfig|nil
 
 local M = {}
-local TAG_FLOAT_TITLE = "  Gitflow Tags  "
-local TAG_FLOAT_FOOTER =
-	" c create · D delete · X remote del · P push · r refresh · q close "
--- Split-layout counterpart of TAG_FLOAT_FOOTER; keep the two in sync.
-local TAG_HINTS = {
-	{ "c", "create" },
-	{ "D", "delete" },
-	{ "X", "remote del" },
-	{ "P", "push" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
-local TAG_HIGHLIGHT_NS =
-	vim.api.nvim_create_namespace("gitflow_tag_hl")
 
 ---@type GitflowTagPanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	cfg = nil,
 }
+
+local P = panel.new({
+	name = "tag",
+	title = "Gitflow Tags",
+	filetype = "gitflowtag",
+	loading = "Loading tags…",
+	state = M.state,
+	-- Every lightweight tag carries an empty `sha`, and annotated tags share
+	-- one when they point at the same commit; the tag name is the real key.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.name) == "string" then
+			return "name=" .. entry.name
+		end
+		return panel.entry_identity(entry)
+	end,
+	keymaps = {
+		{ key = "c", desc = "create", essential = true, run = function()
+			M.create_tag()
+		end },
+		{ key = "D", desc = "delete", destructive = true, run = function()
+			M.delete_under_cursor()
+		end },
+		{ key = "X", desc = "remote del", destructive = true, run = function()
+			M.delete_remote_under_cursor()
+		end },
+		{ key = "P", desc = "push", run = function()
+			M.push_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 local function emit_post_operation()
 	vim.api.nvim_exec_autocmds(
@@ -43,104 +63,23 @@ local function emit_post_operation()
 	)
 end
 
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("tag", {
-			filetype = "gitflowtag",
-			lines = { "Loading tags..." },
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value(
-		"modifiable", false, { buf = bufnr }
-	)
-
-	if M.state.winid
-		and vim.api.nvim_win_is_valid(M.state.winid)
-	then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "tag",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = TAG_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer
-				and TAG_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "tag",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "c", function()
-		M.create_tag()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "D", function()
-		M.delete_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "X", function()
-		M.delete_remote_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "P", function()
-		M.push_under_cursor()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
 ---@param entries GitflowTagEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
 	local tag_icon = icons.get("git_state", "tag")
 
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Tags", render_opts)
+	local B = P:begin_render()
 
 	-- Tag count + branch context summary bar.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ tag_icon .. "  ", "GitflowSectionIcon" },
 		{
 			("%d tag%s"):format(#entries, #entries == 1 and "" or "s"),
 			"GitflowSectionTitle",
 		},
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 	})
 	B:blank()
@@ -158,35 +97,25 @@ local function render(entries, current_branch)
 			local accent = annotated and "GitflowTagAnnotated" or "GitflowChip"
 			local type_marker = annotated and "[annotated]" or "[lightweight]"
 			local chunks = {
-				{ " ", nil },
+				{ components.spacing.gutter, nil },
 				{ tag_icon .. "  ", accent },
 				{ entry.name, accent },
-				{ "  " .. type_marker, "GitflowMeta" },
+				{ components.spacing.gutter .. type_marker, "GitflowMeta" },
 			}
 			if entry.subject and entry.subject ~= "" then
-				chunks[#chunks + 1] = { "  " .. entry.subject, "GitflowCardTitle" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. entry.subject, "GitflowCardTitle" }
 			end
 			if entry.sha and entry.sha ~= "" then
-				chunks[#chunks + 1] = { "   " .. entry.sha, "GitflowLogHash" }
+				chunks[#chunks + 1] = { components.spacing.gutter .. " " .. entry.sha, "GitflowMeta" }
 			end
 			local line_no = B:push(chunks)
 			line_entries[line_no] = entry
 		end
 	end
 
-	-- In-buffer hints for split layout (floats advertise the same keys in
-	-- their window footer).
-	components.split_hint_bar(B, render_opts, TAG_HINTS)
+	P:push_hints(B)
 
-	ui.buffer.update("tag", B.lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, TAG_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowTagEntry|nil
@@ -203,7 +132,9 @@ end
 ---@param cfg GitflowConfig
 function M.open(cfg)
 	M.state.cfg = cfg
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	M.refresh()
 end
 
@@ -213,10 +144,19 @@ function M.refresh()
 		return
 	end
 
+	local request_id = P:next_request()
 	git_branch.current({}, function(_, branch)
+		if not P:is_active(request_id) then
+			return
+		end
 		git_tag.list({}, function(err, entries)
+			if not P:is_active(request_id) then
+				return
+			end
 			if err then
 				utils.notify(err, vim.log.levels.ERROR)
+				P:render_error("Could not list tags", { detail = err,
+					hint = "r retries" })
 				return
 			end
 			render(entries or {}, branch or "(unknown)")
@@ -356,27 +296,13 @@ function M.push_under_cursor()
 end
 
 function M.close()
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("tag")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("tag")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 end
 
 ---@return boolean
 function M.is_open()
-	return M.state.bufnr ~= nil
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
+	return P:is_open()
 end
 
 return M

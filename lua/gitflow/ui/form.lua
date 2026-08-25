@@ -3,6 +3,7 @@
 --- Navigation: <Tab>/<S-Tab> cycle fields, <CR> submit, <Esc>/q cancel.
 
 local ui_window = require("gitflow.ui.window")
+local ui_render = require("gitflow.ui.render")
 local utils = require("gitflow.utils")
 local icons = require("gitflow.icons")
 
@@ -348,7 +349,7 @@ local function apply_form_highlights(state, lines)
 	for idx, range in pairs(state.field_lines) do
 		local label_line = range.start - 2  -- 0-indexed
 		if label_line >= 0 then
-			vim.api.nvim_buf_add_highlight(
+			ui_render.highlight(
 				bufnr, FORM_HIGHLIGHT_NS, "GitflowFormLabel", label_line, 0, -1
 			)
 		end
@@ -356,7 +357,7 @@ local function apply_form_highlights(state, lines)
 		-- Active field accent
 		if idx == state.active_field then
 			for line = range.start, range.stop do
-				vim.api.nvim_buf_add_highlight(
+				ui_render.highlight(
 					bufnr, FORM_HIGHLIGHT_NS, "GitflowFormActiveField",
 					line - 1, 0, -1
 				)
@@ -367,7 +368,7 @@ local function apply_form_highlights(state, lines)
 	-- Footer hints
 	local footer_idx = #lines - 1  -- 0-indexed last line
 	if footer_idx >= 0 then
-		vim.api.nvim_buf_add_highlight(
+		ui_render.highlight(
 			bufnr, FORM_HIGHLIGHT_NS, "GitflowFooter", footer_idx, 0, -1
 		)
 	end
@@ -375,7 +376,7 @@ local function apply_form_highlights(state, lines)
 	-- Separator
 	local sep_idx = #lines - 2
 	if sep_idx >= 0 then
-		vim.api.nvim_buf_add_highlight(
+		ui_render.highlight(
 			bufnr, FORM_HIGHLIGHT_NS, "GitflowSeparator", sep_idx, 0, -1
 		)
 	end

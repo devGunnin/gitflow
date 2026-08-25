@@ -1,9 +1,8 @@
-local ui = require("gitflow.ui")
 local utils = require("gitflow.utils")
 local git_blame = require("gitflow.git.blame")
 local git_branch = require("gitflow.git.branch")
 local icons = require("gitflow.icons")
-local ui_render = require("gitflow.ui.render")
+local panel = require("gitflow.ui.panel")
 local components = require("gitflow.ui.components")
 
 ---@class GitflowBlamePanelState
@@ -16,139 +15,67 @@ local components = require("gitflow.ui.components")
 ---@field request_id integer
 
 local M = {}
-local BLAME_FLOAT_TITLE = "  Gitflow Blame  "
-local BLAME_FLOAT_FOOTER = " <CR> open commit · r refresh · q close "
-local BLAME_HINTS = {
-	{ "<CR>", "open commit" },
-	{ "r", "refresh" },
-	{ "q", "close" },
-}
-local BLAME_HIGHLIGHT_NS = vim.api.nvim_create_namespace("gitflow_blame_hl")
 
 ---@type GitflowBlamePanelState
 M.state = {
-	bufnr = nil,
-	winid = nil,
 	line_entries = {},
 	cfg = nil,
 	filepath = nil,
 	on_open_commit = nil,
-	request_id = 0,
 }
 
----@return integer
-local function next_request_id()
-	M.state.request_id = (M.state.request_id or 0) + 1
-	return M.state.request_id
-end
-
----A refresh is superseded as soon as another refresh, open, or close starts;
----its callbacks must not render, or a stale result clobbers the live panel.
----@param request_id integer
----@return boolean
-local function is_active_request(request_id)
-	if M.state.request_id ~= request_id then
-		return false
-	end
-	local bufnr = M.state.bufnr
-	return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
-end
-
----@param cfg GitflowConfig
-local function ensure_window(cfg)
-	local bufnr = M.state.bufnr
-		and vim.api.nvim_buf_is_valid(M.state.bufnr)
-		and M.state.bufnr or nil
-	if not bufnr then
-		bufnr = ui.buffer.create("blame", {
-			filetype = "gitflowblame",
-			lines = components.loading_lines("Loading blame…"),
-		})
-		M.state.bufnr = bufnr
-	end
-
-	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
-
-	if M.state.winid and vim.api.nvim_win_is_valid(M.state.winid) then
-		vim.api.nvim_win_set_buf(M.state.winid, bufnr)
-		return
-	end
-
-	if cfg.ui.default_layout == "float" then
-		M.state.winid = ui.window.open_float({
-			name = "blame",
-			bufnr = bufnr,
-			width = cfg.ui.float.width,
-			height = cfg.ui.float.height,
-			border = cfg.ui.float.border,
-			title = BLAME_FLOAT_TITLE,
-			title_pos = cfg.ui.float.title_pos,
-			footer = cfg.ui.float.footer and BLAME_FLOAT_FOOTER or nil,
-			footer_pos = cfg.ui.float.footer_pos,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	else
-		M.state.winid = ui.window.open_split({
-			name = "blame",
-			bufnr = bufnr,
-			orientation = cfg.ui.split.orientation,
-			size = cfg.ui.split.size,
-			on_close = function()
-				M.state.winid = nil
-			end,
-		})
-	end
-
-	vim.keymap.set("n", "<CR>", function()
-		M.open_commit_under_cursor()
-	end, { buffer = bufnr, silent = true })
-
-	vim.keymap.set("n", "r", function()
-		M.refresh()
-	end, { buffer = bufnr, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		M.close()
-	end, { buffer = bufnr, silent = true, nowait = true })
-end
-
----Paint the buffer with a single styled state block (loading / error) sharing
----the same header chrome as the rendered blame so transitions don't flicker.
----@param paint fun(B: GitflowRenderBuilder)
-local function render_state(paint)
-	local render_opts = { bufnr = M.state.bufnr, winid = M.state.winid }
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Blame", render_opts)
-	B:blank()
-	paint(B)
-	ui.buffer.update("blame", B.lines)
-	M.state.line_entries = {}
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, BLAME_HIGHLIGHT_NS)
-end
+local P = panel.new({
+	name = "blame",
+	title = "Gitflow Blame",
+	filetype = "gitflowblame",
+	loading = "Computing blame…",
+	state = M.state,
+	-- One commit blames many consecutive lines, so the sha is not unique;
+	-- the file line number is.
+	identity = function(entry)
+		if type(entry) == "table" and type(entry.line_number) == "number" then
+			return "line=" .. entry.line_number
+		end
+		return panel.entry_identity(entry)
+	end,
+	keymaps = {
+		{ key = "<CR>", desc = "open commit", essential = true, run = function()
+			M.open_commit_under_cursor()
+		end },
+		{ key = "r", desc = "refresh", run = function()
+			M.refresh()
+		end },
+		{ key = "q", desc = "close", essential = true, run = function()
+			M.close()
+		end },
+	},
+})
 
 local function render_loading()
-	render_state(function(B)
-		local short_path = vim.fn.fnamemodify(M.state.filepath or "", ":~:.")
-		components.loading(B, "Computing blame…", {
-			detail = short_path ~= "" and short_path or nil,
-		})
-	end)
+	local short_path = vim.fn.fnamemodify(M.state.filepath or "", ":~:.")
+	P:render_loading("Computing blame…", {
+		detail = short_path ~= "" and short_path or nil,
+	})
+end
+
+---A nothing-to-show state, distinct from a failure: the blame did not fail,
+---there is simply no file under the cursor to blame.
+---@param message string
+---@param hint string|nil
+local function render_empty(message, hint)
+	P:clear_entry_maps()
+	local B = P:begin_render()
+	components.empty(B, message, { hint = hint })
+	P:push_hints(B)
+	P:paint(B)
 end
 
 ---@param message string
 local function render_error(message)
-	render_state(function(B)
-		components.error_state(B, "Could not compute blame", {
-			detail = message,
-			hint = "Press r to retry · q to close",
-		})
-	end)
+	P:render_error("Could not compute blame", {
+		detail = message,
+		hint = "Press r to retry \u{b7} q to close",
+	})
 end
 
 ---@param str string|nil
@@ -165,26 +92,23 @@ end
 ---@param entries GitflowBlameEntry[]
 ---@param current_branch string
 local function render(entries, current_branch)
-	local render_opts = {
-		bufnr = M.state.bufnr,
-		winid = M.state.winid,
-	}
-
 	local filepath = M.state.filepath or "(unknown file)"
 	local short_path = vim.fn.fnamemodify(filepath, ":~:.")
 
-	local B = ui_render.builder()
-	components.header(B, "Gitflow Blame", render_opts)
+	local B = P:begin_render()
 
 	-- Summary bar: file + branch + line count.
 	B:push({
-		{ "  ", nil },
+		{ components.spacing.gutter, nil },
 		{ icons.get("palette", "blame") .. "  ", "GitflowSectionIcon" },
 		{ short_path, "GitflowSectionTitle" },
-		{ "     " .. icons.get("branch", "current") .. " ", "GitflowMetaKey" },
+		{ components.separators.field .. icons.get("branch", "current") .. " ",
+			"GitflowMetaKey" },
 		{ current_branch ~= "" and current_branch or "(unknown)", "GitflowMeta" },
 		{
-			("     %d line%s"):format(#entries, #entries == 1 and "" or "s"),
+			(components.separators.field .. "%d line%s"):format(
+				#entries, #entries == 1 and "" or "s"
+			),
 			"GitflowMeta",
 		},
 	})
@@ -197,7 +121,7 @@ local function render(entries, current_branch)
 	)
 
 	if #entries == 0 then
-		components.empty(B, "No blame data for this file", {
+		components.empty(B, "no blame data for this file", {
 			hint = "The file may be untracked or have no committed history.",
 		})
 	else
@@ -219,8 +143,8 @@ local function render(entries, current_branch)
 			-- field highlighted distinctly and padding kept un-highlighted so
 			-- the colored spans land exactly on their text.
 			local line_no = B:push({
-				{ " ", nil },
-				{ commit_icon ~= "" and (commit_icon .. " ") or "", "GitflowLogHash" },
+				{ components.spacing.gutter, nil },
+				{ commit_icon ~= "" and (commit_icon .. " ") or "", "GitflowMeta" },
 				{ entry.short_sha, "GitflowBlameHash" },
 				{ pad_spaces(entry.short_sha, max_sha) .. "  ", nil },
 				{ author_display, "GitflowBlameAuthor" },
@@ -233,17 +157,9 @@ local function render(entries, current_branch)
 		end
 	end
 
-	components.split_hint_bar(B, render_opts, BLAME_HINTS)
+	P:push_hints(B)
 
-	ui.buffer.update("blame", B.lines)
-	M.state.line_entries = line_entries
-
-	local bufnr = M.state.bufnr
-	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-		return
-	end
-	B:apply(bufnr, BLAME_HIGHLIGHT_NS)
-	components.cursorline(M.state.winid, true)
+	P:paint(B, line_entries)
 end
 
 ---@return GitflowBlameEntry|nil
@@ -280,7 +196,9 @@ function M.open(cfg, opts)
 		M.state.filepath = filepath
 	end
 
-	ensure_window(cfg)
+	if not P:ensure_window(cfg) then
+		return
+	end
 	render_loading()
 	M.refresh()
 end
@@ -291,7 +209,7 @@ function M.refresh()
 		return
 	end
 
-	local request_id = next_request_id()
+	local request_id = P:next_request()
 
 	local filepath = M.state.filepath
 	if not filepath or filepath == "" then
@@ -299,16 +217,16 @@ function M.refresh()
 			"No file to blame (open a file first)",
 			vim.log.levels.WARN
 		)
-		render_error("No file to blame — open a file first.")
+		render_empty("no file to blame", "Open a file, then press r.")
 		return
 	end
 
 	git_branch.current({}, function(_, branch)
-		if not is_active_request(request_id) then
+		if not P:is_active(request_id) then
 			return
 		end
 		git_blame.run({ filepath = filepath }, function(err, entries)
-			if not is_active_request(request_id) then
+			if not P:is_active(request_id) then
 				return
 			end
 			if err then
@@ -349,29 +267,16 @@ function M.open_commit_under_cursor()
 end
 
 function M.close()
-	next_request_id()
-
-	if M.state.winid then
-		ui.window.close(M.state.winid)
-	else
-		ui.window.close("blame")
-	end
-
-	if M.state.bufnr then
-		ui.buffer.teardown(M.state.bufnr)
-	else
-		ui.buffer.teardown("blame")
-	end
-
-	M.state.bufnr = nil
-	M.state.winid = nil
+	P:close()
 	M.state.line_entries = {}
 	M.state.filepath = nil
 end
 
+--- Window-scoped on purpose: `:Gitflow blame` toggles the visible panel, so a
+--- buffer left behind by `:q` must still count as closed.
+---@return boolean
 function M.is_open()
-	return M.state.winid ~= nil
-		and vim.api.nvim_win_is_valid(M.state.winid)
+	return P:has_window()
 end
 
 return M

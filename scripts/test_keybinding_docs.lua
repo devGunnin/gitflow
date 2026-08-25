@@ -241,11 +241,12 @@ test("pull default is `<leader>gp`", function()
 	assert_equals(doc_entries["pull"], "<leader>gp", "KEYBINDINGS.md pull")
 end)
 
-test("palette default is `gP`", function()
-	assert_equals(defaults.palette, "gP", "palette default")
+-- Moved off bare `gP` (Neovim's paste-before) in the v2 keymap overhaul.
+test("palette default is `<leader>gx`", function()
+	assert_equals(defaults.palette, "<leader>gx", "palette default")
 	assert_equals(
 		doc_entries["palette"],
-		"gP",
+		"<leader>gx",
 		"KEYBINDINGS.md palette"
 	)
 end)
@@ -260,11 +261,12 @@ test("label default is `<leader>gL`", function()
 	assert_equals(doc_entries["label"], "<leader>gL", "KEYBINDINGS.md label")
 end)
 
-test("refresh default is `gr`", function()
-	assert_equals(defaults.refresh, "gr", "refresh default")
+-- Moved off bare `gr` (Neovim 0.11's LSP prefix) in the v2 keymap overhaul.
+test("refresh default is `<leader>gz`", function()
+	assert_equals(defaults.refresh, "<leader>gz", "refresh default")
 	assert_equals(
 		doc_entries["refresh"],
-		"gr",
+		"<leader>gz",
 		"KEYBINDINGS.md refresh"
 	)
 end)
@@ -367,6 +369,142 @@ test("GitflowSign* override via setup.highlights takes effect", function()
 	assert_equals(hl.link, "DiffAdd", "override should set link to DiffAdd")
 	-- Reset defaults for any later scripts
 	gitflow.setup({})
+end)
+
+-- ── completeness ──────────────────────────────────────────────────────
+-- Correctness of what happens to be listed is not enough: the drift that
+-- actually bites is a key that exists and is documented NOWHERE. These check
+-- the other direction — every runtime binding has a doc entry.
+
+-- Every global action must appear in all three docs.
+test("every config default is documented in all three places", function()
+	local readme_keys = {}
+	for _, row in ipairs(readme_mappings) do
+		readme_keys[row.key] = true
+	end
+	for _, action in ipairs(vim.tbl_keys(defaults)) do
+		local key = defaults[action]
+		assert_true(
+			doc_entries[action] ~= nil,
+			("KEYBINDINGS.md documents no default for %s"):format(action)
+		)
+		assert_true(
+			helptxt_defaults[action] ~= nil,
+			("doc/gitflow.txt documents no default for %s"):format(action)
+		)
+		assert_true(
+			readme_keys[key] == true,
+			("README's Global Mappings table omits %s (%s)"):format(action, key)
+		)
+	end
+end)
+
+-- Panel keys. KEYBINDINGS.md marks each panel's table block with an HTML
+-- comment naming the surface it documents; the marker is what makes this
+-- checkable, and a new panel with no marker fails here rather than quietly
+-- going undocumented. Comparison is on the KEYS THEMSELVES, not on the hint
+-- label, so the doc stays free to write `s` and `u` on their own rows where
+-- the registry advertises them as one `s/u` entry.
+
+---Backtick-quoted keys in a table row's first cell, with `1-9` expanded.
+---@param cell string
+---@return string[]
+local function keys_in_cell(cell)
+	local out = {}
+	for token in cell:gmatch("`([^`]+)`") do
+		local first, last = token:match("^(%d)%-(%d)$")
+		if first then
+			for digit = tonumber(first), tonumber(last) do
+				out[#out + 1] = tostring(digit)
+			end
+		else
+			out[#out + 1] = token
+		end
+	end
+	return out
+end
+
+---@return table<string, table<string, boolean>>
+local function parse_panel_key_tables()
+	local lines = vim.fn.readfile(root .. "KEYBINDINGS.md")
+	local tables, current = {}, nil
+	for _, line in ipairs(lines) do
+		local marker = line:match("^<!%-%- keys: ([%w_]+) %-%->$")
+		if marker then
+			current = tables[marker] or {}
+			tables[marker] = current
+		elseif current then
+			if line:match("^## ") then
+				current = nil
+			else
+				local cell = line:match("^|([^|]+)|")
+				if cell then
+					for _, key in ipairs(keys_in_cell(cell)) do
+						current[key] = true
+					end
+				end
+			end
+		end
+	end
+	return tables
+end
+
+local panel = require("gitflow.ui.panel")
+-- Same discovery the contract spec uses: every surface, wherever it is
+-- declared, so a key cannot go undocumented by living outside panels/.
+dofile(root .. "scripts/lib/key_surfaces.lua").load(
+	vim.fn.fnamemodify(root, ":h")
+)
+
+test("every panel key is documented, and every documented key exists", function()
+	local documented = parse_panel_key_tables()
+	local problems = {}
+
+	-- Guard the check against passing because nothing loaded.
+	assert_true(
+		#panel.surfaces() >= 20,
+		("only %d key surfaces loaded"):format(#panel.surfaces())
+	)
+	for _, surface in ipairs(panel.surfaces()) do
+		local rows = documented[surface.name]
+		if not rows then
+			problems[#problems + 1] = ("no `<!-- keys: %s -->` table in KEYBINDINGS.md")
+				:format(surface.name)
+		else
+			-- Advertised keys must be documented; keys that are bound but
+			-- deliberately unadvertised (aliases, no-ops) may be.
+			local bound, advertised = {}, {}
+			for _, entry in ipairs(surface.keymaps) do
+				for _, key in ipairs(panel.bound_keys(entry)) do
+					bound[key] = true
+					if entry.desc then
+						advertised[key] = true
+					end
+				end
+			end
+			for key in pairs(advertised) do
+				if not rows[key] then
+					problems[#problems + 1] =
+						("%s binds `%s`, KEYBINDINGS.md does not list it"):format(
+							surface.name, key
+						)
+				end
+			end
+			for key in pairs(rows) do
+				if not bound[key] then
+					problems[#problems + 1] =
+						("KEYBINDINGS.md lists `%s` for %s, which binds no such key")
+							:format(key, surface.name)
+				end
+			end
+		end
+	end
+
+	table.sort(problems)
+	assert_true(
+		#problems == 0,
+		"keybinding documentation drift:\n    " .. table.concat(problems, "\n    ")
+	)
 end)
 
 print(("\n%d passed, %d failed"):format(passed, failed))

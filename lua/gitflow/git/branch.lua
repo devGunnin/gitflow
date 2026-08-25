@@ -56,7 +56,9 @@ function M.parse_list(result)
 	local entries = {}
 	for _, line in ipairs(split_lines(result.stdout or "")) do
 		local head_marker, name, ref = line:match("^([* ]?)\t([^\t]+)\t(.+)$")
-		if name and ref and not name:match("/HEAD$") then
+		-- refs/remotes/<remote>/HEAD abbreviates to the bare remote name, so
+		-- the alias has to be recognised on the full ref, not the short one.
+		if name and ref and not ref:match("/HEAD$") then
 			local is_remote = vim.startswith(ref, "refs/remotes/")
 			local remote = nil
 			local short_name = name
