@@ -278,6 +278,23 @@ local function error_from_result(result, action)
 	return ("gh pr %s failed: %s"):format(action, output)
 end
 
+---A PR number that is safe to interpolate into a REST path. `gh pr <verb>`
+---also accepts a URL or a branch name, which a path segment must not carry —
+---this is the narrower guard for the `gh api` builders below.
+---@param number integer|string
+---@return string
+local function path_number(number)
+	local value = tostring(normalize_number(number))
+	if not value:match("^%d+$") then
+		error(
+			("gitflow gh pr error: a numeric PR number is required, got %q")
+				:format(value),
+			3
+		)
+	end
+	return value
+end
+
 ---@param result GitflowGitResult
 ---@return boolean
 local function is_project_cards_deprecation_error(result)
@@ -329,8 +346,7 @@ end
 ---@param opts GitflowGitRunOpts|nil
 ---@param cb fun(err: string|nil, result: GitflowGitResult)
 local function edit_labels_via_api(number, add_labels, remove_labels, opts, cb)
-	local normalized_number = normalize_number(number)
-	local endpoint = ("repos/{owner}/{repo}/issues/%s/labels"):format(normalized_number)
+	local endpoint = ("repos/{owner}/{repo}/issues/%s/labels"):format(path_number(number))
 
 	local function success_result(result)
 		cb(nil, result or {
@@ -925,7 +941,7 @@ function M.list_files(number, opts, cb)
 	end
 
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/files"):format(
-		normalize_number(number)
+		path_number(number)
 	)
 	-- IMPORTANT: do NOT pass `--jq` with `--paginate` for array endpoints.
 	-- gh applies the jq filter per-page, which produces concatenated
@@ -959,7 +975,7 @@ function M.list_commits(number, opts, cb)
 	end
 
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/commits"):format(
-		normalize_number(number)
+		path_number(number)
 	)
 	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
 	-- multi-page array responses.
@@ -987,7 +1003,7 @@ function M.review_comments(number, opts, cb)
 	end
 
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
-		normalize_number(number)
+		path_number(number)
 	)
 	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
 	-- multi-page array responses.
@@ -1015,7 +1031,7 @@ function M.list_reviews(number, opts, cb)
 	end
 
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/reviews"):format(
-		normalize_number(number)
+		path_number(number)
 	)
 	-- See note in list_files: `--jq` + `--paginate` corrupts JSON for
 	-- multi-page array responses.
@@ -1056,7 +1072,7 @@ function M.delete_review_comment(number, comment_id, opts, cb)
 
 	-- The comment is scoped at the repo level on GitHub's API, not by PR,
 	-- but we accept the PR number for symmetry with the other helpers.
-	local _ = normalize_number(number)
+	local _ = path_number(number)
 	local endpoint = ("repos/{owner}/{repo}/pulls/comments/%d"):format(id)
 	gh.run({
 		"api", endpoint, "--method", "DELETE",
@@ -1097,7 +1113,7 @@ function M.create_file_comment(number, commit_id, path, body, opts, cb)
 	end
 
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments"):format(
-		normalize_number(number)
+		path_number(number)
 	)
 	gh.run({
 		"api", endpoint, "--method", "POST",
@@ -1134,8 +1150,15 @@ function M.reply_to_review_comment(number, review_id, body, opts, cb)
 		)
 	end
 
+	local reply_to = tonumber(review_id)
+	if not reply_to then
+		error(
+			"gitflow gh pr error: reply_to_review_comment requires a numeric"
+				.. " comment id", 2
+		)
+	end
 	local endpoint = ("repos/{owner}/{repo}/pulls/%s/comments/%d/replies"):format(
-		normalize_number(number), review_id
+		path_number(number), math.floor(reply_to)
 	)
 	gh.run({
 		-- Raw (-f) fields are always strings: never coerce a body or path.
@@ -1184,7 +1207,7 @@ function M.submit_review(number, mode, body, comments, opts, cb)
 
 	local endpoint =
 		("repos/{owner}/{repo}/pulls/%s/reviews"):format(
-			normalize_number(number)
+			path_number(number)
 		)
 
 	local normalized_body = vim.trim(tostring(body or ""))

@@ -225,10 +225,13 @@ function M.comment(number, body, opts, cb)
 	end)
 end
 
----GitHub's only two close reasons. Anything else is a caller bug, not user
----input, so it raises rather than being sent for the API to reject.
----@type table<string, boolean>
-local CLOSE_REASONS = { completed = true, not_planned = true }
+---GitHub's only two close reasons, mapped to the spelling `gh issue close
+-----reason` accepts. gh validates the flag itself and rejects the API's own
+---`not_planned` spelling — its enum is {completed|not planned|duplicate}.
+---Anything else is a caller bug, not user input, so it raises rather than
+---being sent for gh to reject.
+---@type table<string, string>
+local CLOSE_REASON_FLAGS = { completed = "completed", not_planned = "not planned" }
 
 ---@param number integer|string
 ---@param options { reason: "completed"|"not_planned"|nil }|nil
@@ -244,15 +247,16 @@ function M.close(number, options, opts, cb)
 	local settings = options or {}
 	local args = { "issue", "close", normalize_number(number) }
 	if settings.reason ~= nil then
-		local reason = vim.trim(tostring(settings.reason)):lower():gsub("%-", "_")
-		if not CLOSE_REASONS[reason] then
+		local reason = vim.trim(tostring(settings.reason)):lower():gsub("[%-%s]", "_")
+		local flag_value = CLOSE_REASON_FLAGS[reason]
+		if not flag_value then
 			error(
 				"gitflow gh issue error: close reason must be completed|not_planned",
 				2
 			)
 		end
 		args[#args + 1] = "--reason"
-		args[#args + 1] = reason
+		args[#args + 1] = flag_value
 	end
 
 	gh.run(args, opts, function(result)
@@ -382,8 +386,10 @@ function M.list_milestones(params, opts, cb)
 	end
 
 	local state = (params or {}).state or "all"
+	-- `-X GET` is load-bearing: `gh api` with any -f/-F defaults to POST, so
+	-- without it this hits create-a-milestone and GitHub answers 422.
 	gh.json({
-		"api", "repos/{owner}/{repo}/milestones", "--paginate",
+		"api", "repos/{owner}/{repo}/milestones", "-X", "GET", "--paginate",
 		"-f", ("state=%s"):format(state),
 	}, opts, function(err, data, result)
 		if err then
