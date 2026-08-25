@@ -469,19 +469,30 @@ function M.schedule_preview_refresh()
 	end, PREVIEW_DEBOUNCE_MS)
 end
 
+---@param bufnr integer
+---@param lines string[]
+local function paint_preview(bufnr, lines)
+	vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+end
+
 ---Fetch and display `git show` for the currently focused commit in the preview
----window. No-ops when the preview buffer or focused entry is absent.
+---window. No-ops when the preview buffer is absent.
 function M.refresh_preview()
-	local entry = M.state.line_entries
-		and M.state.line_entries[M.state.focused_line]
 	local preview_bufnr = M.state.preview_bufnr
-	if not entry
-		or not preview_bufnr
-		or not vim.api.nvim_buf_is_valid(preview_bufnr)
-	then
+	if not preview_bufnr or not vim.api.nvim_buf_is_valid(preview_bufnr) then
 		return
 	end
+	local entry = M.state.line_entries
+		and M.state.line_entries[M.state.focused_line]
 	local tick = next_preview_tick()
+	if not entry then
+		-- Cursor settled off any commit: blank it rather than keep the
+		-- previous commit's diff on screen as if it were this row's.
+		paint_preview(preview_bufnr, {})
+		return
+	end
 	git.git(
 		{ "show", "--stat", "--patch", entry.sha },
 		{},
@@ -498,15 +509,7 @@ function M.refresh_preview()
 				then
 					return
 				end
-				vim.api.nvim_set_option_value(
-					"modifiable", true, { buf = preview_bufnr }
-				)
-				vim.api.nvim_buf_set_lines(
-					preview_bufnr, 0, -1, false, lines
-				)
-				vim.api.nvim_set_option_value(
-					"modifiable", false, { buf = preview_bufnr }
-				)
+				paint_preview(preview_bufnr, lines)
 			end)
 		end
 	)
