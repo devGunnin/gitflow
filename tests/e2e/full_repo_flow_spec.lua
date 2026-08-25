@@ -227,6 +227,79 @@ T.run_suite("E2E: Full Repository Flow", {
 		T.cleanup_panels()
 	end,
 
+	["step 2: staging paints before git answers, and reverts if it fails"] = function()
+		T.cleanup_panels()
+		status_panel.open(cfg, {})
+		T.drain_jobs(5000)
+
+		local bufnr = ui.buffer.get("status")
+		T.wait_until(function()
+			return T.find_line(T.buf_lines(bufnr), "Unstaged") ~= nil
+		end, "status panel should render its sections", 5000)
+
+		--- Which section a path is rendered under, by its position between the
+		--- section headers.
+		---@param path string
+		---@return string|nil
+		local function section_of(path)
+			local lines = T.buf_lines(bufnr)
+			local current
+			for _, line in ipairs(lines) do
+				local header = line:match("(%a+) %(%d+%)%s*$")
+				if header then
+					current = header
+				elseif line:find(path, 1, true) then
+					return current
+				end
+			end
+			return nil
+		end
+
+		local target_line, target_path
+		for line, entry in pairs(status_panel.state.line_entries) do
+			if entry.kind == "file" and not entry.diff_staged
+				and not entry.entry.untracked
+			then
+				target_line, target_path = line, entry.entry.path
+				break
+			end
+		end
+		T.assert_true(
+			target_line ~= nil, "the git stub should give one unstaged file"
+		)
+		T.assert_equals(
+			section_of(target_path), "Unstaged", "it starts unstaged"
+		)
+
+		vim.api.nvim_set_current_win(status_panel.state.winid)
+		vim.api.nvim_win_set_cursor(status_panel.state.winid, { target_line, 0 })
+
+		-- Hold git's answer so the assertion sees the frame between the
+		-- keypress and the response.
+		local original_stage = git_status.stage_file
+		local answer
+		git_status.stage_file = function(_, _, cb)
+			answer = cb
+		end
+		local ok, err = pcall(function()
+			status_panel.stage_under_cursor()
+			T.assert_true(answer ~= nil, "git add should be in flight")
+			T.assert_equals(
+				section_of(target_path), "Staged",
+				"the file should read as staged while git is still running"
+			)
+
+			answer("git add failed")
+			T.assert_equals(
+				section_of(target_path), "Unstaged",
+				"a failed stage should put the file back"
+			)
+		end)
+		git_status.stage_file = original_stage
+		T.cleanup_panels()
+		T.assert_true(ok, tostring(err))
+	end,
+
 	["step 2: status panel shows no-upstream hint when upstream is missing"] = function()
 		T.cleanup_panels()
 		local prev = vim.env.GITFLOW_GIT_NO_UPSTREAM

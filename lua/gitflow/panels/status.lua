@@ -335,6 +335,7 @@ local function render(grouped, outgoing_entries, incoming_entries, upstream_name
 	-- Remember the commit-section data so a files-only refresh can reuse it
 	-- without re-querying upstream + git log (#362).
 	M.state.last = {
+		grouped = grouped,
 		outgoing = outgoing_entries,
 		incoming = incoming_entries,
 		upstream_name = upstream_name,
@@ -438,9 +439,151 @@ local function emit_post_operation()
 	vim.api.nvim_exec_autocmds("User", { pattern = "GitflowPostOperation" })
 end
 
+
+-- ── optimistic staging ─────────────────────────────────────────────────
+-- `git add` / `git reset` on one file almost always succeeds, and the answer
+-- is two subprocesses away. So the file moves between sections the moment the
+-- key is pressed, and the real `git status` reconciles a moment later; a
+-- failure puts it back and says why, so the panel never sits on a wrong list.
+
+---@param entry GitflowStatusEntry
+---@return boolean
+local function is_unmerged(entry)
+	local status = entry.index_status .. entry.worktree_status
+	return UNMERGED_STATUS[status] == true
+		or entry.index_status == "U"
+		or entry.worktree_status == "U"
+end
+
+---@param list GitflowStatusEntry[]
+---@param path string
+---@return GitflowStatusEntry[]
+local function without_path(list, path)
+	local out = {}
+	for _, item in ipairs(list) do
+		if item.path ~= path then
+			out[#out + 1] = item
+		end
+	end
+	return out
+end
+
+---@param list GitflowStatusEntry[]
+---@param entry GitflowStatusEntry
+---@return GitflowStatusEntry[]
+local function with_entry(list, entry)
+	local out = without_path(list, entry.path)
+	out[#out + 1] = entry
+	table.sort(out, function(a, b)
+		return a.path < b.path
+	end)
+	return out
+end
+
+---What `git add` leaves in the index for this path.
+---@param entry GitflowStatusEntry
+---@return GitflowStatusEntry
+local function as_staged(entry)
+	local index = entry.index_status
+	if entry.untracked then
+		index = "A"
+	elseif entry.worktree_status ~= " " and entry.worktree_status ~= "" then
+		index = entry.worktree_status
+	end
+	return vim.tbl_extend("force", {}, entry, {
+		untracked = false, staged = true, unstaged = false,
+		index_status = index, worktree_status = " ",
+	})
+end
+
+---What `git reset` leaves for this path: a file the index had only just
+---added goes back to untracked, anything else back to unstaged.
+---@param entry GitflowStatusEntry
+---@return GitflowStatusEntry
+local function as_unstaged(entry)
+	if entry.untracked or entry.index_status == "A" then
+		return vim.tbl_extend("force", {}, entry, {
+			untracked = true, staged = false, unstaged = false,
+			index_status = "?", worktree_status = "?",
+		})
+	end
+	local worktree = entry.index_status
+	if worktree == " " or worktree == "" then
+		worktree = entry.worktree_status
+	end
+	return vim.tbl_extend("force", {}, entry, {
+		untracked = false, staged = false, unstaged = true,
+		index_status = " ", worktree_status = worktree,
+	})
+end
+
+---Repaint from the last render's data with `grouped` swapped in.
+---@param grouped GitflowStatusGroups
+local function repaint_groups(grouped)
+	local last = M.state.last
+	if not last or not P:is_open() then
+		return
+	end
+	render(grouped, last.outgoing or {}, last.incoming or {},
+		last.upstream_name, last.branch or "(unknown)")
+end
+
+---Move `entries` between the sections the pending git command will move them
+---between, and repaint from memory.
+---@param entries GitflowStatusEntry[]
+---@param staging boolean  true for `git add`, false for `git reset`
+---@return fun()|nil  the undo, or nil when there is nothing safe to guess
+local function optimistic_move(entries, staging)
+	local last = M.state.last
+	local previous = last and last.grouped
+	if type(previous) ~= "table" then
+		return nil
+	end
+	local next_groups = {
+		staged = previous.staged, unstaged = previous.unstaged,
+		untracked = previous.untracked,
+	}
+	for _, entry in ipairs(entries) do
+		-- A conflicted path is not a two-section move; leave it to git.
+		if is_unmerged(entry) then
+			return nil
+		end
+		local moved = staging and as_staged(entry) or as_unstaged(entry)
+		if staging then
+			next_groups = {
+				staged = with_entry(next_groups.staged, moved),
+				unstaged = without_path(next_groups.unstaged, entry.path),
+				untracked = without_path(next_groups.untracked, entry.path),
+			}
+		elseif moved.untracked then
+			next_groups = {
+				staged = without_path(next_groups.staged, entry.path),
+				unstaged = without_path(next_groups.unstaged, entry.path),
+				untracked = with_entry(next_groups.untracked, moved),
+			}
+		else
+			next_groups = {
+				staged = without_path(next_groups.staged, entry.path),
+				unstaged = with_entry(next_groups.unstaged, moved),
+				untracked = without_path(next_groups.untracked, entry.path),
+			}
+		end
+	end
+	repaint_groups(next_groups)
+	return function()
+		repaint_groups(previous)
+	end
+end
+
 ---@param operation fun(cb: fun(err: string|nil))
-local function run_status_operation(operation)
+---@param optimistic fun():(fun()|nil)|nil  paint the expected outcome now,
+---   returning the undo to run if the operation fails
+local function run_status_operation(operation, optimistic)
+	local revert = optimistic and optimistic() or nil
 	operation(function(err)
+		if err and revert then
+			revert()
+		end
 		if notify_if_error(err) then
 			return
 		end
@@ -571,6 +714,8 @@ function M.stage_under_cursor()
 		git_status.stage_file(entry.path, {}, function(err)
 			done(err)
 		end)
+	end, function()
+		return optimistic_move({ line_entry.entry }, true)
 	end)
 end
 
@@ -586,6 +731,8 @@ function M.unstage_under_cursor()
 		git_status.unstage_file(entry.path, {}, function(err)
 			done(err)
 		end)
+	end, function()
+		return optimistic_move({ line_entry.entry }, false)
 	end)
 end
 
@@ -620,13 +767,26 @@ local function batch_stage_visual(stage)
 		return
 	end
 
-	local pending = #entries
+	local files = {}
+	for _, le in ipairs(entries) do
+		files[#files + 1] = le.entry
+	end
+	local revert = optimistic_move(files, stage)
+
+	local pending, failed = #entries, false
 	local function on_one(err)
 		if err then
+			failed = true
 			utils.notify(err, vim.log.levels.ERROR)
 		end
 		pending = pending - 1
 		if pending == 0 then
+			-- One failure among many: put the whole selection back rather
+			-- than leave a list that is right about some rows and wrong
+			-- about others. The refresh below settles it either way.
+			if failed and revert then
+				revert()
+			end
 			emit_post_operation()
 			M.refresh({ files_only = true })
 		end
