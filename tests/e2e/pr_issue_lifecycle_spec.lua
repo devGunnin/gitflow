@@ -108,6 +108,9 @@ T.run_suite("E2E: PR and issue lifecycle verbs", {
 
 	-- The Ex command keeps the API's `not_planned` vocabulary; gh's own flag
 	-- enum is {completed|not planned|duplicate} and rejects the underscore.
+	-- The log line is space-joined, so this can't tell one argv element
+	-- "not planned" apart from two — the argv list itself is pinned by
+	-- scripts/test_gh_argv_contract.lua.
 	["issue close carries its reason"] = function()
 		T.assert_contains(
 			gh_log_for({ "issue", "close", "7", "not_planned" }),

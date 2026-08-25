@@ -136,6 +136,35 @@ local function record(name)
 	passed[#passed + 1] = name
 end
 
+--- Every field check below loops `for _, x in ipairs(value)`, so an empty
+--- array — a real, valid response — asserts nothing. Shapes where that is
+--- likely on this repo either search a few known-good candidates for a
+--- non-empty answer or skip explicitly; never record a pass on an unchecked
+--- empty array.
+
+--- Try `invoke` against each of `candidates` until one yields a non-empty
+--- array, so a field assertion runs against real data instead of silently
+--- passing over `[]` (#429 audit, M5).
+---@param name string
+---@param candidates integer[]
+---@param invoke fun(candidate: integer, done: fun(err: string|nil, data: any, result: table|nil))
+---@return boolean ran  false only when the environment (not the data) failed
+---@return table data  possibly empty when no candidate had a non-empty answer
+local function live_nonempty(name, candidates, invoke)
+	for _, candidate in ipairs(candidates) do
+		local ran_one, data = live(name, function(done)
+			invoke(candidate, done)
+		end)
+		if not ran_one then
+			return false, {}
+		end
+		if type(data) == "table" and #data > 0 then
+			return true, data
+		end
+	end
+	return true, {}
+end
+
 -- ── issues ──────────────────────────────────────────────────────────────
 
 local gh_issues = require("gitflow.gh.issues")
@@ -183,10 +212,16 @@ ran, milestones = live("gh api milestones", function(done)
 end)
 if ran then
 	expect_array("gh api milestones", milestones)
-	for _, milestone in ipairs(milestones) do
-		expect_fields("gh api milestones", milestone, {
-			title = "string", state = "string", number = "number",
-		})
+	if #milestones == 0 then
+		-- An empty array proves the call is not the #429 shape (that 422s,
+		-- it doesn't decode), but the field assertions below never run on it.
+		skipped[#skipped + 1] = "gh api milestones: repo has no milestones — field shapes unverified"
+	else
+		for _, milestone in ipairs(milestones) do
+			expect_fields("gh api milestones", milestone, {
+				title = "string", state = "string", number = "number",
+			})
+		end
 	end
 	record("gh api milestones")
 end
@@ -196,6 +231,7 @@ end
 local gh_prs = require("gitflow.gh.prs")
 
 local pr_number
+local pr_numbers = {}
 local prs
 ran, prs = live("gh pr list", function(done)
 	gh_prs.list({ state = "all", limit = 5 }, nil, done)
@@ -210,14 +246,29 @@ if ran then
 			baseRefName = "string", updatedAt = "string",
 		})
 		pr_number = pr_number or pr.number
+		pr_numbers[#pr_numbers + 1] = pr.number
 	end
 	record("gh pr list")
 end
 
-ran = live("gh pr list (links)", function(done)
+-- panels/issues.lua's linked-PR cue parses number/body/headRefName off this
+-- shape (gh/prs.lua linked_issue_numbers).
+local links
+ran, links = live("gh pr list (links)", function(done)
 	gh_prs.list_links({ state = "all", limit = 5 }, nil, done)
 end)
 if ran then
+	expect_array("gh pr list (links)", links)
+	if #links == 0 then
+		skipped[#skipped + 1] = "gh pr list (links): repo has no pull requests — field shapes unverified"
+	else
+		for _, pr in ipairs(links) do
+			expect_fields("gh pr list (links)", pr, {
+				number = "number", title = "string", state = "string",
+				body = "string", headRefName = "string",
+			})
+		end
+	end
 	record("gh pr list (links)")
 end
 
@@ -238,12 +289,20 @@ if pr_number then
 		record("gh pr view")
 	end
 
-	ran = live("gh pr diff", function(done)
+	local diff_text
+	ran, diff_text = live("gh pr diff", function(done)
 		gh_prs.diff(pr_number, nil, function(err, text, result)
 			done(err, text, result)
 		end)
 	end)
 	if ran then
+		expect(
+			"gh pr diff",
+			type(diff_text) == "string" and #diff_text > 0,
+			("expected a non-empty diff, got %s of length %d"):format(
+				type(diff_text), #(diff_text or "")
+			)
+		)
 		record("gh pr diff")
 	end
 
@@ -274,21 +333,63 @@ if pr_number then
 		record("gh api pulls/commits")
 	end
 
+	-- Search the fetched PRs for one with actual review comments/reviews:
+	-- the field checks below (review/threads.lua, panels/prs.lua parsing)
+	-- only run against a non-empty array.
 	local review_comments
-	ran, review_comments = live("gh api pulls/comments", function(done)
-		gh_prs.review_comments(pr_number, nil, done)
-	end)
+	ran, review_comments = live_nonempty(
+		"gh api pulls/comments", pr_numbers, function(number, done)
+			gh_prs.review_comments(number, nil, done)
+		end
+	)
 	if ran then
 		expect_array("gh api pulls/comments", review_comments)
+		if #review_comments == 0 then
+			skipped[#skipped + 1] =
+				"gh api pulls/comments: no PR among the last 5 has review comments — field shapes unverified"
+		else
+			for _, c in ipairs(review_comments) do
+				-- review/threads.lua:50-66 parses all of these off the raw comment.
+				expect_fields("gh api pulls/comments", c, {
+					id = "number", path = "string", body = "string", user = "table",
+				})
+				expect(
+					"gh api pulls/comments",
+					c.line == nil or c.line == vim.NIL or type(c.line) == "number",
+					("field \"line\" is %s, expected number, null, or absent"):format(type(c.line))
+				)
+				-- Present only on replies — a root comment omits it entirely.
+				expect(
+					"gh api pulls/comments",
+					c.in_reply_to_id == nil or c.in_reply_to_id == vim.NIL
+						or type(c.in_reply_to_id) == "number",
+					("field \"in_reply_to_id\" is %s, expected number, null, or absent"):format(
+						type(c.in_reply_to_id)
+					)
+				)
+			end
+		end
 		record("gh api pulls/comments")
 	end
 
 	local reviews
-	ran, reviews = live("gh api pulls/reviews", function(done)
-		gh_prs.list_reviews(pr_number, nil, done)
-	end)
+	ran, reviews = live_nonempty(
+		"gh api pulls/reviews", pr_numbers, function(number, done)
+			gh_prs.list_reviews(number, nil, done)
+		end
+	)
 	if ran then
 		expect_array("gh api pulls/reviews", reviews)
+		if #reviews == 0 then
+			skipped[#skipped + 1] =
+				"gh api pulls/reviews: no PR among the last 5 has reviews — field shapes unverified"
+		else
+			for _, review in ipairs(reviews) do
+				-- review/submit.lua respond_to_review reads user.login off
+				-- the latest review; nothing else in gitflow parses this shape.
+				expect_fields("gh api pulls/reviews", review, { user = "table" })
+			end
+		end
 		record("gh api pulls/reviews")
 	end
 else
@@ -401,12 +502,41 @@ local raw_reads = {
 		end,
 	},
 	{
-		-- lua/gitflow/completion/assignees.lua
+		-- lua/gitflow/completion/assignees.lua parses this as one login per
+		-- line (jq already projected `.login`, not JSON).
 		name = "gh api assignees",
 		args = {
 			"api", "repos/{owner}/{repo}/assignees", "--jq", ".[].login", "--paginate",
 		},
-		check = function()
+		check = function(stdout)
+			local text = vim.trim(stdout)
+			if text == "" then
+				return true -- no assignable users is a valid answer
+			end
+			for _, line in ipairs(vim.split(text, "\n", { trimempty = true })) do
+				local name = vim.trim(line)
+				if name ~= "" and not name:match("^[%w%-]+$") then
+					return false, ("expected a bare login per line, got %q"):format(name)
+				end
+			end
+			return true
+		end,
+	},
+	{
+		-- lua/gitflow/completion/labels.lua — a distinct read shape (wider
+		-- --limit, narrower --json) run outside the gh/labels.lua module.
+		name = "gh label list --json name (completion)",
+		args = { "label", "list", "--json", "name", "--limit", "200" },
+		check = function(stdout)
+			local decoded_ok, decoded = pcall(vim.json.decode, stdout)
+			if not decoded_ok or type(decoded) ~= "table" then
+				return false, ("expected a JSON array, got %q"):format(stdout)
+			end
+			for _, label in ipairs(decoded) do
+				if type(label.name) ~= "string" then
+					return false, "expected each label to have a string name"
+				end
+			end
 			return true
 		end,
 	},
