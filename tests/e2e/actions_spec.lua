@@ -773,6 +773,48 @@ T.run_suite("E2E: GitHub Actions Panel", {
 		T.cleanup_panels()
 	end,
 
+	["a burst of post-operation events is one actions refresh"] = function()
+		local refresh_calls = 0
+		local original_refresh = actions_panel.refresh
+
+		with_temporary_patches({
+			{
+				table = actions_panel,
+				key = "refresh",
+				value = function(...)
+					refresh_calls = refresh_calls + 1
+					return original_refresh(...)
+				end,
+			},
+		}, function()
+			actions_panel.open(cfg)
+			T.drain_jobs(3000)
+			local baseline = refresh_calls
+
+			-- One local git command emits this several times; each refresh
+			-- here is a `gh` round trip.
+			for _ = 1, 5 do
+				vim.api.nvim_exec_autocmds(
+					"User", { pattern = "GitflowPostOperation" }
+				)
+			end
+
+			T.wait_until(function()
+				return refresh_calls > baseline
+			end, "the burst should still refresh the panel")
+			vim.wait(300, function()
+				return false
+			end, 20)
+			T.assert_equals(
+				refresh_calls - baseline, 1,
+				"five post-operation events should be one refresh"
+			)
+
+			actions_panel.close()
+		end)
+		T.cleanup_panels()
+	end,
+
 	["actions panel refreshes on GitflowPostOperation while open"] = function()
 		local refresh_calls = 0
 		local original_refresh = actions_panel.refresh

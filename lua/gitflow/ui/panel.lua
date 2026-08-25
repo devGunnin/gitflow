@@ -891,6 +891,31 @@ function Panel:push_hints(B, view, opts)
 	)
 end
 
+-- ── coalescing ─────────────────────────────────────────────────────────
+
+---Default settle time for a coalesced refresh. Long enough that the several
+---events one command emits arrive inside one window, short enough that the
+---panel still feels like it reacted to the keypress.
+local DEBOUNCE_MS = 120
+
+---Wrap `fn` so a burst of calls runs it once, after the burst settles. The
+---returned function is cheap to call and never runs `fn` synchronously.
+---@param fn fun()
+---@param ms integer|nil
+---@return fun()
+function M.debounced(fn, ms)
+	local tick = 0
+	return function()
+		tick = tick + 1
+		local mine = tick
+		vim.defer_fn(function()
+			if tick == mine then
+				fn()
+			end
+		end, ms or DEBOUNCE_MS)
+	end
+end
+
 -- ── cursor identity ────────────────────────────────────────────────────
 -- A refresh that inserts, drops or reorders rows leaves the cursor on
 -- whatever now occupies its old LINE — the user is reading one commit and

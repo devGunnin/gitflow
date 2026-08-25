@@ -374,15 +374,18 @@ local function setup_post_operation_autocmd()
 		{ clear = true }
 	)
 	M.state.post_operation_augroup = augroup
+	-- Coalesced: one command emits this event several times (a stage fires it
+	-- from the panel and again from the command layer), and each one here is
+	-- a `gh` round trip.
+	local refresh_soon = panel.debounced(function()
+		if M.is_open() then
+			M.refresh()
+		end
+	end)
 	vim.api.nvim_create_autocmd("User", {
 		group = augroup,
 		pattern = "GitflowPostOperation",
-		callback = function()
-			if not M.is_open() then
-				return
-			end
-			M.refresh()
-		end,
+		callback = refresh_soon,
 	})
 end
 
